@@ -48,7 +48,6 @@ It also refuses, under these conditions:
 ## Current state
 
 - `[privacy] redact_recall` misses a bare OpenAI-style `sk-` token in plain prose, because none of its rules recognizes that shape, so the token reaches Claude Code unfiltered ([#5](https://github.com/jcrenshaw-dev/terminus/issues/5)).
-- What the `recall_search`, `recall_context` and `recall_get` tools return is not documented, and the tool table in `DESIGN-BRIEF.md` is out of date ([#26](https://github.com/jcrenshaw-dev/terminus/issues/26)).
 
 ## How it works
 
@@ -62,7 +61,7 @@ It also refuses, under these conditions:
 - **On a crash.** Each transcript's new blocks, its session record, its turns and the position the next pass reads from commit in one transaction, so a pass killed partway leaves that transcript as its last commit left it, and the next pass reads the rest. Every ingest starts by rebuilding the derived tables of a store an older build wrote, and by lowering any read position that claims more bytes than the archive holds, so the gap is read again. Recovery never deletes archived bytes.
 - **On a context loss.** A new session gets the brief. A compaction fires `SessionStart` again, and Terminus leaves a note for that session. The next prompt then looks through a wider set of matches and is offered only the turns the compaction dropped, worked out from the record Claude Code appends to the transcript. If the ingest has not archived that record yet when the prompt arrives, the note carries to the prompt after.
 
-The design decisions are in [DESIGN-BRIEF.md](DESIGN-BRIEF.md).
+The current design, part by part and with diagrams, is in [docs/design/](docs/design/README.md).
 
 ## Hosts and platforms
 
@@ -144,7 +143,7 @@ Each key's full effect, and the environment variables Terminus reads, are in [do
 
 ## How it is designed and built
 
-- **How it is designed:** the design decisions are in [DESIGN-BRIEF.md](DESIGN-BRIEF.md) and in [.planning/](.planning/).
+- **How it is designed:** the current design, part by part and with diagrams, is in [docs/design/](docs/design/README.md). The decisions that led to it are in [DESIGN-BRIEF.md](DESIGN-BRIEF.md), the original design input, and in [.planning/](.planning/).
 - **How it is built:** `main` is protected, and every change reaches it through a pull request. The test workflow, `.github/workflows/test.yml`, runs the whole suite on every push and pull request, on the debug and the release build, on Linux and macOS, on x86_64 and aarch64. No status check is required. To run the tests locally, use `cargo test --workspace --all-features`.
 - **The issues:** bugs and known gaps are tracked at [github.com/jcrenshaw-dev/terminus/issues](https://github.com/jcrenshaw-dev/terminus/issues).
 
