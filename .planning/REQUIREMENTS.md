@@ -177,6 +177,7 @@ Explicit exclusions. The reason prevents scope creep later.
 | DOC-01 | Phase 9 | Complete |
 | DOC-02 | Phase 9 | Complete |
 | DOC-03 | Phase 9 | Complete |
+| DOC-04 | Phase 11 | Pending |
 
 Bare headers — `/cad-plan` seeds a row per requirement when its phase is planned.
 
