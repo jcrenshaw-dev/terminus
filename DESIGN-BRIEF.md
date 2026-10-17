@@ -1,3 +1,4 @@
+This file is the original design input, and the current design of Terminus is in [docs/design/](docs/design/README.md).
 # Terminus — Design Brief
 
 Input for `/cad-new-project`. Every decision below is settled unless marked **OPEN**.
