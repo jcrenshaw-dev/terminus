@@ -49,7 +49,7 @@ The boundaries:
 - **From [0003: Ingest](0003-ingest.md).** The pass holds `LOCK` and is the only process that writes archive, derived and operational rows. It calls the codec to cut and compress block rows, and writes each file's rows in one transaction. `terminus reindex`, `compact`, `data move`, `observations regenerate` and `uninstall --purge` take the same lock before they write or delete.
 - **To [0005: Search](0005-search.md) and [0006: Recall through MCP](0006-recall-through-mcp.md).** They open the store read-only and read `turns_fts`, `entities`, `paths`, `turns` and `session_meta`, and read a turn's bytes through `store/archive.rs`, which fetches and decompresses only the blocks the turn covers.
 - **To [0007: Injection](0007-injection.md).** Injection opens the store read-only. Its decisions and their labels are kept tables here, because no rebuild from the block rows can reproduce them.
-- **To [0008: Install and release](0008-install-and-release.md).** `terminus install` refuses a store in an archive format this build refuses, and `terminus uninstall --purge` deletes the whole data directory under `LOCK`.
+- **To [0008: Install and release](0008-install-and-release.md).** `terminus install` refuses a store in an older archive format than this build reads, and prints a problem without refusing when the format is newer, and `terminus uninstall --purge` deletes the whole data directory under `LOCK`.
 
 ## 4. Records
 
@@ -256,7 +256,7 @@ Options are in [commands.md](../commands.md#the-store), and the `--json` fields 
 ### `terminus verify`
 
 - **Inputs:** the store.
-- **Outputs:** for each session, three checks, and every failure is named by `session_key`: the block rows run from 0 to the count `uncompressed_len` and the block size give, with no gap; each block decodes to its length and its stored hash; and the session checksum matches the stored hashes. A session with `transcript_diverged` set is reported too, as a fact about the file on disk, with the archive intact. An evicted session is counted and not checked block by block, except that one that still has block rows is a failure. `PRAGMA integrity_check` is not run here; `terminus doctor` runs it.
+- **Outputs:** for each session, three checks, and every failure is named by `session_key`: the block rows run from 0 to the count `uncompressed_len` and the block size give, with no gap; each block decodes to its length and its stored hash; and the session checksum matches the stored hashes. A session with `transcript_diverged` set is reported too, as a fact about the file on disk, with the archive intact. An evicted session is counted and not checked block by block, except that one that still has block rows is a failure. `PRAGMA integrity_check` is not run here, or anywhere in the binary.
 - **Refusals:** none. It exits 1 when any session fails.
 
 ### `terminus reindex`

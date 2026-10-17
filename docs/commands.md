@@ -200,7 +200,7 @@ It writes nothing and repairs nothing. It reads `settings.json` only for the key
 
 Wires Terminus into Claude Code. It stores the running binary as `~/.local/lib/crenshawdev/terminus/versions/<version>/terminus` and points the link at `~/.local/bin/terminus` to it, adds the four hook entries to Claude Code's `settings.json`, registers the MCP server with `claude mcp add-json`, prints a receipt of every file it touched, and starts a backfill. `install.sh` runs it, and `target/release/terminus install` installs a local build the same way.
 
-Before it writes anything, it refuses when a file it did not put there sits at `~/.local/bin/terminus`. The first time it changes `settings.json` it keeps a copy of the file, and a later install never replaces that copy. It writes nothing to a file that is already current, so running it again is safe. It exits 1 when the MCP server could not be registered, after doing the rest and printing the command that finishes it, and when the store is in an archive format this build refuses.
+Before it writes anything, it refuses when a file it did not put there sits at `~/.local/bin/terminus`. The first time it changes `settings.json` it keeps a copy of the file, and a later install never replaces that copy. It writes nothing to a file that is already current, so running it again is safe. It exits 1 when the MCP server could not be registered, after doing the rest and printing the command that finishes it, and when the store is in an older archive format than this build reads.
 
 It asks nothing and takes no options. `--yes` and `--json` exit 2.
 
