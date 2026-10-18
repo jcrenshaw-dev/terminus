@@ -42,6 +42,17 @@
 //! only once a boundary row was actually there to read, so a prompt that beat
 //! the ingest to it carries the debt forward rather than losing it.
 //!
+//! **Tool results are never injected (D-01).** A tool result is text Claude
+//! read - a file, a web page, a command's output - and quoting it on a later
+//! prompt hands it to the model as this project's own history, planted
+//! instructions included. So the hits the threshold admits lose every `user`
+//! turn the harness wrote (`turns.is_typed` = 0) before the suppressions and the
+//! cap see them, and the step is [`quotable`], which `terminus replay` runs too.
+//! The trade is accepted: error entities exist only on result turns, so a prompt
+//! that pastes an error line no longer fires, and `recall_search` stays the way
+//! back to those turns. A named file still fires, because a Read matches on its
+//! tool-call turn as well as on its result.
+//!
 //! **Nothing decompresses a session until something has fired.** One excerpt
 //! materializes a whole compressed session - p90 1.03 MB, max 10.1 MB over the
 //! real corpus - so the search runs with excerpts off (D-13) and the at most
@@ -409,7 +420,12 @@ fn selected(
     decision.candidates = response.iter().map(scored).collect();
 
     let threshold = eligible(response, thresholds);
-    let pooled = within(threshold, dropped.as_ref());
+    // D-01, after the threshold so no rank is renumbered and before the cap so
+    // a tool result never spends a slot. A failed lookup injects nothing rather
+    // than the unfiltered hits, and is not a `?` for the reason the search
+    // above is not.
+    let quoted = quotable(conn, threshold).unwrap_or_default();
+    let pooled = within(quoted, dropped.as_ref());
     let mut hits = surviving(
         &mut state,
         pooled,
@@ -518,6 +534,40 @@ pub fn eligible(hits: Vec<Hit>, thresholds: &Thresholds) -> Vec<Hit> {
         })
         .map(|(_, hit)| hit)
         .collect()
+}
+
+/// `hits` without the tool results, in the ranked order (D-01).
+///
+/// A tool result is a `user` row with `turns.is_typed` = 0. Not keyed on
+/// [`Hit::record_type`], which is `user` for a typed prompt too, nor on the
+/// `toolUseResult` key, which some result records do not carry (D-03). A null
+/// `is_typed` is left alone: nothing derived it, so nothing can say it was a
+/// tool result.
+///
+/// Read here by turn id rather than carried on [`Hit`], because `search::run`'s
+/// projection also feeds `terminus search` and `recall_search`, which still read
+/// stores that predate the column. The caller must hold a store that has it.
+///
+/// Public for the reason [`eligible`] is: `terminus replay` must drop exactly
+/// the turns the hook drops.
+pub fn quotable(conn: &Connection, hits: Vec<Hit>) -> rusqlite::Result<Vec<Hit>> {
+    if hits.is_empty() {
+        return Ok(hits);
+    }
+    let ids: Vec<String> = hits.iter().map(|hit| hit.turn_id.to_string()).collect();
+    let ids = format!("[{}]", ids.join(","));
+    let mut statement = conn.prepare(
+        "SELECT id FROM turns \
+         WHERE id IN (SELECT value FROM json_each(?1)) \
+           AND record_type = 'user' AND is_typed = 0",
+    )?;
+    let results = statement
+        .query_map([ids], |row| row.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<BTreeSet<i64>>>()?;
+    Ok(hits
+        .into_iter()
+        .filter(|hit| !results.contains(&hit.turn_id))
+        .collect())
 }
 
 /// The eligible turns that are actually injected, once `refused` is taken out
