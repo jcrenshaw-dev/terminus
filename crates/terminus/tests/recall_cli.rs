@@ -1290,6 +1290,51 @@ fn the_knob_filters_the_search_excerpt_and_raw_reaches_past_it() {
     );
 }
 
+/// The turn of `session-redaction.jsonl` whose `Write` carries `café=1` and
+/// `Größe=10`, found by its record `uuid` for the reason `authz_turn` gives.
+fn multi_byte_turn(bench: &Bench) -> String {
+    let id: i64 = bench
+        .conn()
+        .query_row(
+            "SELECT id FROM turns WHERE uuid = 'ffffffff-0000-4000-8000-000000001206'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("the fixture's multi-byte turn is archived");
+    id.to_string()
+}
+
+/// `search` and `show` print the multi-byte turn with the knob on (#61).
+///
+/// Rule 5 used to slice inside `é` and `ß`, which panicked the command and
+/// printed nothing of the turn.
+#[test]
+fn the_knob_on_search_and_show_print_a_multi_byte_turn() {
+    let bench = bench();
+    bench.ingest_fixtures();
+    let project = bench.project("session-redaction.jsonl");
+    let id = multi_byte_turn(&bench);
+    bench.config(KNOB_ON);
+
+    for args in [["search", "saffron"], ["show", id.as_str()]] {
+        let out = bench.run_in(&project, &args);
+        let command = args[0];
+        assert_eq!(out.status.code(), Some(0), "{command}: {}", stderr(&out));
+        assert!(
+            !stderr(&out).contains("panicked"),
+            "{command} panicked: {}",
+            stderr(&out)
+        );
+        let text = stdout(&out);
+        for assignment in ["café=1", "Größe=10"] {
+            assert!(
+                text.contains(assignment),
+                "{command} lost {assignment}:\n{text}"
+            );
+        }
+    }
+}
+
 /// Every archived session blob, by key, straight out of SQLite.
 ///
 /// The bytes themselves and not a rendering of them: this is the one assertion
