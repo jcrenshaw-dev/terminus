@@ -2036,6 +2036,75 @@ fn the_three_tools_answer_the_planted_secret_until_the_knob_is_turned_on() {
     );
 }
 
+/// The two `NAME=` assignments in `session-redaction.jsonl` whose names end in
+/// a multi-byte character, which rule 5 has to read without slicing inside it.
+const MULTI_BYTE: [&str; 2] = ["café=1", "Größe=10"];
+
+/// The turn of `session-redaction.jsonl` whose `Write` carries the multi-byte
+/// assignments, found by its record `uuid` for the reason `authz_turn` gives.
+fn multi_byte_turn(bench: &Bench) -> i64 {
+    bench
+        .conn()
+        .query_row(
+            "SELECT id FROM turns WHERE uuid = 'ffffffff-0000-4000-8000-000000001206'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("the fixture's multi-byte turn is archived")
+}
+
+/// The multi-byte turn passes through all three tools with the knob on (#61).
+///
+/// `Bench::call` fails on a non-zero exit or a panic on stderr, which is what
+/// rule 5 slicing inside `é` or `ß` used to cause. Each answer is then checked
+/// for the two assignments byte for byte, in the turn that holds them.
+#[test]
+fn the_three_tools_answer_a_multi_byte_turn_with_the_knob_on() {
+    let bench = bench();
+    bench.ingest_fixtures();
+    let project = bench.project("session-redaction.jsonl");
+    let anchor = multi_byte_turn(&bench);
+    bench.config(KNOB_ON);
+
+    let search = bench.call(&project, "recall_search", json!({"query": "saffron"}));
+    let hit = hits(&search)
+        .into_iter()
+        .find(|hit| hit["turn_id"] == anchor)
+        .unwrap_or_else(|| panic!("the multi-byte turn is not a hit: {search}"));
+    let excerpt = hit["excerpt"].as_str().expect("an excerpt");
+
+    let context = bench.call(
+        &project,
+        "recall_context",
+        json!({"turn_id": anchor, "before": 0, "after": 0}),
+    );
+    let turns = context["turns"].as_array().expect("a turns array");
+    let text = turns
+        .iter()
+        .find(|turn| turn["is_anchor"] == true)
+        .and_then(|turn| turn["text"].as_str())
+        .unwrap_or_else(|| panic!("the window has no anchor text: {context}"));
+
+    let get = bench.call(&project, "recall_get", json!({"turn_ids": [anchor]}));
+    let body = records(&get)[0]["body"]
+        .as_str()
+        .expect("a body")
+        .to_owned();
+
+    for (tool, answer) in [
+        ("recall_search", excerpt),
+        ("recall_context", text),
+        ("recall_get", body.as_str()),
+    ] {
+        for assignment in MULTI_BYTE {
+            assert!(
+                answer.contains(assignment),
+                "{tool} lost {assignment}:\n{answer}"
+            );
+        }
+    }
+}
+
 /// AC4's MCP half: the escape hatch is a command-line flag this server parses
 /// none of, so no environment variable reaches it.
 ///
