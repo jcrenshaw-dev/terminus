@@ -602,6 +602,14 @@ fn quoted_end(bytes: &[u8], open: usize) -> Option<usize> {
 /// The value runs to the closing quote when it is quoted and to the next
 /// whitespace when it is not - which is how a shell export, a `.env` line and a
 /// process command line all spell it.
+///
+/// The name is read back from the `=` a byte at a time, over ASCII bytes only,
+/// the way rule 3 reads a header name. It used to be found with `rfind` over
+/// characters plus one, and one byte past the start of a multi-byte character
+/// is inside it: `café=1` panicked on the slice that followed, and took the MCP
+/// request and the hook down with it (#61). No name byte is ever part of a
+/// multi-byte character, so the run starts on a character boundary whatever
+/// stands in front of it.
 fn redact_assignments(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut out = String::with_capacity(text.len());
@@ -612,10 +620,10 @@ fn redact_assignments(text: &str) -> String {
             at += 1;
             continue;
         }
-        let name_start = text[copied..at]
-            .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.'))
-            .map(|i| copied + i + 1)
-            .unwrap_or(copied);
+        let mut name_start = at;
+        while name_start > copied && is_flag_name_byte(bytes[name_start - 1]) {
+            name_start -= 1;
+        }
         if name_start == at || !is_secret_name(&text[name_start..at]) {
             at += 1;
             continue;
@@ -1238,5 +1246,53 @@ mod tests {
         ] {
             assert_eq!(for_model_context(plain), plain, "changed: {plain}");
         }
+    }
+
+    /// A multi-byte character in front of an `=` used to put rule 5's name
+    /// slice inside it, and the slice panicked (#61).
+    #[test]
+    fn a_multi_byte_name_before_an_equals_sign_comes_back_unchanged() {
+        for plain in [
+            "café=1",
+            "Größe=10",
+            "the menu said café=1 and the form said Größe=10, nothing else",
+        ] {
+            assert_eq!(for_model_context(plain), plain, "changed: {plain}");
+        }
+    }
+
+    /// Curly quotes are content, not delimiters, so the closing one goes with
+    /// the value run.
+    #[test]
+    fn a_curly_quoted_assignment_loses_its_value_and_its_closing_quote() {
+        assert_eq!(for_model_context("“token=abc”"), "“token=[redacted]");
+    }
+
+    /// The name run starts after the whole character, so the assignment is
+    /// still read rather than skipped.
+    #[test]
+    fn a_secret_name_right_after_a_multi_byte_character_still_loses_its_value() {
+        let scrubbed = for_model_context("éAPI_KEY=PLANTED-61 then the rest");
+
+        assert_eq!(scrubbed, "éAPI_KEY=[redacted] then the rest");
+    }
+
+    /// The `redaction` fuzz target's saved crash, bytes `CA 32 3D 0A`, built
+    /// the way the target builds it: the lone `CA` decodes to U+FFFD.
+    #[test]
+    fn the_fuzz_crash_input_returns_normally_through_every_entry_point() {
+        let text = String::from_utf8_lossy(&[0xCA, 0x32, 0x3D, 0x0A]);
+        let redaction = Redaction { on: true };
+
+        assert_eq!(for_model_context(&text), text);
+        assert_eq!(redaction.apply(&text), text);
+        assert_eq!(redaction.apply_json_line(&text), text);
+    }
+
+    #[test]
+    fn a_json_line_holding_a_multi_byte_assignment_comes_back_unchanged() {
+        let line = "{\"type\":\"user\",\"message\":{\"content\":\"the café=1 line\"}}";
+
+        assert_eq!(Redaction { on: true }.apply_json_line(line), line);
     }
 }
