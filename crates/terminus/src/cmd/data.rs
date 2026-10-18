@@ -169,6 +169,23 @@ pub fn run(options: Options) -> Result<(), Failure> {
         Err(other) => return Err(other),
     }
 
+    // The second check cannot hold the path still, so a destination both
+    // checks found absent is made here with an exclusive `mkdir` rather than
+    // left to `copy_tree`, whose `create_dir_all` takes a directory, or a
+    // symlink to one, that another account put there after the check (#59).
+    if found == Found::Nothing {
+        create_destination(&destination).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                changed("it was not there and now is".to_owned())
+            } else {
+                Failure::Operational(format!(
+                    "{} could not be created: {e}; nothing was moved",
+                    destination.display()
+                ))
+            }
+        })?;
+    }
+
     copy_tree(&source, &destination).map_err(|e| {
         Failure::Operational(format!(
             "{e}\n  nothing was deleted, and the location still points at {}.\n  \
@@ -252,7 +269,7 @@ fn refuse_impossible_destinations(
 /// What the destination rule found, for the second check to compare against.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Found {
-    /// Nothing at the path; `copy_tree` will create it 0700.
+    /// Nothing at the path; [`create_destination`] will create it 0700.
     Nothing,
     /// An empty owner-only directory, named by what a rename cannot carry.
     Directory { device: u64, inode: u64 },
@@ -265,8 +282,8 @@ enum Found {
 /// directory, is owned by `uid`, has no group or world bit, and can be listed
 /// and is empty. Anything else refuses, including an error other than
 /// `NotFound` from the first look and a directory that cannot be listed, which
-/// is never read as empty. A missing path is accepted and `copy_tree` creates
-/// it 0700.
+/// is never read as empty. A missing path is accepted and
+/// [`create_destination`] creates it 0700.
 ///
 /// Only the last part is checked for a symlink, so a symlinked parent such as
 /// macOS's `/var/folders` is fine, and the parent's owner and mode are not
@@ -459,6 +476,23 @@ fn absolute(path: &Path) -> Result<PathBuf, Failure> {
     Ok(joined.components().collect())
 }
 
+/// The destination, created 0700 by this process or not at all.
+///
+/// The parents are made at the process default, the way
+/// `owner_only::create_dir_all` makes them, but the leaf is one exclusive
+/// `mkdir`: anything already at the path, a directory or a symlink, fails it
+/// with `AlreadyExists` instead of being taken as the destination.
+fn create_destination(destination: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::DirBuilder::new()
+        .mode(terminus_core::owner_only::DIR_MODE)
+        .create(destination)
+}
+
 /// Everything under `from`, copied into `to`, directories included.
 ///
 /// The `LOCK` file is skipped at the top level: this process is holding it, and
@@ -621,6 +655,32 @@ mod tests {
         let file = dir.path().join("file");
         std::fs::write(&file, "").unwrap();
         assert!(refusal(&file.join("store"), owner).contains("could not be checked"));
+    }
+
+    #[test]
+    fn a_destination_is_created_owner_only_with_its_parents() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("parent").join("store");
+        create_destination(&path).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "the destination was created at {mode:o}");
+    }
+
+    #[test]
+    fn a_directory_already_at_the_destination_is_not_taken() {
+        let (_dir, path, _owner) = owner_only_dir();
+        let e = create_destination(&path).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::AlreadyExists);
+    }
+
+    #[test]
+    fn a_symlink_already_at_the_destination_is_not_taken() {
+        let (dir, target, _owner) = owner_only_dir();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let e = create_destination(&link).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::AlreadyExists);
     }
 
     #[test]
