@@ -106,7 +106,7 @@ pub fn run(options: Options) -> Result<(), Failure> {
     let destination = absolute(&options.destination)?;
     let pointer = store::location_pointer_path()?;
 
-    refuse_impossible_destinations(&source, &destination)?;
+    refuse_impossible_destinations(&source, &destination, || own_uid(&pointer))?;
 
     outln!("terminus data move");
     outln!();
@@ -188,13 +188,18 @@ pub fn run(options: Options) -> Result<(), Failure> {
     Ok(())
 }
 
-/// The three destinations that cannot be honored, refused before anything is
-/// printed or asked.
+/// The destinations that cannot be honored, refused before anything is printed
+/// or asked: the data directory itself, a path inside it, and anything
+/// [`refuse_unchecked_destination`] refuses.
 ///
 /// The nested case is the one worth naming: copying a directory into a
 /// subdirectory of itself walks the copy it is making, so it is refused rather
 /// than allowed to fill the disk.
-fn refuse_impossible_destinations(source: &Path, destination: &Path) -> Result<(), Failure> {
+fn refuse_impossible_destinations(
+    source: &Path,
+    destination: &Path,
+    uid: impl FnOnce() -> Result<u32, Failure>,
+) -> Result<(), Failure> {
     if destination == source {
         return Err(Failure::Operational(format!(
             "{} is where the data directory already is",
@@ -207,17 +212,125 @@ fn refuse_impossible_destinations(source: &Path, destination: &Path) -> Result<(
             destination.display()
         )));
     }
-    let occupied = std::fs::read_dir(destination)
-        .map(|mut entries| entries.next().is_some())
-        .unwrap_or(false);
-    if occupied {
-        return Err(Failure::Operational(format!(
-            "{} already holds files; nothing was copied.\n  \
-             name a path that does not exist or is empty",
+    refuse_unchecked_destination(destination, uid)
+}
+
+/// The destination rule (D-07): a path that does not exist, or an empty
+/// directory this account owns that nobody else can reach.
+///
+/// An existing destination passes only when it is not a symlink, is a
+/// directory, is owned by `uid`, has no group or world bit, and can be listed
+/// and is empty. Anything else refuses, including an error other than
+/// `NotFound` from the first look and a directory that cannot be listed, which
+/// is never read as empty. A missing path is accepted and `copy_tree` creates
+/// it 0700.
+///
+/// Only the last part is checked for a symlink, so a symlinked parent such as
+/// macOS's `/var/folders` is fine, and the parent's owner and mode are not
+/// checked (D-09). A wide directory is refused rather than narrowed, because
+/// terminus narrows what it creates and nothing it merely found (D-10). `uid`
+/// is a closure because learning it costs a probe file, and a destination that
+/// does not exist has no owner to compare.
+fn refuse_unchecked_destination(
+    destination: &Path,
+    uid: impl FnOnce() -> Result<u32, Failure>,
+) -> Result<(), Failure> {
+    use std::os::unix::fs::MetadataExt;
+
+    let refused = |why: String| {
+        Failure::Operational(format!(
+            "{} {why}; nothing was moved",
+            destination.display()
+        ))
+    };
+
+    let found = match std::fs::symlink_metadata(destination) {
+        Ok(found) => found,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(refused(format!("could not be checked: {e}"))),
+    };
+    if found.file_type().is_symlink() {
+        return Err(refused(
+            "is a symlink, and the store would land wherever it points.\n  \
+             name the directory itself"
+                .to_owned(),
+        ));
+    }
+    if !found.is_dir() {
+        return Err(refused("is not a directory".to_owned()));
+    }
+    let expected = uid()?;
+    if found.uid() != expected {
+        return Err(refused(format!(
+            "is owned by uid {}, not by this account (uid {expected})",
+            found.uid()
+        )));
+    }
+    if found.mode() & 0o077 != 0 {
+        return Err(refused(format!(
+            "is mode {:o}, open to other accounts.\n  \
+             make it owner-only with: chmod 700 '{}'",
+            found.mode() & 0o7777,
             destination.display()
         )));
     }
-    Ok(())
+    let mut entries =
+        std::fs::read_dir(destination).map_err(|e| refused(format!("could not be listed: {e}")))?;
+    match entries.next() {
+        None => Ok(()),
+        Some(Ok(_)) => Err(refused(
+            "already holds files.\n  name a path that does not exist or is empty".to_owned(),
+        )),
+        Some(Err(e)) => Err(refused(format!("could not be listed: {e}"))),
+    }
+}
+
+/// This process's uid, read off a file it has just created (D-13).
+///
+/// A new file's owner is the creating process's effective uid on Linux and
+/// macOS, so this needs `std` alone and no `libc`. The probe goes in the
+/// pointer's directory: terminus's own config directory, which this command
+/// has to write the pointer into anyway. A taken name is stepped over rather
+/// than opened, and a probe that cannot be made refuses the move.
+fn own_uid(pointer: &Path) -> Result<u32, Failure> {
+    use std::os::unix::fs::MetadataExt;
+
+    let Some(dir) = pointer.parent() else {
+        return Err(Failure::Operational(format!(
+            "{} has no parent directory to write into",
+            pointer.display()
+        )));
+    };
+    let failed = |path: &Path, e: std::io::Error| {
+        Failure::Operational(format!(
+            "{} could not be created to learn this account's uid: {e}; nothing was moved",
+            path.display()
+        ))
+    };
+
+    std::fs::create_dir_all(dir).map_err(|e| failed(dir, e))?;
+    let pid = std::process::id();
+    for n in 0..100 {
+        let probe = dir.join(format!(".uid-probe-{pid}-{n}"));
+        match terminus_core::owner_only::options()
+            .write(true)
+            .create_new(true)
+            .open(&probe)
+        {
+            Ok(file) => {
+                let owner = file.metadata().map(|m| m.uid());
+                let _ = std::fs::remove_file(&probe);
+                return owner.map_err(|e| failed(&probe, e));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(failed(&probe, e)),
+        }
+    }
+    Err(Failure::Operational(format!(
+        "every probe name under {} for pid {pid} is taken, so this account's uid could not be \
+         learned; nothing was moved",
+        dir.display()
+    )))
 }
 
 /// The question, with `--yes` meaning "do it" rather than "take the default".
@@ -336,10 +449,11 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
 
 /// One file copied into a destination this process creates at 0600.
 ///
-/// `create_new`, because [`refuse_impossible_destinations`] has established
-/// that the destination directory was absent or empty: a name already taken
-/// here means something else is writing into the directory mid-move, and
-/// truncating it would destroy a file this command never wrote.
+/// `create_new`, because [`refuse_unchecked_destination`] has established
+/// that the destination was absent, or an empty owner-only directory this
+/// account owns: a name already taken here means something else is writing
+/// into the directory mid-move, and truncating it would destroy a file this
+/// command never wrote.
 fn copy_file(source: &Path, destination: &Path) -> std::io::Result<()> {
     let mut reader = std::fs::File::open(source)?;
     let mut writer = terminus_core::owner_only::options()
@@ -399,6 +513,67 @@ mod tests {
             normalized("/x/link/../store/"),
             PathBuf::from("/x/link/../store")
         );
+    }
+
+    /// An empty 0700 directory in a fresh temporary directory, and its owner.
+    fn owner_only_dir() -> (tempfile::TempDir, PathBuf, u32) {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store");
+        std::fs::create_dir(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let owner = std::fs::metadata(&path).unwrap().uid();
+        (dir, path, owner)
+    }
+
+    fn refusal(destination: &Path, uid: u32) -> String {
+        match refuse_unchecked_destination(destination, || Ok(uid)) {
+            Err(Failure::Operational(message)) => message,
+            Err(_) => panic!(
+                "{} was refused, but not operationally",
+                destination.display()
+            ),
+            Ok(()) => panic!("{} was accepted", destination.display()),
+        }
+    }
+
+    #[test]
+    fn an_empty_owner_only_directory_this_uid_owns_is_accepted() {
+        let (_dir, path, owner) = owner_only_dir();
+        assert!(refuse_unchecked_destination(&path, || Ok(owner)).is_ok());
+    }
+
+    #[test]
+    fn a_directory_another_uid_owns_is_refused_and_the_owner_named() {
+        let (_dir, path, owner) = owner_only_dir();
+        let message = refusal(&path, owner.wrapping_add(1));
+        assert!(
+            message.contains(&format!("owned by uid {owner}")),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn an_owner_only_directory_that_holds_a_file_is_refused() {
+        let (_dir, path, owner) = owner_only_dir();
+        std::fs::write(path.join("someone-elses.txt"), "hands off\n").unwrap();
+        assert!(refusal(&path, owner).contains("already holds files"));
+    }
+
+    #[test]
+    fn a_regular_file_is_refused() {
+        let (dir, _path, owner) = owner_only_dir();
+        let file = dir.path().join("file");
+        std::fs::write(&file, "").unwrap();
+        assert!(refusal(&file, owner).contains("is not a directory"));
+    }
+
+    #[test]
+    fn a_path_beneath_a_regular_file_is_refused() {
+        let (dir, _path, owner) = owner_only_dir();
+        let file = dir.path().join("file");
+        std::fs::write(&file, "").unwrap();
+        assert!(refusal(&file.join("store"), owner).contains("could not be checked"));
     }
 
     #[test]

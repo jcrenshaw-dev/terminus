@@ -420,6 +420,121 @@ fn a_trailing_slash_is_dropped_before_the_pointer_is_written() {
     );
 }
 
+/// An empty directory at `path`, set to `mode` whatever the umask.
+fn directory(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(path).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+}
+
+/// A refusal before the question (D-07): exit 1, no `move it?` line, the store
+/// where it was and no pointer.
+fn assert_refused_before_asking(bench: &Bench, out: &Output) {
+    assert_eq!(out.status.code(), Some(1), "{}", text(out));
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("move it?"),
+        "the question was asked: {}",
+        text(out)
+    );
+    assert!(
+        bench.data_dir().join(DB_FILE_NAME).is_file(),
+        "the store moved anyway"
+    );
+    assert!(!bench.pointer().exists(), "the pointer was written anyway");
+}
+
+/// A symlink is refused whether or not the path ends in a slash, which is the
+/// form `symlink_metadata` would otherwise follow (D-07, D-08).
+#[test]
+fn a_symlink_destination_is_refused_with_or_without_a_trailing_slash() {
+    let bench = bench();
+    bench.ingest();
+    let real = bench.root.join("real");
+    directory(&real, 0o700);
+    let link = bench.root.join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+
+    for given in [link.display().to_string(), format!("{}/", link.display())] {
+        let out = bench.run(&["data", "move", &given, "--yes"]);
+        assert_refused_before_asking(&bench, &out);
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("is a symlink"),
+            "{given}: {}",
+            text(&out)
+        );
+        assert!(listed(&real).is_empty(), "{given}: {:?}", listed(&real));
+    }
+}
+
+/// A directory open to other accounts is refused, never narrowed, and the
+/// refusal carries the command that fixes it (D-10).
+#[test]
+fn a_destination_open_to_other_accounts_is_refused_with_the_chmod() {
+    let bench = bench();
+    bench.ingest();
+    let destination = bench.root.join("wide");
+    directory(&destination, 0o777);
+
+    let out = bench.run(&["data", "move", destination.to_str().unwrap(), "--yes"]);
+    assert_refused_before_asking(&bench, &out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&format!("chmod 700 '{}'", destination.display())),
+        "{stderr}"
+    );
+    assert!(listed(&destination).is_empty());
+}
+
+/// A directory that cannot be listed is refused, never read as empty.
+#[test]
+fn a_destination_that_cannot_be_listed_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let bench = bench();
+    bench.ingest();
+    let destination = bench.root.join("unlistable");
+    directory(&destination, 0o300);
+    let restore =
+        || std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    if std::fs::read_dir(&destination).is_ok() {
+        restore();
+        println!("skipped: this process can list a 0300 directory, as root can");
+        return;
+    }
+
+    let out = bench.run(&["data", "move", destination.to_str().unwrap(), "--yes"]);
+    restore();
+    assert_refused_before_asking(&bench, &out);
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("could not be listed"),
+        "{}",
+        text(&out)
+    );
+    assert!(listed(&destination).is_empty());
+}
+
+/// What the rule must still accept: an empty 0700 directory this account
+/// owns. Without it, a uid probe that refused every existing destination would
+/// pass every refusal test above.
+#[test]
+fn an_empty_owner_only_directory_is_accepted() {
+    let bench = bench();
+    bench.ingest();
+    let destination = bench.root.join("ready");
+    directory(&destination, 0o700);
+
+    let out = bench.run(&["data", "move", destination.to_str().unwrap(), "--yes"]);
+    assert!(out.status.success(), "the move failed: {}", text(&out));
+    let pointer = std::fs::read_to_string(bench.pointer()).unwrap();
+    assert_eq!(pointer.trim(), destination.to_string_lossy());
+    assert!(
+        destination.join(DB_FILE_NAME).is_file(),
+        "{:?}",
+        listed(&destination)
+    );
+}
+
 /// The two-word form, held to the `observations regenerate` rule: the verb comes
 /// first or not at all, and a second word that is not the verb is misuse (exit
 /// 2) rather than a move of something the user did not name.
