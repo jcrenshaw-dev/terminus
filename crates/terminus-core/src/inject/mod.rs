@@ -444,13 +444,13 @@ fn is_hyphen(c: char) -> bool {
     )
 }
 
-/// Whether `c` may sit inside a closer without breaking it: whitespace, and
-/// any char outside ASCII. That covers the invisible chars and the combining
-/// marks of every script without a Unicode table, and over-matches on purpose:
-/// a visible non-ASCII char inside a closer is skipped as well (see
-/// [`neutralize`]).
+/// Whether `c` may sit inside a closer without breaking it: whitespace, the
+/// ASCII controls, and any char outside ASCII. That covers the invisible chars
+/// and the combining marks of every script without a Unicode table, and
+/// over-matches on purpose: a visible non-ASCII char inside a closer is skipped
+/// as well (see [`neutralize`]).
 fn is_ignorable(c: char) -> bool {
-    c.is_whitespace() || !c.is_ascii()
+    c.is_whitespace() || c.is_ascii_control() || !c.is_ascii()
 }
 
 /// What the frame costs before anything is quoted in it: the header line, both
@@ -755,6 +755,24 @@ mod tests {
                 format!("</terminus{ignorable}-recall>"),
                 format!("</terminus-{ignorable}recall>"),
                 format!("</terminus-recall{ignorable}>"),
+            ] {
+                is_one_closer(&text);
+            }
+        }
+    }
+
+    /// The ASCII controls are invisible too, and the projection keeps the ones
+    /// that are not whitespace.
+    #[test]
+    fn ascii_controls_anywhere_inside_a_closer_are_ignored() {
+        for control in ('\0'..='\u{1F}').chain(std::iter::once('\u{7F}')) {
+            for text in [
+                format!("<{control}/terminus-recall>"),
+                format!("</{control}terminus-recall>"),
+                format!("</ter{control}minus-recall>"),
+                format!("</terminus{control}-recall>"),
+                format!("</terminus-{control}recall>"),
+                format!("</terminus-recall{control}>"),
             ] {
                 is_one_closer(&text);
             }
