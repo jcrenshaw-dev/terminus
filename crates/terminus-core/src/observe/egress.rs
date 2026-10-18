@@ -16,6 +16,16 @@
 //! [`Redaction::apply_json_line`] decodes each of its strings before the rules
 //! see it.
 //!
+//! Every other surface is cut from a projection of the record, and the
+//! projection drops every key, so a value stored under `api_token` in a tool's
+//! input, in a `toolUseResult` or in an attachment arrives with no name beside
+//! it and rules 3 to 6 never see it (#62). [`Redaction::apply_record`] runs
+//! first, on the parsed record and only with the knob on: it walks those three
+//! subtrees as deep as the projection reads them and replaces each string held
+//! directly under a [`SECRET_NAMES`] key with [`REDACTED`], which is rule 4's
+//! test, so an excerpt loses what a `recall_get` body loses. The index is built
+//! from the same projection without this step, so search still finds the turn.
+//!
 //! # The rules, and why each one is here
 //!
 //! In the order they run, each with the marker it leaves. All of
@@ -55,6 +65,10 @@
 //!    providers, because a list misses OpenAI's plain `sk-` keys and every
 //!    provider not on it. After rules 3 to 6, so `Authorization: Bearer sk-...`
 //!    keeps rule 3's marker. Marker: [`REDACTED_SK_KEY`].
+//!
+//! Before any of them, on every surface but `recall_get`, the keyed-value step
+//! above replaces a string under a secret-named key in a tool's input, a
+//! `toolUseResult` or an attachment. Marker: [`REDACTED`].
 //!
 //! Every one of them leaves a marker naming what went. A projection that came
 //! back silently shorter would leave a reader unable to tell filtering from a
@@ -275,6 +289,72 @@ impl Redaction {
         } else {
             Cow::Borrowed(line)
         }
+    }
+
+    /// One parsed record with its keyed secrets replaced, ready to be projected.
+    ///
+    /// The projection drops every key, so a value stored under `api_token` in a
+    /// tool's input reaches the rules with no name beside it and none of them
+    /// can see it (#62). This runs first, over the three subtrees whose keys
+    /// the projection drops: each `tool_use` block's `input`, `toolUseResult`
+    /// and `attachment`. A string directly under a key [`is_secret_name`]
+    /// accepts becomes [`REDACTED`], which is rule 4's test, so an excerpt
+    /// loses exactly what a `recall_get` body loses. Anything else under such a
+    /// key is walked into rather than replaced.
+    ///
+    /// Borrowed when the knob is off. When it is on and nothing matched, the
+    /// copy equals the record it was made from.
+    pub fn apply_record<'r>(&self, record: &'r serde_json::Value) -> Cow<'r, serde_json::Value> {
+        if !self.on {
+            return Cow::Borrowed(record);
+        }
+        let mut record = record.clone();
+        if let Some(blocks) = record
+            .pointer_mut("/message/content")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            for block in blocks {
+                if block.get("type").and_then(serde_json::Value::as_str) == Some("tool_use") {
+                    if let Some(input) = block.get_mut("input") {
+                        redact_keyed_values(input, 0);
+                    }
+                }
+            }
+        }
+        for subtree in ["toolUseResult", "attachment"] {
+            if let Some(value) = record.get_mut(subtree) {
+                redact_keyed_values(value, 0);
+            }
+        }
+        Cow::Owned(record)
+    }
+}
+
+/// Replace every string held directly under a secret-named key in `value`.
+///
+/// Depth is counted the way the projection counts it and stops where it stops,
+/// at [`MAX_DEPTH`](crate::index::text::MAX_DEPTH), so hostile nesting cannot
+/// recurse without limit.
+fn redact_keyed_values(value: &mut serde_json::Value, depth: usize) {
+    if depth >= crate::index::text::MAX_DEPTH {
+        return;
+    }
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, item) in map {
+                if item.is_string() && is_secret_name(key) {
+                    *item = serde_json::Value::String(REDACTED.to_owned());
+                } else {
+                    redact_keyed_values(item, depth + 1);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                redact_keyed_values(item, depth + 1);
+            }
+        }
+        _ => {}
     }
 }
 

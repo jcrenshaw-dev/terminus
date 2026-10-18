@@ -11,8 +11,9 @@
 //! to do.
 //!
 //! The sentinels are `tests/fixtures/session-secrets.jsonl`'s, planted for the
-//! phase 2 egress work: unrealistic short values, because realistic ones in a
-//! public repository trip GitHub push protection.
+//! phase 2 egress work, and `tests/fixtures/session-redaction.jsonl`'s keyed
+//! ones: unrealistic values, because realistic ones in a public repository trip
+//! GitHub push protection.
 
 #![cfg(feature = "testkit")]
 
@@ -21,7 +22,8 @@ use std::path::PathBuf;
 use rusqlite::Connection;
 use terminus_core::config::{Config, REDACTED};
 use terminus_core::inject::{prompt, Payload};
-use terminus_core::recall::{search, Query, Request, Response, Scope, EXCERPT_CHARS};
+use terminus_core::observe::egress::Redaction;
+use terminus_core::recall::{excerpt, search, Query, Request, Response, Scope, EXCERPT_CHARS};
 use terminus_core::store::DB_FILE_NAME;
 use terminus_core::{ingest, testkit};
 
@@ -418,4 +420,167 @@ fn the_default_leaves_the_per_prompt_injection_exactly_as_it_was() {
 
     assert_eq!(from_file, from_default);
     assert!(from_default.contains(PROMPT_SENTINEL), "{from_default}");
+}
+
+// ---------------------------------------------------------------------------
+// Keyed values in a tool's input, a tool's result and an attachment (#62)
+
+/// The fixture holding one keyed secret in each of the three subtrees the
+/// projection drops the keys of.
+const KEYED_FIXTURE: &str = "session-redaction.jsonl";
+
+/// The fragment every sentinel in that fixture shares.
+const KEYED_MARK: &str = "VBREDACT";
+
+/// Each keyed turn's own search word, its sentinel and the key it sits under.
+const KEYED_TURNS: &[(&str, &str, &str)] = &[
+    ("juniper", "VBREDACT-input-plainly-fake-3c1", "vault_secret"),
+    ("thistle", "VBREDACT-result-plainly-fake-7a2", "relay_token"),
+    ("bramble", "VBREDACT-attach-plainly-fake-5d9", "signing_key"),
+];
+
+/// With the knob off a search excerpt holds the keyed secret, and with it on
+/// the secret is replaced where it stood and its key name is not added.
+#[test]
+fn the_knob_takes_a_keyed_secret_out_of_its_turns_search_excerpt() {
+    let bench = bench();
+    let scope = bench.project(KEYED_FIXTURE);
+
+    for (word, sentinel, key) in KEYED_TURNS {
+        let raw = bench.search(&bench.config(false), &scope, word);
+        let filtered = bench.search(&bench.config(true), &scope, word);
+        assert_eq!(raw.hits.len(), 1, "{word} should land on one turn: {raw:?}");
+        let raw = excerpts(&raw);
+        let filtered = excerpts(&filtered);
+
+        assert!(
+            raw.contains(sentinel),
+            "{word}: the default must not filter:\n{raw}"
+        );
+        assert!(
+            filtered.contains(REDACTED),
+            "{word}: a filtered excerpt names what went:\n{filtered}"
+        );
+        for absent in [sentinel, KEYED_MARK, key] {
+            assert!(
+                !filtered.contains(absent),
+                "{word}: {absent:?} is in the filtered excerpt:\n{filtered}"
+            );
+        }
+    }
+}
+
+/// The `tool_use` secret is the one that can reach injected text, through a
+/// prompt naming the file that turn wrote (D-06).
+#[test]
+fn the_knob_takes_a_keyed_secret_out_of_the_per_prompt_injection() {
+    let bench = bench();
+    let cwd = testkit::fixture_project(KEYED_FIXTURE, &bench.root)
+        .to_string_lossy()
+        .into_owned();
+    let (_, sentinel, key) = KEYED_TURNS[0];
+    let prompt = "what did we put in juniper/wren.toml";
+
+    let raw = injected(
+        &bench,
+        &bench.config(false),
+        "eeeeeeee-0000-4000-8000-000000000001",
+        &cwd,
+        prompt,
+    );
+    let filtered = injected(
+        &bench,
+        &bench.config(true),
+        "eeeeeeee-0000-4000-8000-000000000002",
+        &cwd,
+        prompt,
+    );
+
+    assert!(
+        raw.contains(sentinel),
+        "the default must not filter:\n{raw}"
+    );
+    assert!(
+        filtered.contains(REDACTED),
+        "a filtered injection names what went:\n{filtered}"
+    );
+    for absent in [sentinel, KEYED_MARK, key] {
+        assert!(
+            !filtered.contains(absent),
+            "{absent:?} is in the injected excerpt:\n{filtered}"
+        );
+    }
+}
+
+/// One record built for the tests below: prose in a text block, then the three
+/// subtrees whose keys the projection drops.
+fn keyed_record(
+    input: serde_json::Value,
+    result: serde_json::Value,
+    attachment: serde_json::Value,
+) -> Vec<u8> {
+    serde_json::json!({
+        "type": "assistant",
+        "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "the orrery build wrote its settings out"},
+            {"type": "tool_use", "id": "toolu_keyed", "name": "Write", "input": input},
+        ]},
+        "toolUseResult": result,
+        "attachment": attachment,
+    })
+    .to_string()
+    .into_bytes()
+}
+
+/// A secret-named key holding a number, a list of strings or an object with no
+/// secret-named key inside has no keyed string to take, so the projection is
+/// byte-identical with the knob on and off (D-02, D-03).
+#[test]
+fn a_secret_named_key_holding_no_string_projects_exactly_as_it_was() {
+    let bench = bench();
+    let on = Redaction::of(&bench.config(true));
+    assert!(on.is_on());
+    let query = Query::parse("orrery");
+    let record = keyed_record(
+        serde_json::json!({"api_port": 8443, "content": "port and mode only"}),
+        serde_json::json!({"type": "create", "tokens": ["orrery", "armillary"]}),
+        serde_json::json!({"type": "note", "secret_config": {"mode": "fast", "level": "high"}}),
+    );
+
+    let raw = excerpt::of_record_with(&query, &record, &Redaction::none());
+    let filtered = excerpt::of_record_with(&query, &record, &on);
+
+    assert!(raw.contains("armillary") && raw.contains("fast"), "{raw}");
+    assert_eq!(filtered, raw);
+}
+
+/// A secret-named string two levels down is still taken, under an ordinary key
+/// and inside an object under a secret-named key (D-02).
+#[test]
+fn a_nested_secret_named_string_is_taken_at_any_depth() {
+    let bench = bench();
+    let on = Redaction::of(&bench.config(true));
+    let query = Query::parse("orrery");
+    let under_ordinary = "VBREDACT-nested-ordinary-2f4";
+    let under_secret = "VBREDACT-nested-secret-9b6";
+    let record = keyed_record(
+        serde_json::json!({"settings": {"store": {"db_password": under_ordinary}}}),
+        serde_json::json!({"auth_keys": {"primary": {"session_token": under_secret}}}),
+        serde_json::json!({"type": "note"}),
+    );
+
+    let raw = excerpt::of_record_with(&query, &record, &Redaction::none());
+    let filtered = excerpt::of_record_with(&query, &record, &on);
+
+    for sentinel in [under_ordinary, under_secret] {
+        assert!(
+            raw.contains(sentinel),
+            "the default must not filter:\n{raw}"
+        );
+        assert!(
+            !filtered.contains(sentinel),
+            "{sentinel} is in the filtered projection:\n{filtered}"
+        );
+    }
+    assert_eq!(filtered.matches(REDACTED).count(), 2, "{filtered}");
 }

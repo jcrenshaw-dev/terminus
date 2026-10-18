@@ -193,6 +193,11 @@ pub fn of_record(query: &Query, record: &[u8]) -> String {
 /// would leave exactly the secrets whose labels were trimmed off, and would
 /// pass a test whose planted secret happened to land whole inside the window.
 ///
+/// For that same reason a keyed value is taken BEFORE the projection, by
+/// [`Redaction::apply_record`]: the projection drops every key, so a value
+/// stored under `api_token` in a tool's input reaches the rules with its name
+/// already gone.
+///
 /// Before [`flatten`] as well as before [`window`], and that ordering is also
 /// load-bearing: the projection is newline-joined by construction and the
 /// header rule is written per line, so collapsing it to one line first would
@@ -219,7 +224,7 @@ pub fn of_record_scrubbed(
         // it has no projection. Nothing to excerpt is an empty excerpt.
         return String::new();
     };
-    let projected = text::project(&value);
+    let projected = text::project(&redaction.apply_record(&value));
     window(query, &flatten(&scrub(&redaction.apply(&projected))))
 }
 
