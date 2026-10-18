@@ -113,7 +113,7 @@ Last reviewed: 2026-10-15
 
 **stdout and stderr.**
 
-- **Hooks.** `SessionStart` and `UserPromptSubmit` print one line, `{"hookSpecificOutput":{"hookEventName":"<event>","additionalContext":"<text>"}}`, built with serde_json, or nothing. Claude Code puts `additionalContext` into the model's context. Whether the user sees that text is up to Claude Code [VERIFY]. `SessionEnd` and `PostCompact` print nothing. stderr gets one fixed line naming the event and an OS error. Every known event exits 0.
+- **Hooks.** `SessionStart` and `UserPromptSubmit` print one line, `{"hookSpecificOutput":{"hookEventName":"<event>","additionalContext":"<text>"}}`, built with serde_json, or nothing. Claude Code 2.1.302 (`~/.local/share/claude/versions/2.1.302`, read 2026-10-18) hands that text to the model as a user-role message marked as meta, `return{type:"user",message:{role:"user",content:e||gu},isMeta:n`. It puts the hook's name and `hook additional context: ` in front of the text, so the model reads `SessionStart hook additional context: <text>` or `UserPromptSubmit hook additional context: <text>`, with the texts of several hooks on the same event joined by newlines, and wraps the whole of it in its own tag pair, `gF="<system-reminder>",RGe="</system-reminder>"`. Before wrapping it rewrites two things and nothing else. A `<` that opens a `system-reminder` or `/system-reminder` tag, in any case and with whitespace allowed, becomes `&lt;`, `replaceAll(/<(?=\s*(?:\/\s*)?system-reminder\b)/gi,"&lt;")`, and so does a `<` or `</` at the very end of the text, `replace(/<(?=\s*(?:\/\s*)?$)/,"&lt;")`. Whether the user sees the text is still open [VERIFY]: the bundle builds it as a meta message, and a search for where the interface renders a `hook_additional_context` attachment found nothing that settles it. `SessionEnd` and `PostCompact` print nothing. stderr gets one fixed line naming the event and an OS error. Every known event exits 0.
 - **The detached ingest** each hook starts has stdin, stdout and stderr all on `/dev/null`. Its errors go to the `runs.error` column.
 - **MCP server.** stdout carries JSON-RPC only, and tool results go into the model's context. A failed call's `reason` can contain absolute paths, raw SQLite error text, and a TOML parse excerpt (withheld only when it contains `api_key`).
 - **CLI.** Data goes to stdout and diagnostics to stderr. That reaches a terminal, or the model's context when Claude runs the command through Bash. `terminus show` writes raw archived bytes, and nothing filters control characters out of `show` or `search` output, so an escape sequence stored in a transcript may reach the terminal live [VERIFY].
@@ -209,7 +209,7 @@ A same-user process that can already write `~/.claude/projects` or the data dire
 
 **What the user would not notice:**
 
-- What the hooks put into `additionalContext` [VERIFY whether Claude Code shows it].
+- What the hooks put into `additionalContext`. Claude Code 2.1.302 sends it to the model as a meta message inside `<system-reminder>` tags, as stdout and stderr above records. Whether it also shows the text to the user was looked for in that bundle and not found [VERIFY whether Claude Code shows it].
 - The detached ingest after every hook, and `git` running in every directory a transcript names.
 - A symlinked file in the projects tree being archived.
 - An edited row in the database, until `terminus verify` runs.
