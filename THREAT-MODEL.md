@@ -88,8 +88,9 @@ Last reviewed: 2026-10-15
 - **`settings.json`** (`bin/cmd/install/json_file.rs`).
   - Install merges into the existing file, keeping key order and every scalar's source text. It refuses invalid JSON, a non-object root and duplicate keys.
   - The file is read again just before writing. A symlink is resolved and the write goes beside the real target, through `.settings.json.terminus-<pid>`, fsync and rename.
-  - The temporary file is created with default `OpenOptions`, so its mode is 0666 minus the umask. The existing file's permissions are copied onto it only after the contents are written. A `settings.json` that did not exist before keeps the umask mode.
-  - A one-time backup, `<resolved path>.terminus-backup`, is made with a hard link so an existing backup is never replaced. It has the same permission window.
+  - The temporary file is created 0600 through `owner_only`, before any byte is written (`bin/cmd/install/mod.rs`, `create_temporary`). When `settings.json` already exists and its mode is not 0600, that mode is copied onto the temporary after the contents are written, so a 0644 file stays 0644 and a 0600 file is never wider than 0600. A `settings.json` Terminus creates is 0600. A settings directory it creates gets the umask default, because it is Claude Code's directory. Uninstall's writes follow the same rules.
+  - A one-time backup, `<resolved path>.terminus-backup`, is made with a hard link so an existing backup is never replaced. It is created 0600 and stays 0600 whatever the source's mode. Uninstall restores the backup's bytes, not its mode, so the restored file keeps the live file's mode.
+  - Claude Code 2.1.302 keeps an existing `settings.json`'s mode when it rewrites the file. Its atomic writer reads the target's mode, opens the temporary with it (`w.O_WRONLY|w.O_CREAT|w.O_EXCL|u,f?oe(o):r.mode`) and applies it again before the rename (`Preserving file permissions: `, `Applied original permissions to temp file`). So a 0600 `settings.json` Terminus created stays 0600 when Claude Code writes it. The settings write passes no mode (`{encoding:"utf-8",allowSymlink:e==="userSettings"||U`), so a `settings.json` Claude Code creates gets the open's default, 0666 minus the umask. The bundle has a second settings write path, `S.write(Be.userSettings(),B,{publishDiscipline:"followAtomic"})`, which also passes no mode. The mode that path gives a file was not traced.
 - **`.claude.json`** is never written by Terminus. Install changes it by running `claude mcp add-json --scope user terminus <json>`, and install and uninstall run `claude mcp remove --scope user terminus`.
 - **The binary.** Install writes `$HOME/.local/lib/crenshawdev/terminus/versions/<version>/terminus` at mode 0755, through a temporary file, fsync and rename. The versions folder always comes from `HOME`, even when `TERMINUS_BIN_DIR` is set. The stable path is a symlink to it, made at a temporary name and renamed into place (`bin/cmd/install/binary.rs`). `install.sh` does the same with umask 022.
 - **`terminus export <dir>`** refuses a non-empty directory. It creates the leaf at 0700 and writes `NNNNNN-<sanitized name>.jsonl` files and `manifest.json` at 0600 with `create_new`. The output is the verbatim, unredacted transcripts (`bin/cmd/export.rs`).
@@ -214,7 +215,6 @@ A same-user process that can already write `~/.claude/projects` or the data dire
 - A symlinked file in the projects tree being archived.
 - An edited row in the database, until `terminus verify` runs.
 - Secrets piling up in snapshots and decision records.
-- The `settings.json` temporary file and backup sitting at the umask mode for a moment.
 
 ## Trust boundaries (where untrusted data enters)
 

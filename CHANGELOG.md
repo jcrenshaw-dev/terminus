@@ -149,6 +149,15 @@ and the versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   filter now reads the name before an `=` as ASCII only: `café=1` and
   `Größe=10` come back unchanged, and `“token=abc”` loses its value like any
   other secret assignment (#61).
+- `terminus install` and `terminus uninstall` wrote the whole of
+  `settings.json`, which can hold an `env` block of credentials, into a
+  temporary file at the umask's mode, 0644 under umask 022, and set the file's
+  own mode on it only after the contents were in. A `settings.json` install
+  created kept the umask's mode, and `settings.json.terminus-backup` took the
+  mode of the file it copied. Every temporary is now 0600 from the moment it is
+  opened. A `settings.json` Terminus creates is 0600, one that already exists
+  keeps its own mode, and the backup is 0600 whatever the mode of the file it
+  copies (#64).
 
 ## [0.1.1] - 2026-10-15
 
