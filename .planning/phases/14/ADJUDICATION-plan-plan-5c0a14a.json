@@ -1,0 +1,60 @@
+{
+  "phase": "14",
+  "trigger": "plan",
+  "discriminator": "plan-5c0a14a",
+  "round": 1,
+  "base": "5c0a14a",
+  "head": "5c0a14a",
+  "base_id": "5c0a14a5b81786a2477667b267d32b889b64c162",
+  "head_id": "5c0a14a5b81786a2477667b267d32b889b64c162",
+  "voices": [
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol"
+    }
+  ],
+  "citations": {
+    "checked": true
+  },
+  "entries": [
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol",
+      "file": ".planning/phases/14/PLAN.md",
+      "line": 71,
+      "severity": "medium",
+      "claim": "No task delivers AC7's requirement that the PR body carry `Fixes #45`; the plan explicitly leaves it to an external orchestrator step.",
+      "failure_scenario": "All four tasks complete and every task verification passes, but the PR is opened without `Fixes #45`. AC7 remains false and merging the PR does not automatically close issue #45.",
+      "ruling": "refuted",
+      "convergent": false,
+      "counter_evidence": {
+        "file": ".planning/phases/14/PLAN.md",
+        "line": 72,
+        "note": "The PR body is written when the pull request is opened, which is the land step after every task has committed, so no executor task can write it. PLAN.md:72 assigns Fixes #45 to that step and CONTEXT.md D-10 puts it in the same PR. The identical claim on phase 12 (ADJUDICATION-plan-plan-review-94b3248.json, PLAN-4.md:94) was refuted on the same ground, and AC7's PR half is checked at /cad-verify on GitHub."
+      },
+      "citation_missing": true,
+      "base_id": "5c0a14a5b81786a2477667b267d32b889b64c162",
+      "head_id": "5c0a14a5b81786a2477667b267d32b889b64c162"
+    },
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol",
+      "file": ".planning/phases/14/PLAN.md",
+      "line": 62,
+      "severity": "medium",
+      "claim": "The documentation verification combines four required terms into one aggregate count, so it can pass while one or more AC7 terms are absent.",
+      "failure_scenario": "The design document mentions `resultType` on eight or more lines but omits `-32022`, `ttlMs`, or `cacheScope`. `grep -c 'resultType\\|ttlMs\\|cacheScope\\|-32022' ...` still reports at least 8, the other listed checks can pass, and AC7 is not satisfied.",
+      "ruling": "survived",
+      "convergent": false,
+      "counter_evidence": {
+        "file": ".planning/phases/14/PLAN.md",
+        "line": 63,
+        "note": "Confirmed. The aggregate grep count passed with any one of the four terms absent. Task 4's Verify now runs one grep per term and requires each to print at least 1, in the plan commit named as fix_commit."
+      },
+      "fix_commit": "cd79ce75e66a0c5bae361827b7a69779bd91104e",
+      "citation_missing": true,
+      "base_id": "5c0a14a5b81786a2477667b267d32b889b64c162",
+      "head_id": "5c0a14a5b81786a2477667b267d32b889b64c162"
+    }
+  ]
+}

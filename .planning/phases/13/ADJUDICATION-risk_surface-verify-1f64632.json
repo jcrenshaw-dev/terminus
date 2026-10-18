@@ -1,0 +1,57 @@
+{
+  "phase": "13",
+  "trigger": "risk_surface",
+  "discriminator": "verify-1f64632",
+  "round": 1,
+  "base": "0e211ee",
+  "head": "1f64632",
+  "base_id": "0e211ee7e49aab80c392fd5fe58997f6da3c979e",
+  "head_id": "1f64632756a10ed0c890d41570c660718d9cfe79",
+  "voices": [
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol"
+    }
+  ],
+  "citations": {
+    "checked": true
+  },
+  "entries": [
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol",
+      "file": ".gitignore",
+      "line": 5,
+      "severity": "medium",
+      "claim": "Removing the `security-unfixed/` ignore rule exposes proof tests left by audits run under the previous sentinel pin.",
+      "failure_scenario": "A maintainer previously ran the old audit, which wrote exploit/regression demonstrations under paths such as `crates/<crate>/tests/security-unfixed/`. After this commit those untracked files appear in `git status` and can be accidentally staged and pushed, publicly disclosing reproducible details of vulnerabilities that remain unfixed.",
+      "ruling": "refuted",
+      "convergent": false,
+      "counter_evidence": {
+        "file": ".sentinel/skills/audit/steps.md",
+        "line": 17,
+        "note": "No directory named security-unfixed or audit-context exists anywhere in the repository (find over the tree, target and .git excluded), and git status --ignored --untracked-files=all lists no path by either name, so nothing surfaces when the two rules go. The kit this commit pins writes only under audit/ (steps.md:17) and writes no tests (steps.md:5), and audit/ stays ignored (.gitignore:5). The scenario needs files that do not exist and an audit this pin no longer runs."
+      },
+      "base_id": "0e211ee7e49aab80c392fd5fe58997f6da3c979e",
+      "head_id": "1f64632756a10ed0c890d41570c660718d9cfe79"
+    },
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol",
+      "file": "SECURITY.md",
+      "line": 43,
+      "severity": "low",
+      "claim": "The statement that every fixed finding gets a regression test promises behavior that the pinned audit steps do not require.",
+      "failure_scenario": "The pinned `skills/audit/steps.md` explicitly writes no tests and leaves disposition of findings to the user, with no subsequent requirement to add a test when fixing one. A maintainer can therefore follow the pinned process, fix a finding without a regression test, and make SECURITY.md's unconditional claim false.",
+      "ruling": "refuted",
+      "convergent": false,
+      "counter_evidence": {
+        "file": "SECURITY.md",
+        "line": 42,
+        "note": "SECURITY.md:42 states that the audit fixes no code, writes no tests and leaves each finding to the maintainer, which is what steps.md:5 says. The sentence at SECURITY.md:46 is the repository's own rule for how a fix lands, under a heading that names fixes, not the audit, and it claims nothing about the kit. A rule a maintainer could break is not a false statement about the pinned process."
+      },
+      "base_id": "0e211ee7e49aab80c392fd5fe58997f6da3c979e",
+      "head_id": "1f64632756a10ed0c890d41570c660718d9cfe79"
+    }
+  ]
+}
