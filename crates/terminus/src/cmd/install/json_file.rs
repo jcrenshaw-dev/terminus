@@ -691,10 +691,15 @@ fn fill(
         Failure::Operational(format!("{} could not be flushed: {e}", temporary.display()))
     })?;
     drop(file);
-    // `settings.json` is 0600 on this machine. A fresh temporary file is 0644,
-    // and renaming it into place would quietly widen the user's permissions.
+    // The temporary is 0600 from the open. A file that is already there keeps
+    // its own mode, so a 0644 one stays 0644, and the copy is made only when
+    // the modes differ, so a 0600 one is never wider at any moment. A file
+    // that is not there yet ends up 0600.
     if let Ok(meta) = std::fs::metadata(target) {
-        let _ = std::fs::set_permissions(temporary, meta.permissions());
+        use std::os::unix::fs::PermissionsExt;
+        if meta.permissions().mode() & 0o7777 != terminus_core::owner_only::FILE_MODE {
+            let _ = std::fs::set_permissions(temporary, meta.permissions());
+        }
     }
     Ok(())
 }

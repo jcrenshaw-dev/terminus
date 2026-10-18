@@ -499,6 +499,30 @@ fn a_settings_file_install_creates_is_owner_only() {
     assert_eq!(version_mode, 0o755, "the version file is {version_mode:o}");
 }
 
+/// Under umask 022, a `settings.json` the user made 0644 is still 0644 after
+/// install rewrites it.
+#[test]
+fn a_settings_file_keeps_its_own_mode_through_install() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = fixture();
+    fixture.seed();
+    // Set, not left to this process's umask.
+    std::fs::set_permissions(fixture.settings(), std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    let output = fixture
+        .command_under_umask_022(&["install"])
+        .stdin(Stdio::null())
+        .output()
+        .expect("the binary runs");
+    assert!(output.status.success(), "{}", text(&output));
+
+    let settings = read(&fixture.settings());
+    assert_eq!(our_entries(&settings, &fixture.stable()).len(), 4);
+    let settings_mode = mode(&fixture.settings());
+    assert_eq!(settings_mode, 0o644, "settings.json is {settings_mode:o}");
+}
+
 /// A plain file carrying the marker, which is what an install from before the
 /// versions folder left, is replaced by the link.
 #[test]
