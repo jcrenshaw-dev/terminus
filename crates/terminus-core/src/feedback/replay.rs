@@ -260,7 +260,8 @@ fn recomputed(
 ///
 /// The same steps the live arm takes, through the same functions
 /// (`prompt::candidates`, `prompt::query_of`, `prompt::eligible`,
-/// `prompt::quotable`, `prompt::within`, `prompt::capped`) and with the same
+/// `prompt::quotable`, `prompt::within`, `prompt::capped`,
+/// `prompt::frame_fits`) and with the same
 /// request shape - candidates, the scope of the stored `cwd`, excerpts off, and
 /// the compacted window for a decision made under the pool. A second implementation of any of
 /// them would make the diff a measurement of the replay engine.
@@ -284,6 +285,11 @@ fn would_inject(
     if candidates.is_empty() {
         // The prompt named nothing structural: the live arm never opened the
         // store for it, and neither does this.
+        return Ok((spellings, Vec::new()));
+    }
+    if !prompt::frame_fits(config) {
+        // D-06, as the live arm decides it: a budget that cannot hold the frame
+        // hands over nothing.
         return Ok((spellings, Vec::new()));
     }
 

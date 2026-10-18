@@ -241,6 +241,13 @@ fn budget(config: &Config) -> usize {
     config.prompt_chars().min(MAX_PROMPT_CHARS)
 }
 
+/// Whether this arm's budget can hold the frame at all (D-06). The live arm and
+/// `terminus replay` both ask here, so a budget too small for the frame injects
+/// nothing in either.
+pub(crate) fn frame_fits(config: &Config) -> bool {
+    super::frame_fits(DESCRIPTION, budget(config))
+}
+
 /// The ceiling on one injection, whatever `terminus.toml` configures.
 ///
 /// Bundle 2.1.237 persists a hook stdout longer than 10,000 characters to disk
@@ -455,7 +462,7 @@ fn selected(
     // when the budget cannot hold the frame (D-06): [`render`] would emit
     // nothing, and a turn the model was never shown must not be remembered as
     // injected, the rule `brief::quoted` follows too.
-    let fired = if hits.is_empty() || !super::frame_fits(DESCRIPTION, budget(config)) {
+    let fired = if hits.is_empty() || !frame_fits(config) {
         None
     } else {
         // The knob governs this surface too. The per-prompt injection is the

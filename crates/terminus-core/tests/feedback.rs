@@ -1448,6 +1448,83 @@ fn replay_never_credits_a_tool_result_the_hook_refuses() {
     assert_eq!(injected_total(&aged).1, 2, "{aged:?}");
 }
 
+/// D-06: under a `prompt_chars` too small for the frame the live hook hands
+/// over nothing, and replay credits nothing either.
+///
+/// One Read naming the file, replayed at the default budget and at 200, with
+/// the budget loaded from `terminus.toml` the way the binary loads it. Each
+/// replay matches what `prompt::select` gives under the same config.
+#[test]
+fn replay_credits_nothing_when_the_budget_cannot_hold_the_frame() {
+    let bench = bench();
+    let session = "99999999-9999-4999-8999-999999999998";
+    let project = "project-zeta";
+    let file = "/code/zeta/src/ledger.rs";
+    let cwd = bench.root.join(project).to_string_lossy().into_owned();
+
+    archive_records_at(
+        &bench,
+        "zeta.jsonl",
+        project,
+        session,
+        &[(
+            "2026-08-14T10:00:00.000Z",
+            serde_json::json!({
+                "type": "assistant",
+                "requestId": "req_read",
+                "message": {
+                    "role": "assistant",
+                    "model": "claude-opus-5",
+                    "content": [read_call(file)],
+                },
+            }),
+        )],
+    );
+    bench.pass();
+
+    let raw = format!("what happened in {file}");
+    decide(
+        &bench,
+        session,
+        "2026-08-14T11:00:00.000Z",
+        &cwd,
+        &raw,
+        bench.watermark(),
+        &[],
+        0,
+        &[],
+    );
+    bench.pass();
+
+    let small = bench.work.join("config-200");
+    std::fs::create_dir_all(&small).unwrap();
+    std::fs::write(
+        small.join("terminus.toml"),
+        "[injection]\nprompt_chars = 200\n",
+    )
+    .unwrap();
+    let small = Config::load_from(&small).unwrap();
+
+    let store = Store::open_read_only(&bench.data_dir).unwrap();
+    for (config, expected) in [(Config::default(), 1), (small, 0)] {
+        let live = prompt::select(
+            &bench.data_dir,
+            &config,
+            &Payload {
+                session_id: Some("99999999-0000-4000-8000-000000000002"),
+                transcript_path: None,
+                cwd: Some(&cwd),
+                prompt: Some(&raw),
+                source: None,
+            },
+        );
+        let diff = replay::replay(&store, &config, &Thresholds::default()).unwrap();
+        assert_eq!(diff.decisions, 1, "{diff:?}");
+        assert_eq!(injected_total(&diff).1, expected, "{diff:?}");
+        assert_eq!(injected_total(&diff).1, live.hits.len(), "{live:?}");
+    }
+}
+
 /// #40, D-13: a decision made under the compacted pool replays through the
 /// compacted window and its own dropped set, so `compacted_ranked` moves it,
 /// and decisions recorded as ordinary or of unknown kind replay as they always
