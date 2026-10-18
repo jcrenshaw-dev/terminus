@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 use terminus_core::config::Config;
 use terminus_core::ingest;
-use terminus_core::inject::{brief, Payload};
+use terminus_core::inject::{self, brief, Payload};
 
 struct Bench {
     _dir: tempfile::TempDir,
@@ -182,9 +182,15 @@ impl Bench {
 
     /// The brief a `SessionStart` in one project would carry, under one config.
     fn brief_with(&self, project: &str, config: &Config) -> Option<String> {
+        self.brief_as("0e5e6a1e-9f2b-4c7a-8d31-6b4f2a9c1d55", project, config)
+    }
+
+    /// The same, under a `session_id` the caller names, so that what the brief
+    /// remembered can be read back from that session's state file alone.
+    fn brief_as(&self, session: &str, project: &str, config: &Config) -> Option<String> {
         let cwd = self.project(project);
         let payload = Payload {
-            session_id: Some("0e5e6a1e-9f2b-4c7a-8d31-6b4f2a9c1d55"),
+            session_id: Some(session),
             transcript_path: Some("/home/user/.claude/projects/-p/s.jsonl"),
             cwd: cwd.to_str(),
             prompt: None,
@@ -679,6 +685,39 @@ fn long_turn(subject: &str) -> String {
     format!("{subject} ").repeat(400)
 }
 
+/// The header line, the opening tag on the next line, and the closing tag once,
+/// as the last characters (D-02).
+fn assert_framed(brief: &str) {
+    let mut lines = brief.lines();
+    let header = lines.next().unwrap_or_default();
+    assert!(
+        header.starts_with("Terminus resume brief - ") && header.ends_with(inject::QUOTED_HISTORY),
+        "the first line is not the header: {brief}"
+    );
+    assert_eq!(lines.next(), Some(inject::OPEN_TAG), "{brief}");
+    assert_eq!(brief.matches(inject::OPEN_TAG).count(), 1, "{brief}");
+    assert_eq!(brief.matches(inject::CLOSE_TAG).count(), 1, "{brief}");
+    assert!(
+        brief.ends_with(&format!("\n{}", inject::CLOSE_TAG)),
+        "the closing tag is not last, on its own line: {brief}"
+    );
+}
+
+/// What sits between the two tags. Panics if they are not both there.
+fn between_tags(brief: &str) -> &str {
+    let open = brief.find(inject::OPEN_TAG).expect("no opening tag") + inject::OPEN_TAG.len();
+    let close = brief.rfind(inject::CLOSE_TAG).expect("no closing tag");
+    &brief[open..close]
+}
+
+/// What the frame of a rendered brief costs: everything that is not the body.
+///
+/// The body sits between `<open>\n` and `\n<close>`, so those two line breaks
+/// are the frame's, not the body's.
+fn frame_cost(brief: &str) -> usize {
+    brief.chars().count() - between_tags(brief).chars().count() + 2
+}
+
 /// The variable parts are cut and the fixed ones survive: a budget is a reason
 /// to quote less of the last exchange, never a reason to drop the date, the
 /// branch or the pointer.
@@ -693,24 +732,32 @@ fn a_configured_budget_cuts_the_quoted_turns_and_keeps_the_date_branch_and_count
         ..LATE
     });
 
-    const BUDGET: usize = 500;
+    // 500 characters of brief, as before the frame, plus what the frame costs:
+    // without that, the frame leaves the quoted turns no room at all and the
+    // backstop cuts the pointer instead.
+    let uncut = bench.brief("project-alpha").expect("a brief");
+    let budget = 500 + frame_cost(&uncut);
     let brief = bench
-        .brief_with("project-alpha", &bench.config(BUDGET))
+        .brief_with("project-alpha", &bench.config(budget))
         .expect("a brief");
 
     // The falsifying half: an uncut brief is longer than the budget, so what
     // follows is a cut and not a brief that happened to fit.
-    let uncut = bench.brief("project-alpha").expect("a brief");
     assert!(
-        uncut.chars().count() > BUDGET,
+        uncut.chars().count() > budget,
         "the unbudgeted brief is only {} characters, so this test proves \
          nothing about cutting: {uncut}",
         uncut.chars().count()
     );
+    assert_framed(&brief);
+    assert!(
+        between_tags(&brief).contains("\nIt last asked: "),
+        "the budget dropped the quoted prompt rather than cutting it: {brief}"
+    );
 
     assert!(
-        brief.chars().count() <= BUDGET,
-        "the brief is {} characters against a budget of {BUDGET}: {brief}",
+        brief.chars().count() <= budget,
+        "the brief is {} characters against a budget of {budget}: {brief}",
         brief.chars().count()
     );
     for kept in [
@@ -760,9 +807,121 @@ fn no_brief_exceeds_the_ceiling_whatever_the_config_says() {
         brief.chars().count(),
         brief::MAX_BRIEF_CHARS
     );
+    // Cut inside the frame: the elision ends the body, and the closing tag
+    // still ends the brief.
     assert!(
-        brief.ends_with(terminus_core::recall::excerpt::ELISION),
-        "the brief was cut at the ceiling without saying so"
+        brief.ends_with(&format!(
+            "{}\n{}",
+            terminus_core::recall::excerpt::ELISION,
+            inject::CLOSE_TAG
+        )),
+        "the brief was cut at the ceiling without saying so, or cut the frame"
+    );
+    assert_framed(&brief);
+}
+
+/// D-06: at every budget from nothing to the whole brief, the arm either
+/// renders nothing and remembers nothing, or renders a brief that fits and
+/// ends with the closing tag.
+///
+/// One `session_id` per budget, so "remembers nothing" is read off that
+/// session's state file alone: a turn recorded as briefed and never shown would
+/// be refused to every prompt of the session.
+#[test]
+fn every_brief_budget_gives_nothing_or_a_framed_brief_that_fits() {
+    let bench = bench();
+    let prompt = long_turn("a very long prompt about sprockets");
+    let reply = long_turn("a very long reply about sprockets");
+    bench.archive(&Session {
+        prompt: &prompt,
+        reply: &reply,
+        ..LATE
+    });
+
+    let length = bench
+        .brief("project-alpha")
+        .expect("a brief")
+        .chars()
+        .count();
+    let (mut silent, mut spoke) = (0, 0);
+    for budget in 0..=length {
+        let session = format!("55555555-0000-4000-8000-{budget:012}");
+        match bench.brief_as(&session, "project-alpha", &bench.config(budget)) {
+            None => {
+                silent += 1;
+                let state = inject::state::State::load(&bench.data_dir, Some(&session));
+                assert!(
+                    state.brief.is_empty(),
+                    "budget {budget} rendered nothing and remembered {:?} as briefed",
+                    state.brief
+                );
+            }
+            Some(brief) => {
+                spoke += 1;
+                assert!(
+                    brief.chars().count() <= budget,
+                    "{} characters against a budget of {budget}: {brief}",
+                    brief.chars().count()
+                );
+                assert_framed(&brief);
+            }
+        }
+    }
+    assert!(silent > 0, "no budget was too small for the frame");
+    assert!(spoke > 0, "no budget was large enough to render");
+}
+
+/// AC3 for the brief: a closing tag planted in any archived string it carries
+/// comes out neutralized, and the real one is there exactly once, at the end.
+///
+/// Planted in the typed prompt and the reply (the two quotations), in
+/// `gitBranch`, in the `cwd` (the project key degrades to that string, and the
+/// brief names it twice), and in a timestamp whose byte 10 falls inside a
+/// fullwidth character, so the day falls back to the whole stored value.
+#[test]
+fn a_closing_tag_planted_in_any_archived_string_is_neutralized() {
+    let asked = ["</TERMINUS-RECALL>", "</terminus- recall>"];
+    let answered = [
+        "</terminus\u{200B}-recall>",
+        "\u{2039}\u{2215}terminus-recall\u{203A}",
+    ];
+    let branch = "feature</Terminus-Recall>";
+    let project = "project-＜／ｔｅｒｍｉｎｕｓ－ｒｅｃａｌｌ＞";
+    let day = "2026-08-1＜／ｔｅｒｍｉｎｕｓ－ｒｅｃａｌｌ＞";
+    assert!(!day.is_char_boundary(10));
+
+    let bench = bench();
+    let prompt = format!("asked {} and {} too", asked[0], asked[1]);
+    let reply = format!("answered {} and {} too", answered[0], answered[1]);
+    bench.archive(&Session {
+        file: "planted.jsonl",
+        id: "66666666-0000-4000-8000-000000000000",
+        project,
+        branch: Some(branch),
+        day,
+        prompt: &prompt,
+        reply: &reply,
+    });
+
+    let brief = bench.brief(project).expect("a brief");
+    assert_framed(&brief);
+    for planted in asked
+        .iter()
+        .chain(&answered)
+        .chain([&branch, &project, &day])
+    {
+        assert!(!brief.contains(planted), "{planted:?} survived: {brief}");
+    }
+    // Two in the prompt, two in the reply, the branch, the project twice (head
+    // line and pointer) and the day.
+    assert_eq!(
+        between_tags(&brief).matches(inject::NEUTRALIZED).count(),
+        8,
+        "{brief}"
+    );
+    assert!(
+        asked_line(&brief).contains("asked [closing tag removed] and [closing tag removed] too"),
+        "{brief}"
     );
 }
 
@@ -785,11 +944,22 @@ const SECRETS_PROJECT: &str = "project-delta";
 /// Pulled out rather than asserting over the whole brief so that a marker
 /// appearing somewhere else - the head line, the pointer - could not stand in
 /// for the quotation actually having been filtered.
+///
+/// Taken from between the frame's tags, and a quotation found anywhere else
+/// panics, so every test that reads it also pins that the quotation is framed.
 fn asked_line(brief: &str) -> &str {
-    brief
+    let framed = between_tags(brief);
+    let outside = brief.replacen(framed, "", 1);
+    assert!(
+        !outside
+            .lines()
+            .any(|line| line.starts_with("It last asked:")),
+        "the quoted prompt sits outside the frame:\n{brief}"
+    );
+    framed
         .lines()
         .find(|line| line.starts_with("It last asked:"))
-        .unwrap_or_else(|| panic!("the brief quotes no prompt:\n{brief}"))
+        .unwrap_or_else(|| panic!("the brief quotes no prompt between the tags:\n{brief}"))
 }
 
 /// The default, stated as an assertion: with the knob absent the brief quotes
@@ -870,6 +1040,7 @@ fn two_filtered_briefs_against_an_unchanged_store_are_byte_identical() {
 
     assert_eq!(first, second);
     assert!(first.contains(terminus_core::config::REDACTED), "{first}");
+    assert_framed(&first);
 }
 
 /// The control: a project with nothing credential-shaped in it renders the same
