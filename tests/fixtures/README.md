@@ -21,6 +21,7 @@ by hand without re-deriving the others will fail
 | `session-edits.jsonl` | Phase 5 D-05: an `Edit` `tool_use` storing an **absolute** path beneath the fixture root, the spelling the real corpus almost always uses, with symbols beside it so one turn carries two independent entities - and a prose turn naming the same file structurally invisibly |
 | `session-envelope.jsonl` | v0.1.1 phase 1 D-02/D-13/D-15: a session whose **last** `user` record is a `<task-notification>` envelope and whose second-to-last is a `tool_result`, so the turn the resume brief quotes moves under INJ-07's rule |
 | `session-secrets.jsonl` | v0.1.1 phase 2 D-15: one turn for each of the seven credential shapes the egress filter must catch on the remote provider path - an `Authorization: Bearer` header, a JSON `"password"` pair, a space-separated `--token` flag, a mid-line `Cookie` with prose after it, a bare JWT, a GitHub token and a connection URL carrying userinfo |
+| `session-redaction.jsonl` | hardin phase 2 D-13: one turn per shape the redaction phase adds - a PEM private key, a bare `sk-` key in prose, a secret-named key in a `tool_use` input, in a `toolUseResult` and in an attachment - and one `tool_use` turn holding `café=1`, `Größe=10` and `“token=abc”` |
 | `session-errors-a.jsonl` | Phase 3 D-03/D-04: `tool_result` blocks with `is_error` and a `toolUseResult` carrying `stdout`/`stderr`/`interrupted`, holding the a-half of both stderr pairs |
 | `session-errors-b.jsonl` | Phase 3 D-04, the b-half: one stderr differing from a's only in the parts normalization strips, one differing only in a bare integer it must not |
 | `subagents/agent-alpha.jsonl` | D-01: a sidecar reporting its *parent's* `sessionId` |
@@ -258,6 +259,64 @@ carries no `tool_use` and therefore emits no entity; and its vocabulary shares
 none of the corpus's counted tokens - no `brillig`, no `SearchManager`, no
 `cargo`, none of the paths the entity tests match on.
 
+**`session-redaction.jsonl`** is the hardin phase 2 redaction fixture: six
+records in one session, each built so that exactly one rule can catch what it
+holds. In order:
+
+1. A typed `user` turn (`heron`) whose prose carries one PEM private key block,
+   the shape `tests/egress.rs` already uses, with a plainly fake body line. Only
+   the PEM rule can take it.
+2. A typed `user` turn (`marigold`) carrying `sk-VBREDACT-plainly-fake-bare-0e5`
+   in prose, with no `:`, `=`, `--` flag or quoted pair near it. Only the bare
+   `sk-` rule can take it. It is the last typed prompt, so it is the one the
+   resume brief quotes.
+3. An `assistant` turn calling `Write` with an absolute `file_path`,
+   `{{ROOT}}/project-epsilon/juniper/wren.toml`, beside `vault_secret`. The path
+   makes the turn a prompt-hook target, which is how a test reaches the
+   per-prompt injection with a keyed secret in it.
+4. The `user` tool result answering it (`thistle`): a plain string
+   `tool_result` and a top-level `toolUseResult` holding `relay_token` beside
+   `type` and `status`. No `is_error` and no `stderr`, so it emits no error
+   entity.
+5. An `attachment` (`bramble`) holding `signing_key` beside `type` and
+   `content`.
+6. A second `Write` call (`saffron`) whose `content` holds `café=1`,
+   `Größe=10` and `“token=abc”` as raw UTF-8, never as `\u` escapes, because
+   that is how a real transcript stores them and what a byte search of a
+   `recall_get` body has to find.
+
+The three keyed values are the point of the file. The projection a search
+excerpt is cut from drops every key, so `vault_secret`, `relay_token` and
+`signing_key` never reach the rules that need a name beside a value. Each of
+those values sits alone in its turn: no other key in the subtree contains a
+fragment the name test matches, the key's own name appears nowhere in the turn's
+text, and the value has no `sk-`, `eyJ` or GitHub prefix, no `://...@` and no
+`name:`, `NAME=` or `--name` shape. A turn that held a second thing a rule could
+catch could not say which rule fired.
+
+The `sk-` sentinel runs longer than this repository's other sentinels because
+the bare `sk-` rule needs 20 key characters after the prefix before it fires,
+which is what keeps placeholders like `sk-notification` out of it. It stays
+plainly fake the same way the others do: it spells out what it is and carries
+the fixture's mark, `VBREDACT`, which every sentinel here shares and none of
+`session-secrets.jsonl`'s `VBEGRESS` assertions touch.
+
+The three multi-byte strings share one turn because that turn serves every
+surface at once. It is the last assistant record, so the brief quotes it, and
+its path makes it a prompt-hook target. Its `content` key sorts ahead of
+`file_path`, and the projection emits input leaves in key order, so the three
+strings sit at the head of the turn where the brief's window and a search
+window around `saffron` both carry them whole.
+
+Its project key is a **fifth** one, `project-epsilon`, which no assertion over
+the fixture corpus scopes against. Its tool is `Write`, which no other fixture
+calls, so each `tool_use` turn emits a tool and a path entity and nothing more.
+Its vocabulary shares none of the corpus's counted tokens - no `brillig`, no
+`SearchManager`, no `cargo`, no `retry`, `budget` or `gateway`, none of the
+paths the entity tests match on. It is last in `TRANSCRIPT_FIXTURES`, because
+session numbers follow ingest order and turn ids are built from them; anywhere
+earlier would move the turn ids the recall golden pins.
+
 **`session-envelope.jsonl`** is the v0.1.1 phase 1 brief fixture: five records
 whose last `user` record is not one a person typed. In order - a `user` text
 turn (`wire up the quince exporter and tell me what it prints`, the prompt the
@@ -284,14 +343,15 @@ paths the entity tests match on.
 
 ## The rooted `cwd`
 
-The phase 1 and 2 fixtures hardcode `"cwd": "/data/code/verbatim"`. The seven
+The phase 1 and 2 fixtures hardcode `"cwd": "/data/code/verbatim"`. The eight
 rooted fixtures carry `{{ROOT}}` instead, and
 `testkit::copy_rooted_fixture_into` rewrites it to a root the test owns,
-creating the project directory it names. Four projects exist across them -
+creating the project directory it names. Five projects exist across them -
 `project-alpha` for `session-recall.jsonl`, its sidecar and `session-edits.jsonl`,
 `project-beta` for the two error sessions, `project-gamma` for
-`session-envelope.jsonl` alone and `project-delta` for `session-secrets.jsonl`
-alone - so a project-scoped search has
+`session-envelope.jsonl` alone, `project-delta` for `session-secrets.jsonl`
+alone and `project-epsilon` for `session-redaction.jsonl` alone - so a
+project-scoped search has
 something to be both true and false about, on any checkout and without a project
 key that depends on where this repository happens to sit. `session-edits.jsonl`
 needs the root for a second reason: the absolute path it stores has to be

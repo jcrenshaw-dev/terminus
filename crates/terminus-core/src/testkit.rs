@@ -28,6 +28,7 @@ pub const TRANSCRIPT_FIXTURES: &[&str] = &[
     "session-edits.jsonl",
     "session-envelope.jsonl",
     "session-secrets.jsonl",
+    "session-redaction.jsonl",
 ];
 
 /// The token the rooted fixtures carry where a real transcript carries an
@@ -44,7 +45,7 @@ pub const FIXTURE_ROOT_TOKEN: &str = "{{ROOT}}";
 /// The fixtures carrying [`FIXTURE_ROOT_TOKEN`], and the project directory each
 /// one's `cwd` names beneath the substituted root.
 ///
-/// Four distinct projects across them, which is what lets a scoped search have
+/// Five distinct projects across them, which is what lets a scoped search have
 /// something to be both true and false about.
 ///
 /// `project-gamma` has exactly one member and that is deliberate.
@@ -62,6 +63,15 @@ pub const FIXTURE_ROOT_TOKEN: &str = "{{ROOT}}";
 /// vocabulary shares none of the corpus's counted tokens, so no existing
 /// assertion moves when it joins the set.
 ///
+/// `project-epsilon` has exactly one member for that same reason.
+/// `session-redaction.jsonl` is the hardin phase 2 one: a PEM private key, a
+/// bare `sk-` key in prose, a secret-named key in a `tool_use` input, in a
+/// `toolUseResult` and in an attachment, and one `tool_use` turn holding
+/// `café=1`, `Größe=10` and `“token=abc”`. Each shape sits in a turn of its own
+/// with nothing else a rule could catch, so a test can say which rule took it.
+/// It is last in [`TRANSCRIPT_FIXTURES`] because turn ids follow ingest order,
+/// and anywhere earlier would move the ids the recall golden pins.
+///
 /// `session-edits.jsonl` is the phase 5 one, and it needs the root for a second
 /// reason the others do not: the path its `Edit` call stores is ABSOLUTE
 /// beneath that same root, which is how the real corpus spells a path (1,029
@@ -77,6 +87,7 @@ pub const ROOTED_FIXTURES: &[(&str, &str)] = &[
     ("session-edits.jsonl", "project-alpha"),
     ("session-envelope.jsonl", "project-gamma"),
     ("session-secrets.jsonl", "project-delta"),
+    ("session-redaction.jsonl", "project-epsilon"),
 ];
 
 /// The project directory one rooted fixture's `cwd` names beneath `root`.
