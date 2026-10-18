@@ -100,7 +100,7 @@ Last reviewed: 2026-10-15
   - The uid is the owner of a probe file, `.uid-probe-<pid>-<n>`, created 0600 with `create_new` in the config directory and removed straight after. It is learned only when an existing directory has to be compared.
   - After the answer and the lock, right before the copy, the same checks run again, and the move is refused unless the path is still absent or is the same directory by device and inode.
   - Only the last part of the path is checked for a symlink, so a symlinked parent is followed. The parent's owner and mode are not checked, so an account that can write to the parent, when the parent has no sticky bit, can rename the checked directory away after the copy.
-  - The race is narrowed, not closed. Between the second check and the `mkdir` that `copy_tree` makes, an existing directory is still accepted, because `owner_only::create_dir_all` accepts one that is already there.
+  - A path both checks found absent is then created with one exclusive `mkdir` at 0700, so a directory or symlink another account puts there after the second check fails the `mkdir` and the move is refused with nothing copied.
   - It copies the data directory with 0700 directories and 0600 files, following symlinked files. It writes the pointer, then removes the source with `remove_dir_all`.
 - **Never written:** shell rc files, `PATH`, systemd, launchd, cron, and anything under the Claude projects tree.
 
