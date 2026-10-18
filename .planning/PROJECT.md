@@ -16,11 +16,29 @@ The verbatim transcript is the record: every session archived losslessly and per
 
 ### Active
 
-**v0.0.1, opened 2026-10-12.**
+**v0.2.0, opened 2026-10-17.**
 
-Nine phases. Four bring Terminus in line with Baley's ADR 0038 and 0039: no model calls and so no API keys and no network use, Linux and macOS only with the npm package removed, an install that asks nothing and registers the MCP server through `claude mcp`, and a one-command installer script. The fifth points that script at GitHub releases by default, and the sixth has it refuse a release whose signature does not verify against the crenshawdev release key pinned in the script. The seventh stores each session's archive as blocks, one row each, in place of one whole-session blob. The eighth builds each release in CI, and John signs and publishes it from his own machine. The ninth writes the README the public repository does not have yet. An update is a rerun of the install command, so it gets the same check.
+Five pieces of archive and injection work from the outside review of 2026-10-12, held until the install work shipped. The injection gate fires on too little: a prompt word that matches a tool name counts as a hit, a path match counts twice, and a match with no information weight still counts, so it is tightened and tuned against the real decision log with `terminus replay`. Eviction leaves the derived rows as a session's only copy, so it re-blobs the session under minimal capture instead and `terminus reindex` has one path again. Outcome labels get a rule version, or are recomputed under the current rules, so `terminus stats` never averages labels made under different rules. Each hook passes the ingest its own transcript in place of the full tree walk, which stays with `SessionStart`. The comments in `crates/` go back to stating invariants and their reasons at module level, and the phase history behind them moves into one decisions file.
 
-No release ships until phase 7's blocks as rows is done. That phase has no conversion tool: an existing store is not converted, and the owner's store is rebuilt by a clean install; one can come later if it is needed. Phase 8 then publishes the first release, signed, without waiting for Baley. Version numbers started over with the rename: Verbatim's tags were local test builds and were never released (now `verbatim-v0.1.0` and `verbatim-v0.1.1`), so unreleased cycles were 0.0.x and the first release was 0.1.0.
+The fixes and features phases 12 to 14 left under `## [Unreleased]` in `CHANGELOG.md` ship with this cycle's release, since no version was cut at the v0.0.1 close.
+
+**Shipped: v0.0.1, closed 2026-10-17.**
+
+The install and release cycle, with four phases of docs, fixes and CI on top of it. The first ten phases took the model calls, the API keys, the network use, the npm package and every Windows path out, gave `terminus install` its defaults and its receipt, wrote the one-line signed install and the release machinery, stored each session as block rows, wrote the README and user docs, and published 0.1.0. The last four wrote the design docs, closed twelve small issues, put the test suite in CI with the archive and decision fixes under it, and taught the MCP server protocol 2026-07-28.
+
+| | |
+|---|---|
+| Phases | 14 (No Model Calls; Linux and macOS Only, No npm; Install Asks Nothing; One-Command Installer; Install from GitHub Releases; Signed Install; Blocks as rows; Release Builds; README and User Docs; Publish 0.1.0; How Terminus Works; Quick Issue Fixes; CI and Data Integrity; MCP 2) |
+| Requirements | 16, all Complete: PRIV-05, INST-09..14, STOR-08..10, REL-01..02, DOC-01..04. Phases 12, 13 and 14 delivered against GitHub issues rather than requirement rows |
+| Commits | 310 since the cycle opened on 2026-10-12, excluding merges, on `cadence/v0.0.1` (phases 1 to 9), the phase 10 docs branches, `hardin` (12), `mallow` (13) and `encyclopedists` (11, 13 and 14) |
+| Audit | PASS, 16/16 traced requirement -> phase -> plan -> verified, 0 broken, 0 deferred; 94/94 acceptance criteria covered by a UAT item, 0 breaks |
+| Manifest | 0.1.1 (`Cargo.toml` workspace), not bumped at close. v0.1.0 carried phases 1 to 9 and v0.1.1 the aarch64 install fix, both published mid-cycle; the work of phases 11 to 14 stands under `## [Unreleased]` |
+
+Where it lives now: the requirement rows under `## Shipped` in REQUIREMENTS.md, labelled v0.0.1; the per-phase deviations, UAT results and context decisions in `.planning/ARCHIVE.md` (282 rows added); the full phase directories, plans, reviews and adjudications under `.planning/_archive-v0.0.1/`, since no tag names this close.
+
+Carried out of the close: `.planning/risk-carry/` holds 50 `risk_surface` reviews and adjudications from ten of the pruned phases. It is transient, never committed, and the `/cad-land` that confirms the merge deletes it.
+
+Still outstanding: the merge of `encyclopedists` to `main` is `/cad-land`'s, and its pull request body carries `Fixes #45`. No release tag is cut for this close.
 
 **Shipped: v0.1.1, closed 2026-09-04.**
 
@@ -138,4 +156,4 @@ Settled in DESIGN-BRIEF.md; outcomes pending until shipped and validated.
 | Linux and macOS only, with Windows dropped across all of the owner's products | The owner is removing Windows from every product, so it is removed outright rather than deferred. A build for any other system fails at compile time | - Pending |
 
 ---
-*Last updated: 2026-10-05 after the rename from Verbatim to Terminus*
+*Last updated: 2026-10-17 at the v0.0.1 close, opening v0.2.0*

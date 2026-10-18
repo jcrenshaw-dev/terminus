@@ -7,26 +7,29 @@ Scope comes from `DESIGN-BRIEF.md`, where every decision is settled unless marke
 
 ## Active
 
-Committed scope for v0.0.1. Each maps to exactly one roadmap phase. Several
-replace behaviour that shipped under v0.1.0 rows (INST-01, INST-02, INST-03,
-INST-04's offer, INST-05, INST-08, STOR-01, STOR-03, STOR-05); those rows stay
-under `## Shipped` as written, because they record what shipped then.
+Committed scope for v0.2.0. Each maps to exactly one roadmap phase, added with
+`/cad-phase add`. All five come from the second outside review of 2026-10-12,
+recorded under Seeds in `CAPTURE.md`, which holds the detail behind each line.
 
-### Privacy (PRIV)
+### Archive (STOR)
 
+- **STOR-11**: Evicting a session re-blobs it under minimal capture in place of emptying its blob, so an evicted session stays rebuildable and partly readable, and `terminus reindex` rebuilds every session, evicted or not, through one path.
 
-### Install (INST)
+### Ingest (ING)
 
+- **ING-12**: The `UserPromptSubmit`, `SessionEnd` and `PostCompact` hooks pass the ingest the one transcript named in their payload, and only `SessionStart` runs the full tree walk, so a hook holds the ingest lock for its own file alone.
 
+### Injection (INJ)
 
-### Storage (STOR)
+- **INJ-08**: The injection gate counts only matches that carry information: a `tool` entity alone never makes a prompt eligible, a match whose IDF is below a query-time floor does not count, a path match is not counted a second time through the prompt's prose, and a bare `tool_use` turn is offered only when neither its result turn nor the call-and-result pair is available. The thresholds are tuned with `terminus replay` over the real decision log.
 
+### Feedback (FEED)
 
-### Release (REL)
-
+- **FEED-05**: Changing the labelling rules never leaves `terminus stats` averaging labels made under old and new rules: either each label row carries the version of the rules that produced it, or `terminus reindex` recomputes every label under the current rules.
 
 ### Docs (DOC)
 
+- **DOC-05**: Comments in `crates/` state invariants and their reasons at module level, short and plain, and the phase-local `D-NN` history behind them moves into one decisions file with globally unique ids, so no comment cites a `.planning/phases/` path or a phase-local decision number.
 
 ## Shipped
 
@@ -166,4 +169,4 @@ Explicit exclusions. The reason prevents scope creep later.
 Bare headers — `/cad-plan` seeds a row per requirement when its phase is planned.
 
 ---
-*Last updated: 2026-08-12 after project initialization*
+*Last updated: 2026-10-17 at the v0.0.1 close, seeding v0.2.0*

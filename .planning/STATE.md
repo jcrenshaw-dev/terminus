@@ -1,6 +1,6 @@
 # State
 
-Phase: 14 of 14 (MCP 2)
-Status: phase complete
-Next: /cad-milestone
+Phase: 1 of 0 (no active cycle)
+Status: ready to plan
+Next: /cad-phase add
 Updated: 2026-10-18
