@@ -1,0 +1,133 @@
+{
+  "status": "needs_human",
+  "score": "9/11",
+  "truths": [
+    {
+      "n": 1,
+      "truth": "A freshly built, freshly spawned terminus mcp over a store with archived sessions answers one recall_search tools/call with real hits and exits 0 at EOF.",
+      "status": "VERIFIED",
+      "uat_item": 1,
+      "evidence": "cargo build -p terminus recompiled terminus v0.1.1. A scratch store was built by rooting tests/fixtures/session-recall.jsonl ({{ROOT}} replaced, 0 tokens left) and running target/debug/terminus ingest with TERMINUS_DATA_DIR, TERMINUS_CONFIG_DIR and CLAUDE_CONFIG_DIR under the scratchpad (exit 0, terminus.db created). Standing in root/project-alpha, one line {tools/call recall_search, query src/worker/S.ts} piped to target/debug/terminus mcp gave exit 0, one response line, isError false, resultType complete, hits 1 (turn_id 1, project root/project-alpha, reason null), and nothing on stderr."
+    },
+    {
+      "n": 2,
+      "truth": "server/discover answers the D-04 object, the same with _meta naming 2026-07-28 and with no params.",
+      "status": "VERIFIED",
+      "uat_item": 2,
+      "evidence": "With empty scratch dirs, id 1 (server/discover, _meta 2026-07-28) and id 2 (server/discover, no params) both returned exactly {_meta:{io.modelcontextprotocol/serverInfo:{name:terminus,version:0.1.1}},cacheScope:private,capabilities:{tools:{}},resultType:complete,supportedVersions:[2026-07-28],ttlMs:0}, identical lines and no instructions key. 0.1.1 is the workspace version (Cargo.toml:6, crates/terminus/Cargo.toml:4 version.workspace). Code: route arm mod.rs:189, discover() mod.rs:236-243, envelope from rpc::result rpc.rs:165-174. The unit test cmd::mcp::tests::server_discover_answers_the_one_stateless_revision_with_or_without_meta compares the whole object and passed in the suite run."
+    },
+    {
+      "n": 3,
+      "truth": "Every result (initialize, ping, tools/list, tools/call, server/discover) carries resultType complete and the serverInfo _meta, added in one place, and tools/list carries ttlMs 0, cacheScope private and the three tools in fixed order with or without _meta.",
+      "status": "VERIFIED",
+      "uat_item": 3,
+      "evidence": "Wired in one place: rpc::result (rpc.rs:165-174) inserts resultType and _meta into every object result, and every result arm of route (mod.rs:186-216) goes through it. Observed on the binary: initialize for each of four revisions has keys [_meta, capabilities, protocolVersion, resultType, serverInfo]; ping, with and without 2026-07-28 _meta, has exactly [_meta, resultType]; tools/list with _meta (id 5) and without (id 9) carries ttlMs 0, cacheScope private and tools recall_search, recall_context, recall_get in that order; tools/call (id 4) carries content, isError, resultType and _meta; server/discover as in truth 2. The unit test every_result_carries_the_result_type_and_the_servers_identity_on_both_eras walks all five methods on both eras and passed."
+    },
+    {
+      "n": 4,
+      "truth": "server/discover, tools/list and tools/call whose _meta names a version other than 2026-07-28 are refused with -32022, data.supported [2026-07-28] and data.requested echoing the asked value, before the method runs.",
+      "status": "VERIFIED",
+      "uat_item": 4,
+      "evidence": "answer (mod.rs:170-179) calls unsupported(params) (mod.rs:224-227) on every request except initialize, before route. Observed: id 3 tools/list _meta 2025-11-25 gave error code -32022, data {requested:2025-11-25, supported:[2026-07-28]}; id 7 server/discover _meta 2025-06-18 gave -32022 with requested 2025-06-18; id 8 tools/call _meta 2024-11-05 gave -32022 with requested 2024-11-05. None of the three carried result. Code constant rpc.rs:57 and builder failure_with_data rpc.rs:188-194. The unit tests a_request_naming_another_revision_is_refused_with_what_is_supported (three methods by three asked values, a number included) and the_version_check_runs_first_and_never_on_initialize passed."
+    },
+    {
+      "n": 5,
+      "truth": "initialize is unchanged per D-08, which supersedes roadmap criterion 3: asking 2026-07-28 is answered 2025-06-18, the four legacy revisions are echoed, 2026-07-28 is not in PROTOCOL_VERSIONS, and a tools/list with no _meta and no prior initialize returns the tool list.",
+      "status": "VERIFIED",
+      "uat_item": 5,
+      "evidence": "PROTOCOL_VERSIONS at mod.rs:74 is [2025-11-25, 2025-06-18, 2024-11-05, 2024-10-07]. Its doc comment at mod.rs:65-67 says 2026-07-28 has no initialize and is offered through server/discover, and grep 'left out until' on mod.rs prints nothing. Observed: initialize asking 2026-07-28 (id 6) answered protocolVersion 2025-06-18 and still carried capabilities.tools and top-level serverInfo; initialize for each of the four legacy revisions echoed it. A process whose first line was a bare tools/list answered the three tools in order with ttlMs 0 and cacheScope private, exit 0. The unit tests initialize_negotiates_a_version_both_sides_know (pins !PROTOCOL_VERSIONS.contains(2026-07-28) by name) and a_tools_list_with_no_meta_and_no_initialize_is_served passed."
+    },
+    {
+      "n": 6,
+      "truth": "A spawned terminus mcp over a fixture store, fed server/discover, tools/list and one tools/call per tool, each on 2026-07-28 _meta with no initialize, answers every request with a result and exits 0 at EOF.",
+      "status": "VERIFIED",
+      "uat_item": 6,
+      "evidence": "Spawned target/debug/terminus mcp standing in the scratch store's root/project-alpha and fed five lines (server/discover, tools/list, recall_search query src/worker/S.ts, recall_context turn_id 1, recall_get turn_ids [1]), each with _meta io.modelcontextprotocol/protocolVersion 2026-07-28 and no initialize or notifications/initialized anywhere. Exit 0 and 0 bytes on stderr. Five results with ids 1 to 5 in order and no error. discover is the D-04 object; the list has the three tools in order with ttlMs 0 and cacheScope private; search has 1 hit; context has 6 turns with anchor turn_id 1; get has 1 record holding turn_id 1 and 0 absent. The integration test a_stateless_conversation_with_no_initialize_answers_every_request (tests/mcp.rs, added in d186b22) passed, and the mcp test binary reported 28 passed."
+    },
+    {
+      "n": 7,
+      "truth": "Claude Code 2.1.302 connects to the server on 2026-07-28 without falling back to initialize, lists the three tools, and gets a result from each (roadmap criterion 4, AC6).",
+      "status": "UNCERTAIN",
+      "uat_item": 7,
+      "evidence": "Not machine-checked, per the human-verify rule. As a read only: the log SUMMARY cites, /home/john/.claude/debug/51ee0b2d-9fe8-4437-a4a6-f330a4201178.txt (58564 bytes, written 2026-10-17 21:45), contains protocolEra modern and negotiatedProtocolVersion 2026-07-28 once each, no method initialize line, and 'recall_search', 'recall_context' and 'recall_get' 'completed successfully' once each. It was written after a3f6ec2 (21:34) and before d186b22 (21:50), and d186b22 changed only the tests modules of mod.rs and rpc.rs, so the server code it ran against is the code that shipped."
+    },
+    {
+      "n": 8,
+      "truth": "The design doc documents server/discover, the era, resultType, ttlMs, cacheScope and -32022, with initialize and figure 1 no longer presenting initialize as the only handshake, and CHANGELOG [Unreleased] has an Added entry naming 2026-07-28.",
+      "status": "VERIFIED",
+      "uat_item": 8,
+      "evidence": "docs/design/0006-recall-through-mcp.md: heading '### server/discover' at line 104, era section '### Which era a request is on' at line 88. The initialize section (line 96) opens 'initialize is the legacy opening' and says 2026-07-28 is not in PROTOCOL_VERSIONS because the revision has no initialize. The module table names server/discover and lists -32022 as the fifth code. grep -c counts: resultType 9, ttlMs 5, cacheScope 5, -32022 9, server/discover 11. grep for the old 'empty result, `{}`' ping line prints nothing. Figure 1 (mermaid at line 244) has alt 'the 2026-07-28 opening, server/discover' and else 'the legacy opening, initialize', and its caption describes both. Figure 2 (line 288) branches to 'error -32022, data with supported and requested'. CHANGELOG.md [Unreleased] ### Added, first entry (lines 14-20), names 2026-07-28, server/discover, resultType, ttlMs, cacheScope, -32022, initialize unchanged and #45, and names no Claude Code version. The mermaid figures were read, not rendered."
+    },
+    {
+      "n": 9,
+      "truth": "The phase's PR body carries Fixes #45, so #45 is closed by the change that fixes it (roadmap criterion 5, first half; AC7).",
+      "status": "UNCERTAIN",
+      "uat_item": 9,
+      "evidence": "No PR exists yet. It is opened at /cad-land, after verification, so there is nothing to inspect."
+    },
+    {
+      "n": 10,
+      "truth": "D-09 behaviour is unchanged: a notification is never answered whatever its _meta says, and an unknown method still gets -32601 on either era.",
+      "status": "VERIFIED",
+      "uat_item": null,
+      "evidence": "Seven lines fed to the binary (four initialize, two ping, one notifications/initialized carrying _meta protocolVersion 1999) gave six responses, none for the notification. resources/list with 2026-07-28 _meta gave error -32601. rpc::parse classifies a notification before answer reads _meta (mod.rs:161-162). Suite tests a_notification_is_never_answered_and_every_request_is and an_unknown_method_is_an_error_and_the_loop_carries_on passed."
+    },
+    {
+      "n": 11,
+      "truth": "The CI gate command passes on the phase head (roadmap criterion 5, second half, checked locally; CI itself runs on the push at /cad-land).",
+      "status": "VERIFIED",
+      "uat_item": null,
+      "evidence": "cargo test --workspace --all-features --locked, run once: exit 0, 67 test binaries, 909 passed, 0 failed, 0 ignored. That includes 15 cmd::mcp unit tests and 28 in tests/mcp.rs, matching the counts in SUMMARY. git diff b682c0f on crates, docs and CHANGELOG.md is empty, so the run was on the committed code."
+    }
+  ],
+  "passes": [
+    {
+      "k": 1,
+      "name": "Cold start: fresh binary serves real data",
+      "evidence": "After a fresh cargo build -p terminus and a scratch store ingested from tests/fixtures/session-recall.jsonl, one recall_search (query src/worker/S.ts) piped to target/debug/terminus mcp from root/project-alpha gave exit 0, one result, isError false, 1 real hit (turn_id 1, project-alpha, reason null), and nothing on stderr."
+    },
+    {
+      "k": 2,
+      "name": "server/discover answers the D-04 object",
+      "evidence": "On the binary, server/discover with _meta 2026-07-28 and with no params returned identical results: resultType complete, supportedVersions [2026-07-28], capabilities {tools:{}}, _meta serverInfo {name terminus, version 0.1.1}, ttlMs 0, cacheScope private, no instructions key. discover() is at mod.rs:236-243. The whole-object unit test server_discover_answers_the_one_stateless_revision_with_or_without_meta passed."
+    },
+    {
+      "k": 3,
+      "name": "Every result carries the envelope; tools/list carries cache fields",
+      "evidence": "rpc::result (rpc.rs:165-174) is the one place the envelope is added, and every result arm of route (mod.rs:186-216) goes through it. On the binary, initialize, ping, tools/list, tools/call and server/discover all carried resultType complete and the serverInfo _meta. ping is exactly [_meta, resultType]. tools/list with and without _meta carries ttlMs 0, cacheScope private and recall_search, recall_context, recall_get in order. Unit test every_result_carries_the_result_type_and_the_servers_identity_on_both_eras passed."
+    },
+    {
+      "k": 4,
+      "name": "Other stateless versions refused with -32022",
+      "evidence": "On the binary: tools/list on 2025-11-25, server/discover on 2025-06-18 and tools/call on 2024-11-05 each got error -32022 with data {supported:[2026-07-28], requested:<the asked value>} and no result. The check runs before route (mod.rs:170-179, unsupported at mod.rs:224-227). Unit tests a_request_naming_another_revision_is_refused_with_what_is_supported and the_version_check_runs_first_and_never_on_initialize passed."
+    },
+    {
+      "k": 5,
+      "name": "initialize unchanged; legacy tools/list needs no initialize",
+      "evidence": "Checked against D-08. initialize asking 2026-07-28 was answered 2025-06-18. 2025-11-25, 2025-06-18, 2024-11-05 and 2024-10-07 were each echoed. PROTOCOL_VERSIONS (mod.rs:74) holds only those four, and its doc comment (mod.rs:65-67) says why 2026-07-28 is absent. A bare tools/list as a process's first line returned the three tools. Unit tests initialize_negotiates_a_version_both_sides_know and a_tools_list_with_no_meta_and_no_initialize_is_served passed."
+    },
+    {
+      "k": 6,
+      "name": "Stateless conversation against the spawned binary",
+      "evidence": "Spawned target/debug/terminus mcp over the scratch fixture store with server/discover, tools/list, recall_search, recall_context and recall_get, all on 2026-07-28 _meta and with no initialize: exit 0, 5 results in order with no error, 1 search hit, context anchored on turn 1, get record for turn 1, and empty stderr. Integration test a_stateless_conversation_with_no_initialize_answers_every_request passed."
+    },
+    {
+      "k": 8,
+      "name": "Design doc and changelog document the era",
+      "evidence": "docs/design/0006-recall-through-mcp.md has '### server/discover' (line 104) and '### Which era a request is on' (line 88). The initialize section calls it the legacy opening. resultType, ttlMs, cacheScope and -32022 appear 9, 5, 5 and 9 times. Figure 1 has an alt with both openings and figure 2 draws the -32022 branch. CHANGELOG.md [Unreleased] ### Added lines 14-20 name 2026-07-28 and #45."
+    }
+  ],
+  "gaps": [],
+  "human_checks": [
+    {
+      "name": "Claude Code 2.1.302 connects on 2026-07-28: write an MCP config naming target/debug/terminus with args [mcp], run claude -p --debug mcp --strict-mcp-config --mcp-config <that file> with a prompt asking for recall_search and then recall_context and recall_get on one of its hits, and read the newest log under ~/.claude/debug/",
+      "expected": "The log shows protocolEra modern and negotiatedProtocolVersion 2026-07-28, no initialize sent, the three tools listed, and each of recall_search, recall_context and recall_get completed successfully. The existing log /home/john/.claude/debug/51ee0b2d-9fe8-4437-a4a6-f330a4201178.txt already shows all four, and it ran against the shipped server code (only test code changed after it), so John can accept that log or rerun.",
+      "why_human": "Out-of-reach resource: it needs a live Claude Code 2.1.302 session that makes model calls on John's account over the network, which this verifier may not start. The orchestrator also reserved AC6 for the human walk."
+    },
+    {
+      "name": "PR body carries Fixes #45: when /cad-land opens the phase's pull request, confirm its body has the line Fixes #45 and that CI passes on the push",
+      "expected": "The PR body contains Fixes #45, merging it closes #45, and the test workflow (cargo test --workspace --all-features --locked) is green on all runners.",
+      "why_human": "Not observable yet: the PR is opened at /cad-land, after verification, so no PR body or CI run exists to inspect. This is a later step in the flow, not something a person has to judge."
+    }
+  ]
+}

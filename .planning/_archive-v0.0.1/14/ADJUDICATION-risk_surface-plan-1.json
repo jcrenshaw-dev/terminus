@@ -1,0 +1,39 @@
+{
+  "phase": "14",
+  "trigger": "risk_surface",
+  "discriminator": "plan-1",
+  "round": 1,
+  "base": "cd79ce7",
+  "head": "6afec92",
+  "base_id": "cd79ce75e66a0c5bae361827b7a69779bd91104e",
+  "head_id": "6afec92a542b5dfefde9fb40680d775cc9b38976",
+  "voices": [
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol"
+    }
+  ],
+  "citations": {
+    "checked": true
+  },
+  "entries": [
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol",
+      "file": "crates/terminus/src/cmd/mcp/rpc.rs",
+      "line": 164,
+      "severity": "high",
+      "claim": "The shared result builder unconditionally adds `resultType` and `_meta` to legacy `initialize` responses, contradicting the compatibility promise that `initialize` is unchanged and older clients are served as before.",
+      "failure_scenario": "A client using an older initialize handshake and strict response deserialization sends `initialize` for `2025-06-18`. The response now contains two fields outside the legacy initialize result shape, so such a client rejects the handshake instead of proceeding. The same injection also affects every subsequent legacy result; there is no negotiated-version gate limiting the new envelope to `2026-07-28`.",
+      "ruling": "refuted",
+      "convergent": false,
+      "counter_evidence": {
+        "file": "crates/terminus/src/cmd/mcp/rpc.rs",
+        "line": 164,
+        "note": "The two members on every result are the phase decision D-02 in .planning/phases/14/CONTEXT.md:16, taken on the spec: basic/index Result Responses makes resultType additive (an absent one is read as complete) and lets a JSON-RPC result carry any member, and every MCP schema revision declares Result with _meta and an open index signature, so _meta on a 2025-06-18 initialize result is inside the shape that revision defines, and a client that rejects it violates its own schema. The changelog sentence the finding reads as a promise refers to the handshake: the initialize method, its negotiation and PROTOCOL_VERSIONS are unchanged (D-08), and the same entry states two lines earlier that every result carries the two members. No negotiated-version gate was omitted; one shape on both eras is the decision, and D-02 names the condition under which it is revisited. AC6 passed live on Claude Code 2.1.302."
+      },
+      "base_id": "cd79ce75e66a0c5bae361827b7a69779bd91104e",
+      "head_id": "6afec92a542b5dfefde9fb40680d775cc9b38976"
+    }
+  ]
+}

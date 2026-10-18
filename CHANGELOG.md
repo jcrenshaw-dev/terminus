@@ -11,6 +11,13 @@ and the versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- `terminus mcp` speaks protocol revision `2026-07-28`. It answers
+  `server/discover`, every result carries `resultType` and the server's
+  identity under `_meta`, and `tools/list` carries `ttlMs` and `cacheScope`. A
+  request whose `_meta` names any other revision is refused with a `-32022`
+  error that lists the one supported and echoes the one asked.
+  `initialize` is unchanged, so a client on an older revision is served as
+  before. Claude Code no longer falls back to the older handshake (#45).
 - `terminus stats` counts compacted decisions apart from ordinary ones. A
   compacted decision is the one taken on the prompt after a compaction, which
   searches the wider window and is offered only the turns the compaction

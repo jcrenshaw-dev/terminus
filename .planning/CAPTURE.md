@@ -11,7 +11,9 @@
 Findings from an outside review, each checked against the code on 2026-10-12
 by reading, not by rerunning the reviewer's synthetic probes. All six held. The
 first, Blocks as rows, is now phase 7 of v0.0.1, because nothing ships until it
-is done. The five below are planned as the cycle after the install work.
+is done. The five below are the v0.2.0 headline requirements, opened
+2026-10-17: INJ-08, STOR-11, FEED-05, ING-12 and DOC-05 in `REQUIREMENTS.md`,
+in the order written here.
 
 - [ ] **Tighten the injection gate.** `eligible` (`inject/prompt.rs:511`) fires
   on any entity match in the top three or on two distinct matches at any rank.

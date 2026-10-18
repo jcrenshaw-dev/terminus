@@ -1,0 +1,32 @@
+{
+  "auto_passed": 13,
+  "gaps": 2,
+  "added": 1,
+  "skipped": 0,
+  "rejected": 0,
+  "rejected_entries": [],
+  "skipped_entries": [
+    {
+      "list": "human_checks",
+      "reason": "already-recorded",
+      "item": 2,
+      "status": "pending",
+      "entry": {
+        "name": "Test workflow runs on all four runners",
+        "expected": "After pushing mallow and opening the pull request, test.yml starts four jobs (ubuntu-24.04, ubuntu-24.04-arm, macos-15-intel, macos-15) for both the push and the pull_request event. In each job 'Check the shell-test tools' runs before 'Test', and all four jobs pass. A timing-budget failure on a hosted runner goes to the owner with the test name and its measured number (D-04), with no loosened budget and no --release.",
+        "why_human": "Out-of-reach resource. The workflow runs only on GitHub's hosted runners, this verifier may not touch the network, and it has never run there. The static content and the local tool-check script were verified. What the macOS and arm images actually carry, and whether the debug-build hook meets its p99 budget there, can only be seen in a real run."
+      }
+    },
+    {
+      "list": "human_checks",
+      "reason": "already-recorded",
+      "item": 15,
+      "status": "pending",
+      "entry": {
+        "name": "PR closes the six issues and passes on four runners",
+        "expected": "The pull request for phase 13 carries closing keywords for #47, #44, #15, #40, #38 and #17, its test.yml run passes on all four runners, and merging it closes all six issues.",
+        "why_human": "Out-of-reach resource. The pull request does not exist yet, no commit on mallow carries a closing keyword, and the issue state and CI result live on GitHub, which this verifier may not reach."
+      }
+    }
+  ]
+}

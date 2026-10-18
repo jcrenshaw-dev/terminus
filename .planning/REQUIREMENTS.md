@@ -7,42 +7,29 @@ Scope comes from `DESIGN-BRIEF.md`, where every decision is settled unless marke
 
 ## Active
 
-Committed scope for v0.0.1. Each maps to exactly one roadmap phase. Several
-replace behaviour that shipped under v0.1.0 rows (INST-01, INST-02, INST-03,
-INST-04's offer, INST-05, INST-08, STOR-01, STOR-03, STOR-05); those rows stay
-under `## Shipped` as written, because they record what shipped then.
+Committed scope for v0.2.0. Each maps to exactly one roadmap phase, added with
+`/cad-phase add`. All five come from the second outside review of 2026-10-12,
+recorded under Seeds in `CAPTURE.md`, which holds the detail behind each line.
 
-### Privacy (PRIV)
+### Archive (STOR)
 
-- **PRIV-05**: Terminus never calls a model, never reads, stores or sends an API key, and opens no network connection. The judgment half of observations, the `[provider]` settings and the key lookup are removed. A `terminus.toml` that still has a `[provider]` table fails to load with a message saying so and none of its values.
+- **STOR-11**: Evicting a session re-blobs it under minimal capture in place of emptying its blob, so an evicted session stays rebuildable and partly readable, and `terminus reindex` rebuilds every session, evicted or not, through one path.
 
-### Install (INST)
+### Ingest (ING)
 
-- **INST-09**: Terminus supports Linux and macOS only. The npm package and its platform packages are removed, no Windows code path remains, and a Windows build fails at compile time with a message naming the supported systems.
-- **INST-10**: `terminus install` asks nothing. It applies its defaults, has no confirmation and no `--yes`, and ends with a receipt listing every change, the backfill estimate, and the current `cleanupPeriodDays` with what a low value loses and the line that raises it. It never changes `cleanupPeriodDays` or `autoCompactEnabled`.
-- **INST-11**: Terminus never writes `~/.claude.json`. Install places the MCP entry with `claude mcp add-json --scope user`, runs nothing when the entry is already correct, and reports the install incomplete with the exact command when `claude` is missing or fails. Uninstall removes the entry with `claude mcp remove`.
-- **INST-12**: One command installs Terminus. `install.sh`, given a source URL, downloads the manifest and binary for the machine's system and architecture, checks the SHA-256 in a `verify_download` step before placing anything, stores each version in its own folder behind the stable path `~/.local/bin/terminus` so a running session keeps its binary, and ends by running `terminus install`.
-- **INST-13**: `install.sh` downloads from the GitHub releases on crenshawdev/terminus by default. With no argument it fetches `terminus-<os>-<arch>.manifest` and `terminus-<os>-<arch>` from `https://github.com/crenshawdev/terminus/releases/latest/download`, and one `https://` argument overrides that source. The whole install is `curl -fsSL https://raw.githubusercontent.com/crenshawdev/terminus/main/install.sh | sh`.
+- **ING-12**: The `UserPromptSubmit`, `SessionEnd` and `PostCompact` hooks pass the ingest the one transcript named in their payload, and only `SessionStart` runs the full tree walk, so a hook holds the ingest lock for its own file alone.
 
-- **INST-14**: `install.sh` verifies an OpenSSH signature (SSHSIG, Ed25519, namespace `terminus-release`) over each manifest against a pinned public key before reading it. It refuses a missing or bad signature, and a machine without `ssh-keygen`. The key is never fetched, and nothing overrides it.
+### Injection (INJ)
 
-### Storage (STOR)
+- **INJ-08**: The injection gate counts only matches that carry information: a `tool` entity alone never makes a prompt eligible, a match whose IDF is below a query-time floor does not count, a path match is not counted a second time through the prompt's prose, and a bare `tool_use` turn is offered only when neither its result turn nor the call-and-result pair is available. The thresholds are tuned with `terminus replay` over the real decision log.
 
-- **STOR-08**: A session's archive is stored as numbered block rows, one per block of the uncompressed stream, each holding its compressed bytes and a BLAKE3 hash of its uncompressed bytes. The block size is recorded per session, and the session checksum is a hash over the block hashes in order. An append writes the new blocks and rewrites at most the last one, and reading one turn fetches and decompresses only the blocks it covers.
-- **STOR-09**: `terminus verify` checks each non-evicted session's block numbering, each block's hash and the session checksum, and names the session key of every failure and the block number of every failure in a single block.
-- **STOR-10**: The binary refuses a store whose archive format is older or newer than it knows, before it opens the store for writing, and the refusal names the clean-install steps. When only the derived schema is older, it rebuilds derived tables and never the archive table.
+### Feedback (FEED)
 
-### Release (REL)
-
-- **REL-01**: A pushed `v<X.Y.Z>` tag builds, in CI, `terminus-<os>-<arch>` and its manifest for Linux and macOS on x86_64 and aarch64 into one draft GitHub release on crenshawdev/terminus, and a script on the owner's machine signs each manifest, verifies each signature against the key pinned in `install.sh`, and publishes the draft. CI builds, the owner signs on his own machine, and no workflow holds the key.
-- **REL-02**: Terminus 0.1.0 is published as the latest GitHub release on crenshawdev/terminus, holding for Linux and macOS on x86_64 and aarch64 `terminus-<os>-<arch>`, its manifest and the manifest's signature, and the one-line install puts it on each of the four platforms and on the owner's machine from nothing.
+- **FEED-05**: Changing the labelling rules never leaves `terminus stats` averaging labels made under old and new rules: either each label row carries the version of the rules that produced it, or `terminus reindex` recomputes every label under the current rules.
 
 ### Docs (DOC)
 
-- **DOC-01**: The repository has a `README.md` at its root, written for someone who has never heard of Terminus. It opens on the reader's problem and what Terminus does about it, gives the one-command install and how to install a local build, says Linux and macOS only, lists every command and every `terminus.toml` setting with its key and default, states what Terminus refuses to do (no model calls, no API keys, no network connection from the binary), and names no command, path or key the code does not have.
-- **DOC-02**: User docs beside the README cover installing (the one-line install, a local build, updating by rerunning `install.sh`, and uninstalling), every command with its options, and every `terminus.toml` setting with its key, default and effect, and name no command, option, path or key the code does not have.
-- **DOC-03**: A release page under `docs/` explains how a release is built in CI and signed on the owner's machine, what `install.sh` checks before it installs anything, which key it pins, what the binary never does (no network connection, no model call, no API key), and how to verify a downloaded release by hand with `ssh-keygen -Y verify`.
-- **DOC-04**: Design docs explain how Terminus works as it stands, for an engineer: an overview with one diagram of the whole system, then one doc per part (hooks, ingest, the archive and its block rows, search, recall through the MCP server, injection, install and release), each with at least one Mermaid diagram that GitHub renders.
+- **DOC-05**: Comments in `crates/` state invariants and their reasons at module level, short and plain, and the phase-local `D-NN` history behind them moves into one decisions file with globally unique ids, so no comment cites a `.planning/phases/` path or a phase-local decision number.
 
 ## Shipped
 
@@ -118,6 +105,22 @@ table).
 | STOR-07 (`terminus data move <path>` relocates the store and updates the location pointer, so no component holds a hardcoded store path.) | 8 | Complete | v0.1.0 |
 | ING-07 (Capture mode (`full`, `lean`, `minimal`) controls how much of each record is stored, and every elision is marked in the stored record.) | 8 | Complete | v0.1.0 |
 | INJ-07 (The resume brief's quoted prompt is a turn the user typed. A `user` record not authored by the person - a tool result, an `isMeta` record, or a harness envelope - is not eligible to be quoted under "It last asked", the typed/not-typed discriminator is stored at ingest rather than derived by decompressing turns on the cold-start path, and a store written before this build acquires it by backfill from blobs alone. Closes the gap between `DESIGN-BRIEF.md:230`'s "last prompt" and `inject/brief.rs`'s `record_type = 'user'`, which is the transcript's own `type` field and therefore matches both.) | 1 | Complete | v0.1.1 |
+| PRIV-05 (Terminus never calls a model, never reads, stores or sends an API key, and opens no network connection. The judgment half of observations, the `[provider]` settings and the key lookup are removed. A `terminus.toml` that still has a `[provider]` table fails to load with a message saying so and none of its values.) | 1 | Complete | v0.0.1 |
+| INST-09 (Terminus supports Linux and macOS only. The npm package and its platform packages are removed, no Windows code path remains, and a Windows build fails at compile time with a message naming the supported systems.) | 2 | Complete | v0.0.1 |
+| INST-10 (`terminus install` asks nothing. It applies its defaults, has no confirmation and no `--yes`, and ends with a receipt listing every change, the backfill estimate, and the current `cleanupPeriodDays` with what a low value loses and the line that raises it. It never changes `cleanupPeriodDays` or `autoCompactEnabled`.) | 3 | Complete | v0.0.1 |
+| INST-11 (Terminus never writes `~/.claude.json`. Install places the MCP entry with `claude mcp add-json --scope user`, runs nothing when the entry is already correct, and reports the install incomplete with the exact command when `claude` is missing or fails. Uninstall removes the entry with `claude mcp remove`.) | 3 | Complete | v0.0.1 |
+| INST-12 (One command installs Terminus. `install.sh`, given a source URL, downloads the manifest and binary for the machine's system and architecture, checks the SHA-256 in a `verify_download` step before placing anything, stores each version in its own folder behind the stable path `~/.local/bin/terminus` so a running session keeps its binary, and ends by running `terminus install`.) | 4 | Complete | v0.0.1 |
+| INST-13 (`install.sh` downloads from the GitHub releases on crenshawdev/terminus by default. With no argument it fetches `terminus-<os>-<arch>.manifest` and `terminus-<os>-<arch>` from `https://github.com/crenshawdev/terminus/releases/latest/download`, and one `https://` argument overrides that source. The whole install is `curl -fsSL https://raw.githubusercontent.com/crenshawdev/terminus/main/install.sh \| sh`.) | 5 | Complete | v0.0.1 |
+| INST-14 (`install.sh` verifies an OpenSSH signature (SSHSIG, Ed25519, namespace `terminus-release`) over each manifest against a pinned public key before reading it. It refuses a missing or bad signature, and a machine without `ssh-keygen`. The key is never fetched, and nothing overrides it.) | 6 | Complete | v0.0.1 |
+| STOR-08 (A session's archive is stored as numbered block rows, one per block of the uncompressed stream, each holding its compressed bytes and a BLAKE3 hash of its uncompressed bytes. The block size is recorded per session, and the session checksum is a hash over the block hashes in order. An append writes the new blocks and rewrites at most the last one, and reading one turn fetches and decompresses only the blocks it covers.) | 7 | Complete | v0.0.1 |
+| STOR-10 (The binary refuses a store whose archive format is older or newer than it knows, before it opens the store for writing, and the refusal names the clean-install steps. When only the derived schema is older, it rebuilds derived tables and never the archive table.) | 7 | Complete | v0.0.1 |
+| STOR-09 (`terminus verify` checks each non-evicted session's block numbering, each block's hash and the session checksum, and names the session key of every failure and the block number of every failure in a single block.) | 7 | Complete | v0.0.1 |
+| REL-01 (A pushed `v<X.Y.Z>` tag builds, in CI, `terminus-<os>-<arch>` and its manifest for Linux and macOS on x86_64 and aarch64 into one draft GitHub release on crenshawdev/terminus, and a script on the owner's machine signs each manifest, verifies each signature against the key pinned in `install.sh`, and publishes the draft. CI builds, the owner signs on his own machine, and no workflow holds the key.) | 8 | Complete | v0.0.1 |
+| REL-02 (Terminus 0.1.0 is published as the latest GitHub release on crenshawdev/terminus, holding for Linux and macOS on x86_64 and aarch64 `terminus-<os>-<arch>`, its manifest and the manifest's signature, and the one-line install puts it on each of the four platforms and on the owner's machine from nothing.) | 10 | Complete | v0.0.1 |
+| DOC-01 (The repository has a `README.md` at its root, written for someone who has never heard of Terminus. It opens on the reader's problem and what Terminus does about it, gives the one-command install and how to install a local build, says Linux and macOS only, lists every command and every `terminus.toml` setting with its key and default, states what Terminus refuses to do (no model calls, no API keys, no network connection from the binary), and names no command, path or key the code does not have.) | 9 | Complete | v0.0.1 |
+| DOC-02 (User docs beside the README cover installing (the one-line install, a local build, updating by rerunning `install.sh`, and uninstalling), every command with its options, and every `terminus.toml` setting with its key, default and effect, and name no command, option, path or key the code does not have.) | 9 | Complete | v0.0.1 |
+| DOC-03 (A release page under `docs/` explains how a release is built in CI and signed on the owner's machine, what `install.sh` checks before it installs anything, which key it pins, what the binary never does (no network connection, no model call, no API key), and how to verify a downloaded release by hand with `ssh-keygen -Y verify`.) | 9 | Complete | v0.0.1 |
+| DOC-04 (Design docs explain how Terminus works as it stands, for an engineer: an overview with one diagram of the whole system, then one doc per part (hooks, ingest, the archive and its block rows, search, recall through the MCP server, injection, install and release), each with at least one Mermaid diagram that GitHub renders.) | 11 | Complete | v0.0.1 |
 
 ## v2 Requirements
 
@@ -162,23 +165,8 @@ Explicit exclusions. The reason prevents scope creep later.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PRIV-05 | Phase 1 | Complete |
-| INST-09 | Phase 2 | Complete |
-| INST-10 | Phase 3 | Complete |
-| INST-11 | Phase 3 | Complete |
-| INST-12 | Phase 4 | Complete |
-| INST-13 | Phase 5 | Complete |
-| INST-14 | Phase 6 | Complete |
-| STOR-08 | Phase 7 | Complete |
-| STOR-10 | Phase 7 | Complete |
-| STOR-09 | Phase 7 | Complete |
-| REL-01 | Phase 8 | Complete |
-| REL-02 | Phase 10 | Complete |
-| DOC-01 | Phase 9 | Complete |
-| DOC-02 | Phase 9 | Complete |
-| DOC-03 | Phase 9 | Complete |
 
 Bare headers — `/cad-plan` seeds a row per requirement when its phase is planned.
 
 ---
-*Last updated: 2026-08-12 after project initialization*
+*Last updated: 2026-10-17 at the v0.0.1 close, seeding v0.2.0*

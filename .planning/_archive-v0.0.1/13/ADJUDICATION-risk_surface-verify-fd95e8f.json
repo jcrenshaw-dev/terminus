@@ -1,0 +1,67 @@
+{
+  "phase": "13",
+  "trigger": "risk_surface",
+  "discriminator": "verify-fd95e8f",
+  "round": 1,
+  "base": "fd95e8f",
+  "head": "7967225",
+  "base_id": "fd95e8fd2a79dbe89f167610781517b9440a87f3",
+  "head_id": "79672256124fc77c93bfca31910340640b840b86",
+  "voices": [
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol"
+    }
+  ],
+  "citations": {
+    "checked": true
+  },
+  "entries": [
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol",
+      "file": "crates/terminus/tests/hook.rs",
+      "line": 548,
+      "severity": "high",
+      "claim": "The timeout path can still hang indefinitely because it ignores the result of `child.kill()` and immediately performs a blocking `child.wait()`.",
+      "failure_scenario": "If termination fails while the hook remains alive—for example, `kill()` returns an OS error—or the process is stuck in a state where termination has been requested but it cannot exit, `child.wait()` never returns. The code therefore never reaches `read_for` or the panic, so the advertised 30-second deadline does not bound the test; only the new 45-minute job timeout eventually stops it.",
+      "ruling": "survived",
+      "convergent": false,
+      "fix_commit": "7967225",
+      "base_id": "fd95e8fd2a79dbe89f167610781517b9440a87f3",
+      "head_id": "79672256124fc77c93bfca31910340640b840b86"
+    },
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol",
+      "file": "crates/terminus/tests/hook.rs",
+      "line": 542,
+      "severity": "low",
+      "claim": "All receive errors are reported as a 30-second blocked-write timeout, even though `recv_timeout` also returns `Disconnected` immediately when the writer exits without sending.",
+      "failure_scenario": "If the writer thread panics or otherwise drops its sender before `done.send(refused)`, `recv_timeout` returns `Disconnected` immediately. The test then kills the child and reports that the write was 'still blocked after 30s', losing the actual writer-thread failure and misattributing it to a deadline expiration.",
+      "ruling": "survived",
+      "convergent": false,
+      "fix_commit": "7967225",
+      "base_id": "fd95e8fd2a79dbe89f167610781517b9440a87f3",
+      "head_id": "79672256124fc77c93bfca31910340640b840b86"
+    },
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol",
+      "file": "crates/terminus/tests/hook.rs",
+      "line": 532,
+      "severity": "low",
+      "claim": "The atomic does not necessarily contain the number of bytes actually written because `write_all` can write a partial chunk before returning an error.",
+      "failure_scenario": "When the hook closes its read end after accepting part of a `CHUNK`, `write_all` can perform that partial write and then return `BrokenPipe`. Since the atomic is incremented only on `Ok(())`, the timeout/error diagnostics underreport 'bytes in' by the partial amount, potentially misidentifying where the cap was reached.",
+      "ruling": "refuted",
+      "convergent": false,
+      "counter_evidence": {
+        "file": "crates/terminus/tests/hook.rs",
+        "line": 535,
+        "note": "The count moves only when a whole CHUNK is written, the same way the loop before this change counted it (Ok(()) => written += CHUNK). It is low by at most one 64 KiB chunk against the 8 MiB CEILING it is checked against, and no assertion or diagnosis depends on the partial bytes."
+      },
+      "base_id": "fd95e8fd2a79dbe89f167610781517b9440a87f3",
+      "head_id": "79672256124fc77c93bfca31910340640b840b86"
+    }
+  ]
+}
