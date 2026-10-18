@@ -205,11 +205,30 @@ fn a_prompt_naming_a_file_gets_the_turn_that_edited_it() {
         "the injected turn is not the edit that stored the path: {context}"
     );
     assert!(
-        context.contains("turn "),
-        "nothing names the turn `recall_get` would take: {context}"
+        turn_lines(&context) > 0,
+        "nothing between the tags names the turn `recall_get` would take: {context}"
     );
 
     silent(&bench.prompt("what changed"), "the prompt with no path");
+}
+
+/// How many `- turn ` lines sit between the frame's tags, after checking the
+/// closing tag is there once and last. Header prose of the frame's own would
+/// satisfy a bare `contains("turn ")`, so the line is looked for where it has
+/// to be.
+fn turn_lines(context: &str) -> usize {
+    use terminus_core::inject::{CLOSE_TAG, OPEN_TAG};
+    assert_eq!(context.matches(CLOSE_TAG).count(), 1, "{context}");
+    assert!(
+        context.ends_with(&format!("\n{CLOSE_TAG}")),
+        "the closing tag is not last: {context}"
+    );
+    let open = context.find(OPEN_TAG).expect("no opening tag") + OPEN_TAG.len();
+    let close = context.len() - CLOSE_TAG.len();
+    context[open..close]
+        .lines()
+        .filter(|line| line.starts_with("- turn "))
+        .count()
 }
 
 /// AC7: a prompt whose only match is free text writes nothing.
@@ -238,9 +257,12 @@ fn a_prompt_that_matches_only_free_text_writes_nothing() {
 /// Written to `terminus.toml` and asserted on the spawned binary's own stdout,
 /// because "settings must actually reach the query" is the requirement rather
 /// than a detail (`DESIGN-BRIEF.md:239`).
+///
+/// 300 is room for the frame, which is 239 characters, and one turn line cut
+/// short.
 #[test]
 fn no_injection_exceeds_the_configured_budget() {
-    const BUDGET: usize = 120;
+    const BUDGET: usize = 300;
 
     let bench = bench();
     bench.ingest();
@@ -256,5 +278,23 @@ fn no_injection_exceeds_the_configured_budget() {
         "{} characters against a configured budget of {BUDGET}: {context}",
         context.chars().count()
     );
-    assert!(context.contains("turn "), "{context}");
+    assert_eq!(turn_lines(&context), 1, "{context}");
+}
+
+/// AC4: a budget too small for the frame writes nothing and exits 0, rather
+/// than a block whose closing tag the backstop cut off (D-06).
+#[test]
+fn a_budget_too_small_for_the_frame_writes_nothing() {
+    let bench = bench();
+    bench.ingest();
+    std::fs::write(
+        bench.config_dir.join("terminus.toml"),
+        "[injection]\nprompt_chars = 200\n",
+    )
+    .unwrap();
+
+    silent(
+        &bench.prompt(&format!("what changed in {RELATIVE}")),
+        "a prompt under a budget smaller than the frame",
+    );
 }

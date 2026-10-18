@@ -458,6 +458,44 @@ fn is_combining_mark(c: char) -> bool {
     )
 }
 
+/// What the frame costs before anything is quoted in it: the header line, both
+/// tags and the line breaks between them (D-06).
+///
+/// Measured off the frame itself rather than added up, so it cannot drift from
+/// what [`frame`] writes.
+pub(crate) fn frame_cost(description: &str) -> usize {
+    chars(&framed(description, ""))
+}
+
+/// Whether a budget leaves the frame room to quote anything at all.
+///
+/// The test both arms put to a budget before they spend anything or remember
+/// anything: a frame that does not fit is an injection that does not happen,
+/// never one whose closing tag the backstop cut off.
+pub(crate) fn frame_fits(description: &str, budget: usize) -> bool {
+    frame_cost(description) < budget
+}
+
+/// `body` inside the frame, within `budget`, or nothing when the frame does not
+/// fit (D-06).
+///
+/// The header line is the arm's own `description` followed by
+/// [`QUOTED_HISTORY`], then the opening tag on its own line, the body, and the
+/// closing tag on its own line as the last characters. The backstop clip cuts
+/// the body and never the frame, so whatever comes back ends with
+/// [`CLOSE_TAG`].
+pub(crate) fn frame(description: &str, body: &str, budget: usize) -> Option<String> {
+    if !frame_fits(description, budget) {
+        return None;
+    }
+    let room = budget - frame_cost(description);
+    Some(framed(description, &clip(body, room)))
+}
+
+fn framed(description: &str, body: &str) -> String {
+    format!("{description} {QUOTED_HISTORY}\n{OPEN_TAG}\n{body}\n{CLOSE_TAG}")
+}
+
 /// One count over the visible rows of a scoped project.
 pub(crate) fn count(conn: &Connection, head: &str, scoped: &Scoped) -> Result<i64> {
     let mut sql = String::from(head);
