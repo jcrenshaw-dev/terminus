@@ -39,6 +39,12 @@
 //! ordinary ranked window, as does every decision on a store that has not been
 //! opened for writing since the columns were added: a read never brings a store
 //! forward, so the query does not name columns that are not there.
+//!
+//! **A tool result is never credited (D-01).** The live arm drops every turn
+//! the harness wrote before the cap, through `prompt::quotable`, and so does
+//! this. On a store whose `turns` lacks `is_typed` nothing can say which turns
+//! were tool results, so nothing is dropped there, the same way absent
+//! `decisions` columns read as unknown.
 
 use std::collections::BTreeSet;
 
@@ -106,13 +112,17 @@ pub fn replay(store: &Store, config: &Config, thresholds: &Thresholds) -> Result
         .iter()
         .any(|missing| missing.table == "decisions");
     let logged = eligible(conn, recorded)?;
+    let typed = !store
+        .missing_columns()
+        .iter()
+        .any(|missing| missing.table == "turns" && missing.column == "is_typed");
 
     let mut totals: Vec<usize> = vec![0; label::LABELS.len()];
     let mut stored: Vec<usize> = vec![0; label::LABELS.len()];
     let mut changed: Vec<i64> = Vec::new();
 
     for decision in &logged {
-        let new = recomputed(conn, config, thresholds, decision)?;
+        let new = recomputed(conn, config, thresholds, decision, typed)?;
         let old = counts(conn, decision.id)?;
         if new != old {
             changed.push(decision.id);
@@ -211,8 +221,9 @@ fn recomputed(
     config: &Config,
     thresholds: &Thresholds,
     decision: &Logged,
+    typed: bool,
 ) -> Result<Vec<usize>> {
-    let (spellings, injected) = would_inject(conn, config, thresholds, decision)?;
+    let (spellings, injected) = would_inject(conn, config, thresholds, decision, typed)?;
 
     let mut counts: Vec<usize> = vec![0; label::LABELS.len()];
     let mut any_hit = false;
@@ -249,15 +260,19 @@ fn recomputed(
 ///
 /// The same steps the live arm takes, through the same functions
 /// (`prompt::candidates`, `prompt::query_of`, `prompt::eligible`,
-/// `prompt::within`, `prompt::capped`) and with the same request shape -
-/// candidates, the scope of the stored `cwd`, excerpts off, and the compacted
-/// window for a decision made under the pool. A second implementation of any of
+/// `prompt::quotable`, `prompt::within`, `prompt::capped`) and with the same
+/// request shape - candidates, the scope of the stored `cwd`, excerpts off, and
+/// the compacted window for a decision made under the pool. A second implementation of any of
 /// them would make the diff a measurement of the replay engine.
+///
+/// `typed` is false on a store whose `turns` lacks `is_typed`, and then
+/// `prompt::quotable` is not run: it names that column.
 fn would_inject(
     conn: &Connection,
     config: &Config,
     thresholds: &Thresholds,
     decision: &Logged,
+    typed: bool,
 ) -> Result<(Vec<String>, Vec<i64>)> {
     let Some(cwd) = decision.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
         // A record with no working directory has no project to be scoped to,
@@ -287,8 +302,15 @@ fn would_inject(
 
     let hits = search::run(conn, config, &request)?.hits;
     let admitted = prompt::eligible(hits, thresholds);
+    // D-01, in the live arm's place: after the threshold, before the pool and
+    // the cap.
+    let quoted = if typed {
+        prompt::quotable(conn, admitted)?
+    } else {
+        admitted
+    };
     // After the threshold, as the live arm filters: see `prompt::within`.
-    let pooled = prompt::within(admitted, decision.dropped.as_ref());
+    let pooled = prompt::within(quoted, decision.dropped.as_ref());
     let injected = prompt::capped(pooled, &decision.refused, thresholds.max_turns)
         .iter()
         .map(|hit| hit.turn_id)
