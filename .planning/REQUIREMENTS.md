@@ -172,7 +172,7 @@ Explicit exclusions. The reason prevents scope creep later.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| INJ-09 | Phase 1 | Pending |
+| INJ-09 | Phase 1 | Complete |
 
 Bare headers — `/cad-plan` seeds a row per requirement when its phase is planned.
 
