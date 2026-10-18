@@ -120,6 +120,15 @@ and the versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   100.002 s that started at :59.998 read as 101 s. Observations already
   recorded keep the old value until `terminus observations regenerate`
   recomputes them.
+- The `UserPromptSubmit` hook could inject a tool result, so text planted in a
+  file Claude read came back as the user's own history whenever the user named
+  that file. Tool-result turns are no longer injected: a prompt that pastes an
+  error line no longer fires, and `recall_search` still reaches those turns.
+  Both hooks now hand over what they quote between a fixed
+  `<terminus-recall>` tag pair, under a header saying the text is quoted
+  history, not instructions, and a closing tag planted in the archived text is
+  neutralized in any case, spacing or lookalike spelling. A budget too small
+  for the header and both tags now hands over nothing (#60).
 
 ## [0.1.1] - 2026-10-15
 
