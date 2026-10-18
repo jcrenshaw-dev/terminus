@@ -33,11 +33,13 @@ Terminus is audited with [sentinel](https://github.com/jcrenshaw-dev/sentinel), 
 
 ## The full audit
 
-The full audit runs sentinel's audit in three steps, and stops after each one until the maintainer says to go on.
+The full audit runs sentinel's audit in five steps, and stops after each one until the maintainer says to go on. Nothing in it runs Terminus's code: the scans, the lenses and the check only read it.
 
 1. **Mechanical checks.** The same checks every pull request runs, with their output saved to `audit/check.txt`.
-2. **Claude Security scan.** One codebase scan of the whole repository.
-3. **Findings log.** One row per step: which mechanical checks failed, and how many findings the scan reported at each severity.
+2. **Claude Security scan.** The maintainer picks one of three: a release scan of the whole repository at medium effort, a branch scan of the branch's committed changes at high, or a quick scan of the whole repository at low. After a whole-repository scan, every production file the report says it did not cover is listed, and a scan of exactly those files is offered at the same effort, with its report saved to `audit/claude-security-skipped.md`.
+3. **Lens pass.** Eight review prompts in `.sentinel/lenses/`, one concern each, read the whole repository against THREAT-MODEL.md, on Claude, on Codex, on both, or not at all, and nothing runs until the maintainer picks. Each lens runs once, on a copy of the repository that leaves out `audit/`, the Claude Security reports and symlinks. Claude gets only the Read, Grep and Glob tools. Codex runs under a permission profile that can read only the copy, Codex's own install folder and the system directories its commands need, with no writes, no network and web search off.
+4. **Check.** A lens finding is set aside, with its reason, when the Claude Security report already has it, when THREAT-MODEL.md already documents it, or when it needs a same-user process that can already write the files. Read-only subagents trace the rest in the code at file:line, and only the confirmed and partly confirmed ones go into `audit/lenses.md`.
+5. **Findings log.** One row per step: which mechanical checks failed, and how many findings each scan and the checked lenses reported at each severity, or `lenses (skipped)` when they did not run.
 
 The audit finds and records. It fixes no code, writes no tests and commits nothing. What happens to each finding is the maintainer's decision.
 
