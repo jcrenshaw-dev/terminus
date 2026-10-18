@@ -82,24 +82,34 @@ impl Bench {
         command
     }
 
-    /// Archive the rooted fixture through the binary's own ingest path, to
+    /// Archive [`FIXTURE`] through the binary's own ingest path, to
     /// completion, so every hook's own spawned pass finds nothing new.
     fn ingest(&self) {
-        let path = testkit::copy_rooted_fixture_into(FIXTURE, &self.work, &self.root);
+        self.ingest_fixture(FIXTURE);
+    }
+
+    /// The same for any rooted fixture.
+    fn ingest_fixture(&self, fixture: &str) {
+        let path = testkit::copy_rooted_fixture_into(fixture, &self.work, &self.root);
         let out = self
             .command(&["ingest", path.to_str().unwrap()])
             .output()
             .expect("spawn the ingest");
         assert!(
             out.status.success(),
-            "ingest {FIXTURE}: {}",
+            "ingest {fixture}: {}",
             String::from_utf8_lossy(&out.stderr)
         );
     }
 
-    /// The project directory the fixture's `cwd` names.
+    /// The project directory [`FIXTURE`]'s `cwd` names.
     fn project(&self) -> PathBuf {
-        testkit::fixture_project(FIXTURE, &self.root)
+        self.fixture_project(FIXTURE)
+    }
+
+    /// The project directory any rooted fixture's `cwd` names.
+    fn fixture_project(&self, fixture: &str) -> PathBuf {
+        testkit::fixture_project(fixture, &self.root)
     }
 
     /// One hook invocation: the payload on stdin, then EOF, the way Claude Code
@@ -297,4 +307,41 @@ fn a_budget_too_small_for_the_frame_writes_nothing() {
         &bench.prompt(&format!("what changed in {RELATIVE}")),
         "a prompt under a budget smaller than the frame",
     );
+}
+
+/// The fixture whose last assistant turn writes `café=1` and `Größe=10` to
+/// `saffron/limits.txt` under `project-epsilon`.
+const REDACTION_FIXTURE: &str = "session-redaction.jsonl";
+
+/// PRIV-03's knob, written the way `tests/brief.rs` writes it.
+const KNOB_ON: &str = "[privacy]\nredact_recall = true\n";
+
+/// The prompt hook injects the multi-byte turn with the knob on (#61).
+///
+/// The stderr check is the one that matters before the fix: `cmd::hook` catches
+/// the unwind and exits 0 with nothing injected, so the exit status alone
+/// passes on a build whose rule 5 panics.
+#[test]
+fn the_knob_on_prompt_hook_injects_a_multi_byte_turn() {
+    let bench = bench();
+    bench.ingest_fixture(REDACTION_FIXTURE);
+    std::fs::write(bench.config_dir.join("terminus.toml"), KNOB_ON).unwrap();
+
+    let out = bench.hook(
+        "UserPromptSubmit",
+        &payload(
+            &bench.fixture_project(REDACTION_FIXTURE),
+            "what changed in saffron/limits.txt",
+        ),
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("panicked"), "the hook panicked: {stderr}");
+
+    let context = injected(&out);
+    for assignment in ["café=1", "Größe=10"] {
+        assert!(
+            context.contains(assignment),
+            "the injection lost {assignment}: {context}"
+        );
+    }
 }
