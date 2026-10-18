@@ -6,14 +6,16 @@
 
 ## Seeds
 
-### Archive and injection fixes (second review, 2026-10-12, the cycle after the install work)
+### Archive and injection fixes (second review, 2026-10-12, the milestone after hardin)
 
 Findings from an outside review, each checked against the code on 2026-10-12
 by reading, not by rerunning the reviewer's synthetic probes. All six held. The
 first, Blocks as rows, is now phase 7 of v0.0.1, because nothing ships until it
-is done. The five below are the v0.2.0 headline requirements, opened
-2026-10-17: INJ-08, STOR-11, FEED-05, ING-12 and DOC-05 in `REQUIREMENTS.md`,
-in the order written here.
+is done. The five below are the milestone after hardin. Their requirement lines,
+INJ-08, STOR-11, FEED-05, ING-12 and DOC-05, were written into `REQUIREMENTS.md`
+on 2026-10-17 (commit 5bb195b) and taken out again when hardin opened first on
+2026-10-18. They go back in, in the order written here, when that milestone
+opens.
 
 - [ ] **Tighten the injection gate.** `eligible` (`inject/prompt.rs:511`) fires
   on any entity match in the top three or on two distinct matches at any rank.

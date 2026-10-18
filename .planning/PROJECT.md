@@ -16,11 +16,13 @@ The verbatim transcript is the record: every session archived losslessly and per
 
 ### Active
 
-**v0.2.0, opened 2026-10-17.**
+**hardin, opened 2026-10-18.**
 
-Five pieces of archive and injection work from the outside review of 2026-10-12, held until the install work shipped. The injection gate fires on too little: a prompt word that matches a tool name counts as a hit, a path match counts twice, and a match with no information weight still counts, so it is tightened and tuned against the real decision log with `terminus replay`. Eviction leaves the derived rows as a session's only copy, so it re-blobs the session under minimal capture instead and `terminus reindex` has one path again. Outcome labels get a rule version, or are recomputed under the current rules, so `terminus stats` never averages labels made under different rules. Each hook passes the ingest its own transcript in place of the full tree walk, which stays with `SessionStart`. The comments in `crates/` go back to stating invariants and their reasons at module level, and the phase history behind them moves into one decisions file.
+The fixes the 2026-10-18 sentinel audit says must land before the first release, all filed as issues. Injected recall marks archived tool output as quoted history instead of handing it to the model as the user's own turns (#60). Redaction catches a secret stored under a secret-named JSON key and a bare `sk-` token, never panics on a multi-byte character, and its test proves each rule's own marker (#62, #5, #61, #4). Install's `settings.json` temporaries and the destination of `terminus data move` are owner-only from the start (#64, #59). A session keeps its key when its transcript directory moves behind a symlink, and the archive that already holds both keys is repaired (#57). Human-mode output neutralizes control characters in archived text (#63, #65, #66).
 
-The fixes and features phases 12 to 14 left under `## [Unreleased]` in `CHANGELOG.md` ship with this cycle's release, since no version was cut at the v0.0.1 close.
+The version is named at the release. The fixes and features phases 12 to 14 left under `## [Unreleased]` in `CHANGELOG.md` ship with it.
+
+After hardin come the five pieces of archive and injection work from the outside review of 2026-10-12, recorded under Seeds in `CAPTURE.md`. They get a theme name when they open.
 
 **Shipped: v0.0.1, closed 2026-10-17.**
 
