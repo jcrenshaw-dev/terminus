@@ -64,7 +64,7 @@ Last reviewed: 2026-10-15
 
 ## What it writes
 
-**File modes.** Files in the data directory are created through `core/owner_only.rs`: directories 0700 and files 0600, passed in the creating syscall. Nothing calls `umask()`, so the result can be narrower but never wider. Parent directories are made with `create_dir_all` at the default mode, and only the leaf gets 0700. Every writable open of the store (`Store::open` in `core/store/open.rs`) tightens the data directory, `terminus.db`, `-wal`, `-shm`, `LOCK`, `snapshots/`, `injection/` and `decisions/` and the regular files one level inside them. It skips anything that is not the expected type and ignores failures. Read-only opens tighten nothing.
+**File modes.** Files in the data directory are created through `core/owner_only.rs`: directories 0700 and files 0600, passed in the creating syscall. Nothing calls `umask()`, so the result can be narrower but never wider. Parent directories are made with `create_dir_all` at the default mode, and only the leaf gets 0700. Every writable open of the store (`Store::open` in `core/store/open.rs`) tightens the data directory, `terminus.db`, `-wal`, `-shm`, `LOCK`, `snapshots/`, `injection/` and `decisions/` and the regular files one level inside them. It skips anything that is not the expected type and ignores failures. Read-only opens tighten nothing. `Store::open` checks no owner, so a store reached through `TERMINUS_DATA_DIR`, or through a pointer an older build wrote, that names another account's directory is opened as found.
 
 **Inside the data directory.**
 
@@ -94,7 +94,14 @@ Last reviewed: 2026-10-15
 - **`.claude.json`** is never written by Terminus. Install changes it by running `claude mcp add-json --scope user terminus <json>`, and install and uninstall run `claude mcp remove --scope user terminus`.
 - **The binary.** Install writes `$HOME/.local/lib/crenshawdev/terminus/versions/<version>/terminus` at mode 0755, through a temporary file, fsync and rename. The versions folder always comes from `HOME`, even when `TERMINUS_BIN_DIR` is set. The stable path is a symlink to it, made at a temporary name and renamed into place (`bin/cmd/install/binary.rs`). `install.sh` does the same with umask 022.
 - **`terminus export <dir>`** refuses a non-empty directory. It creates the leaf at 0700 and writes `NNNNNN-<sanitized name>.jsonl` files and `manifest.json` at 0600 with `create_new`. The output is the verbatim, unredacted transcripts (`bin/cmd/export.rs`).
-- **`terminus data move <path>`** copies the data directory with 0700 directories and 0600 files, following symlinked files. It writes the pointer, then removes the source with `remove_dir_all` (`bin/cmd/data.rs`).
+- **`terminus data move <path>`** (`bin/cmd/data.rs`).
+  - The path has its trailing slashes and `.` parts dropped, and that one path is checked, copied into and recorded. A `..` stays as written.
+  - Before asking, a path that does not exist is accepted and later created 0700. An existing path is accepted only when `symlink_metadata` shows a directory, not a symlink, owned by the user's uid, with `mode & 0o077 == 0`, that can be listed and is empty. Any other error refuses, including a directory that cannot be listed, which is never read as empty. A directory with group or world bits is refused with the `chmod 700 '<path>'` command that fixes it, and its mode is never changed.
+  - The uid is the owner of a probe file, `.uid-probe-<pid>-<n>`, created 0600 with `create_new` in the config directory and removed straight after. It is learned only when an existing directory has to be compared.
+  - After the answer and the lock, right before the copy, the same checks run again, and the move is refused unless the path is still absent or is the same directory by device and inode.
+  - Only the last part of the path is checked for a symlink, so a symlinked parent is followed. The parent's owner and mode are not checked, so an account that can write to the parent, when the parent has no sticky bit, can rename the checked directory away after the copy.
+  - The race is narrowed, not closed. Between the second check and the `mkdir` that `copy_tree` makes, an existing directory is still accepted, because `owner_only::create_dir_all` accepts one that is already there.
+  - It copies the data directory with 0700 directories and 0600 files, following symlinked files. It writes the pointer, then removes the source with `remove_dir_all`.
 - **Never written:** shell rc files, `PATH`, systemd, launchd, cron, and anything under the Claude projects tree.
 
 **What it deletes.**
@@ -105,7 +112,7 @@ Last reviewed: 2026-10-15
 | `uninstall` | The `.mcpServers.terminus` entry, through `claude mcp remove`, whoever created it | The key name only |
 | `uninstall` | The stable path, if the file it resolves to contains the marker or it is a dangling link into the versions folder | A byte-substring match on the marker |
 | `uninstall --purge` | `remove_dir_all` on the data directory | Only that `<data>/terminus.db` exists, then a confirmation or `--yes`, then the lock. No check that the directory is where Terminus would put it |
-| `data move` | `remove_dir_all` on the source data directory after the copy | The lock and a confirmation. No `terminus.db` check. The destination checks (not the source, not inside it, empty) are lexical, so a symlinked alias is not caught |
+| `data move` | `remove_dir_all` on the source data directory after the copy | The lock and a confirmation. No `terminus.db` check. The destination must not be the source or inside it, and must be absent or an empty directory the user owns, not a symlink, with no group or world bit, checked before the question and again after the answer and the lock. The not-the-source and not-inside-it checks compare paths as text, so a destination that does not exist yet and is reached through a symlinked parent of the source passes them |
 | Retention | Database rows only, never files | `delete` acts only once Claude Code has deleted the transcript. It never deletes `decisions` or `labels` rows (`core/retention/`) |
 | Snapshot prune | `snapshots/terminus-*.db` beyond `keep` | Name prefix and suffix, regular files only |
 | Decisions drain | Every regular `*.json` in `decisions/`, unparseable ones included | Regular files only, deleted after the database commit |
@@ -260,7 +267,7 @@ A same-user process that can already write `~/.claude/projects` or the data dire
 - **Scope.** `project` defaults to the server's working directory. `"*"` or any path widens or moves the scope to any project that is not excluded, with no confirmation. Excluded projects stay hidden under every scope. Turn ids are `session_no << 24 | turn_seq`, so they are easy to enumerate, and id lookups outside the scope answer `NoSuchTurn`.
 - **Leaks in error text.** Naming a path inside an excluded project returns a reason that includes the stored project key. Error reasons can also carry absolute paths and raw SQLite messages.
 
-**5. CLI arguments.** These come from the user. `ingest <path>`, `export <dir>` and `data move <path>` take any path. `data move` makes it absolute against the working directory and refuses a destination inside the source or not empty.
+**5. CLI arguments.** These come from the user. `ingest <path>`, `export <dir>` and `data move <path>` take any path. `data move` makes it absolute against the working directory, drops trailing slashes and `.` parts, and checks and records that same path. It refuses a destination inside the source or not empty, a symlink, a file, a directory owned by another uid, one with group or world bits, and one it cannot list. It checks again after the answer and refuses a destination that was created, removed, replaced or changed while the question waited.
 
 **6. Environment variables.** These are inherited from the user's shell, or from Claude Code for hooks and MCP. `TERMINUS_DATA_DIR` has no absolute-path check. `PATH` decides which `git` and `claude` run.
 

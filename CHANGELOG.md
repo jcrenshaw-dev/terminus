@@ -158,6 +158,19 @@ and the versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   opened. A `settings.json` Terminus creates is 0600, one that already exists
   keeps its own mode, and the backup is 0600 whatever the mode of the file it
   copies (#64).
+- `terminus data move` moved the store into any existing directory it found no
+  files in. A symlink to another directory, a directory another account owns, a
+  directory open to group or world, and a directory it could not list were all
+  accepted, the last because a listing that failed was read as empty. A
+  directory created at the destination while the question waited was accepted
+  too. An existing destination is now refused unless it is an empty directory
+  the user owns, not a symlink, with no group or world bit, and the same check
+  runs again after the answer, refusing a destination that was created,
+  removed, replaced or changed in the meantime. An empty directory with group
+  or world bits, such as one made with `mkdir` under umask 022, is now refused
+  with the `chmod 700` command that fixes it, where earlier builds moved the
+  store into it. Trailing slashes and `.` parts are dropped from the path
+  before it is checked, and the pointer records it without them (#59).
 
 ## [0.1.1] - 2026-10-15
 
