@@ -19,7 +19,7 @@ The archive is the product, so it is built first and everything else is built on
 - [x] **Phase 11: How Terminus Works** - design docs with diagrams of the system as it stands, in the shape of Baley's `docs/design/`
 - [x] **Phase 12: Quick Issue Fixes** - twelve small open issues are fixed and closed, and #17 gets its type check, before the release is announced
 - [x] **Phase 13: CI and Data Integrity** - the test suite runs in CI, and the archive and decision fixes land under it
-- [ ] **Phase 14: MCP 2** - the MCP server speaks protocol 2026-07-28, so Claude Code no longer has to fall back to the older handshake
+- [x] **Phase 14: MCP 2** - the MCP server speaks protocol 2026-07-28, so Claude Code no longer has to fall back to the older handshake
 
 ## Phase Details
 
