@@ -2,7 +2,7 @@
 
 ## 1. Purpose and scope
 
-Recall is how the model reaches the archive by itself, in the middle of a session. Claude Code starts `terminus mcp` as a stdio MCP server, and the server answers newline-delimited JSON-RPC 2.0 on stdin until stdin closes. It serves exactly three tools: `recall_search` finds past turns, `recall_context` returns the turns around one of them, and `recall_get` returns the archived record behind a turn id. All three read and none writes.
+Recall is how the model reaches the archive by itself, in the middle of a session. Claude Code starts `terminus mcp` as a stdio MCP server, and the server answers newline-delimited JSON-RPC 2.0 on stdin until stdin closes. It speaks protocol revision 2026-07-28, where a client opens with `server/discover` and names the revision on every request, and the older revisions, where a client opens with `initialize`. It serves exactly three tools: `recall_search` finds past turns, `recall_context` returns the turns around one of them, and `recall_get` returns the archived record behind a turn id. All three read and none writes.
 
 The server opens no port, takes no lock and starts no thread. It opens the store read-only for each tool call, not once at startup, so a session the ingest archives while the server is running is found by the next call. It reads only. It does not rank, scope or cut excerpts itself: those are the search layer's, in [0005: Search](0005-search.md), and the server is a front end over the same functions `terminus search` and `terminus show` call.
 
@@ -17,8 +17,10 @@ It takes work from Claude Code, which starts the server and sends it requests. I
 | Message | One line of stdin, read as bytes and converted to text lossily, so a byte that is not UTF-8 makes one malformed message and not the end of the session. A blank line is framing and is skipped. |
 | Request | A message with an `id` member. It gets exactly one response line. |
 | Notification | A message with no `id` member. It is never answered, whatever else it holds. |
-| Protocol error | A JSON-RPC error response, `{"jsonrpc":"2.0","id":...,"error":{"code":...,"message":...}}`. The server sends one only for a message it could not route as a request. |
-| Tool result | The `result` of a `tools/call`: `{"content":[{"type":"text","text":"<document>"}],"isError":<bool>}`. |
+| Protocol error | A JSON-RPC error response, `{"jsonrpc":"2.0","id":...,"error":{"code":...,"message":...}}`. The server sends one for a message it could not route as a request, and for a request whose `_meta` names a revision the server does not speak. That refusal, `-32022`, is the one that also carries `error.data`. |
+| Era | Which protocol a request is served on. A request other than `initialize` whose `params._meta` carries `io.modelcontextprotocol/protocolVersion` is on 2026-07-28, the stateless era. Every other request is on the older era, the one `initialize` opens. |
+| Result envelope | The two members every result carries beside its own: `"resultType":"complete"` and `"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"terminus","version":...}}`, where the version is the crate's. |
+| Tool result | The `result` of a `tools/call`: `{"content":[{"type":"text","text":"<document>"}],"isError":<bool>,"resultType":"complete","_meta":{"io.modelcontextprotocol/serverInfo":{...}}}`. |
 | Document | The one compact JSON object in a tool result's text block. Each tool's document has the same keys whether the call worked or not. |
 | `reason` | A key of every document. A string saying why the answer is empty or smaller than asked for, or null when there is nothing to say. |
 | `isError` | True when the call's arguments could not be used as given, so the model should try other arguments. False for every other answer, an empty one included. |
@@ -32,8 +34,8 @@ The server lives in the binary crate, `crates/terminus`, under `cmd/mcp/`. The r
 
 | Module | What it does |
 |---|---|
-| [`crates/terminus/src/cmd/mcp/mod.rs`](../../crates/terminus/src/cmd/mcp/mod.rs) | `terminus mcp`: the read loop over stdin, one response line per request, flushed per message, and the methods `initialize`, `ping`, `tools/list` and `tools/call`. `PROTOCOL_VERSIONS` and `DEFAULT_PROTOCOL_VERSION`. It denies `unwrap`, `expect`, `panic!` and slice indexing outside tests, because a panic would put a backtrace on the transport. |
-| [`crates/terminus/src/cmd/mcp/rpc.rs`](../../crates/terminus/src/cmd/mcp/rpc.rs) | Classifies each message as a request, a notification or an invalid message, and builds the result and error envelopes. Hand-written over `serde_json`, with no MCP SDK and no async runtime. The four error codes it sends are `-32700`, `-32600`, `-32601` and `-32602`. |
+| [`crates/terminus/src/cmd/mcp/mod.rs`](../../crates/terminus/src/cmd/mcp/mod.rs) | `terminus mcp`: the read loop over stdin, one response line per request, flushed per message, the era check that refuses a request on another revision, and the methods `initialize`, `server/discover`, `ping`, `tools/list` and `tools/call`. `PROTOCOL_VERSIONS`, `DEFAULT_PROTOCOL_VERSION` and `MODERN_PROTOCOL_VERSION`. It denies `unwrap`, `expect`, `panic!` and slice indexing outside tests, because a panic would put a backtrace on the transport. |
+| [`crates/terminus/src/cmd/mcp/rpc.rs`](../../crates/terminus/src/cmd/mcp/rpc.rs) | Classifies each message as a request, a notification or an invalid message, and builds the result and error envelopes. `rpc::result` is the one place every result passes through, and it adds `resultType` and `_meta` to each. Hand-written over `serde_json`, with no MCP SDK and no async runtime. The five error codes it sends are `-32700`, `-32600`, `-32601`, `-32602` and `-32022`. |
 | [`crates/terminus/src/cmd/mcp/tools.rs`](../../crates/terminus/src/cmd/mcp/tools.rs) | The three tool descriptors and their `annotations`, the argument checks, the per-call store open, and each tool's document. `MAX_HITS`, `DEFAULT_HITS`, `MAX_PATHS`, `MAX_CONTEXT_SIDE`, `DEFAULT_CONTEXT_SIDE` and `MAX_IDS`. |
 | [`crates/terminus/src/cmd/read.rs`](../../crates/terminus/src/cmd/read.rs) | The read-only open and the default scope, shared with `terminus search`, `show` and `sessions`. A missing store is an answer with a reason, and a store older than the build prints one warning on stderr. |
 | [`crates/terminus-core/src/recall/context.rs`](../../crates/terminus-core/src/recall/context.rs) | `recall::context::window`: the turns around an anchor, in `turn_seq` order, inside one session, with `MAX_CONTEXT_SIDE`, 25, a side. It serves `recall_context`. |
@@ -55,7 +57,7 @@ The server owns no table and writes no file. Its records are what crosses betwee
 | Record | Kind | What it holds |
 |---|---|---|
 | The messages | Newline-delimited JSON-RPC 2.0 on stdin and stdout | One JSON value per line each way. stdout carries nothing but responses. Every diagnostic, such as the warning for a store older than the build, goes to stderr. |
-| The tool result | The `result` of a `tools/call` | One text block holding the tool's document, serialized compactly, and `isError`. The document is the whole answer: there is no prose around it and no second envelope. |
+| The tool result | The `result` of a `tools/call` | One text block holding the tool's document, serialized compactly, and `isError`, beside the `resultType` and `_meta` every result carries. The document is the whole answer: there is no prose around it and no second envelope. |
 | The `.mcpServers.terminus` entry | One JSON object in Claude Code's `~/.claude.json` | `{"type":"stdio","command":"<stable path>","args":["mcp"]}`, where the stable path is `~/.local/bin/terminus`. With `CLAUDE_CONFIG_DIR` set, the file is `.claude.json` in that directory. An entry already there keeps every other key it has, such as `env`. `claude` writes the entry, through `claude mcp add-json --scope user`, and Terminus reads the file and never writes it. |
 
 ## 5. Commands and operations
@@ -67,7 +69,7 @@ The server owns no table and writes no file. Its records are what crosses betwee
 Claude Code runs this. No one types it.
 
 - **Inputs:** no arguments. Messages on stdin. The working directory Claude Code starts it in, which is the session's, and which sets the default scope.
-- **Outputs:** one response line on stdout for each request, in the order the requests came, each flushed as it is written. When stdin reaches EOF, it exits 0. A write to stdout that fails means the client has gone, and it exits 0 then too. Claude Code ends a server by closing its stdin, so the server handles no signal.
+- **Outputs:** one response line on stdout for each request, in the order the requests came, each flushed as it is written. When stdin reaches EOF, it exits 0. A write to stdout that fails means the client has gone, and it exits 0 then too. Claude Code ends a server by closing its stdin, so the server handles no signal. Every result, from every method and on both eras, carries `resultType` `"complete"` and `_meta` holding `io.modelcontextprotocol/serverInfo`, `{"name":"terminus","version":...}` with the crate's version, and every result shape below shows them. A tool's document sits inside a result and carries neither. 2026-07-28 made both members additive and a client on an older revision ignores them, so one shape serves both eras and the answer depends on the line alone.
 - **Refusals:** any argument exits 2. A read from stdin that fails exits 1.
 
 ### Classifying a message
@@ -83,23 +85,45 @@ Before any method runs, `rpc::parse` decides what the line is. It never fails an
   - A `jsonrpc` member that is not `"2.0"`, or a missing `method`, gets `-32600`, with the request's id.
   - A method the server does not have gets `-32601`.
 
+### Which era a request is on
+
+A request is on 2026-07-28 when `params._meta` carries `io.modelcontextprotocol/protocolVersion`, and the server reads that key and nothing else: it never checks `clientCapabilities` or `clientInfo`, because the three tools rely on no client capability. A request without the key is served on the older era, exactly as a client that sent `initialize` first would be, with no check that an `initialize` came first. `initialize` itself is never version checked, whatever its `_meta` holds, because it is the older era's opening. A notification is never checked either, because it gets no answer at all.
+
+- **Inputs:** a request other than `initialize`.
+- **Outputs:** nothing of its own. A request with no version in `_meta`, or one naming `2026-07-28`, goes on to its method.
+- **Refusals:** a request whose `_meta` names any other value, a string or not, is refused before its method runs, `server/discover` and `ping` included, with `{"code":-32022,"message":...,"data":{"supported":["2026-07-28"],"requested":<the value as sent>}}`. `data` is what lets the client pick again. `-32022` is the one MCP-defined code the server sends. `-32020` and `-32021` are never sent, because a request that leaves the version out is served on the older era rather than refused for what it left out.
+
 ### `initialize`
 
+`initialize` is the legacy opening, the one a client on 2025-11-25 or an older revision uses.
+
 - **Inputs:** `params.protocolVersion`, the client's revision.
-- **Outputs:** `{"protocolVersion":...,"capabilities":{"tools":{}},"serverInfo":{"name":"terminus","version":...}}`, where the version is the crate's. `PROTOCOL_VERSIONS` holds the revisions the server agrees to, newest first: `2025-11-25`, `2025-06-18`, `2024-11-05` and `2024-10-07`. A requested revision in that list is answered with itself. Any other, and a missing one, is answered with `DEFAULT_PROTOCOL_VERSION`, `2025-06-18`, the revision the tool descriptors are written against. The one capability is tools, with no `listChanged`, because the tool list is fixed when the binary is built.
-- **Refusals:** none. An unknown revision is answered, not refused, and a client that cannot use the answer disconnects. `2025-03-26` is not in the list, because it is the one revision that requires JSON-RPC batching, and this server answers a batch with `-32600`.
+- **Outputs:** `{"protocolVersion":...,"capabilities":{"tools":{}},"serverInfo":{"name":"terminus","version":...},"resultType":"complete","_meta":{...}}`, where the version is the crate's. `PROTOCOL_VERSIONS` holds the revisions the server agrees to, newest first: `2025-11-25`, `2025-06-18`, `2024-11-05` and `2024-10-07`. A requested revision in that list is answered with itself. Any other, and a missing one, is answered with `DEFAULT_PROTOCOL_VERSION`, `2025-06-18`, the revision the tool descriptors are written against. The one capability is tools, with no `listChanged`, because the tool list is fixed when the binary is built.
+- **Refusals:** none. An unknown revision is answered, not refused, and a client that cannot use the answer disconnects. `2026-07-28` is not in `PROTOCOL_VERSIONS`, because that revision has no `initialize`: it is offered through `server/discover`, and an `initialize` asking for it is answered `2025-06-18` like any revision the list does not hold. `2025-03-26` is not in the list, because it is the one revision that requires JSON-RPC batching, and this server answers a batch with `-32600`.
+
+### `server/discover`
+
+The opening on 2026-07-28. It replaces `initialize` for that revision, and nothing follows it: there is no `notifications/initialized`, and every later request names its revision in its own `_meta`.
+
+- **Inputs:** `params._meta`, optional. It is answered the same with `_meta` naming `2026-07-28` and with no params at all.
+- **Outputs:** `{"resultType":"complete","supportedVersions":["2026-07-28"],"capabilities":{"tools":{}},"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"terminus","version":...}},"ttlMs":0,"cacheScope":"private"}`.
+  - `supportedVersions` is `2026-07-28` alone. A client picks one of these for its stateless requests, and none of the older revisions has a stateless form, so listing them would offer what the server cannot serve this way.
+  - `capabilities` is the same object `initialize` answers: tools, with no `listChanged`.
+  - `ttlMs` `0` means a host fetches the answer again rather than keep one from an older binary. `cacheScope` `"private"` says the answer comes from one user's own server. The list is the same for every user, which the spec says `"public"` suits, but on stdio no shared cache exists and the two behave the same.
+  - There is no `instructions` key. Anything there would sit in every session's context, and each tool's description already says what it returns.
+- **Refusals:** `-32022`, as in [Which era a request is on](#which-era-a-request-is-on), when `_meta` names any revision other than `2026-07-28`.
 
 ### `ping` and `tools/list`
 
-- **Inputs:** none.
-- **Outputs:** `ping` gets an empty result, `{}`, so a liveness probe never reads as an unhealthy server. `tools/list` gets `{"tools":[...]}`, the three descriptors in the order `recall_search`, `recall_context`, `recall_get`. Each has a `name`, a one-line `description` saying what the tool returns, an `inputSchema` of type object with `additionalProperties` false, and `annotations` with `readOnlyHint` true, `destructiveHint` false, `idempotentHint` true and `openWorldHint` false. The four hints sit inside `annotations`, which is where Claude Code reads them.
-- **Refusals:** none.
+- **Inputs:** none, beyond the optional `params._meta` every request may carry.
+- **Outputs:** `ping` gets a result holding only the two members every result carries, `{"resultType":"complete","_meta":{...}}`, so a liveness probe never reads as an unhealthy server. `tools/list` gets `{"tools":[...],"ttlMs":0,"cacheScope":"private","resultType":"complete","_meta":{...}}`, on both eras, with `ttlMs` and `cacheScope` meaning what they mean for `server/discover`. `tools` holds the three descriptors in the order `recall_search`, `recall_context`, `recall_get`. Each has a `name`, a one-line `description` saying what the tool returns, an `inputSchema` of type object with `additionalProperties` false, and `annotations` with `readOnlyHint` true, `destructiveHint` false, `idempotentHint` true and `openWorldHint` false. The four hints sit inside `annotations`, which is where Claude Code reads them.
+- **Refusals:** `-32022` when `_meta` names a revision other than `2026-07-28`, and nothing else.
 
 ### `tools/call`
 
 - **Inputs:** `params.name`, one of the three tool names, and `params.arguments`, an object. Absent or null arguments read as an empty object, so a call with none is told which argument it needed.
-- **Outputs:** a tool result. The server reads only the argument names below and ignores any other key. A tool call opens the store read-only through `cmd/read.rs`; `initialize`, `ping` and `tools/list` never open it.
-- **Refusals:** a missing `params.name`, or a name that is not one of the three tools, is the one protocol error a `tools/call` can get, `-32602`. Everything else a call cannot do comes back as the tool's own empty document with a `reason`:
+- **Outputs:** a tool result. The server reads only the argument names below and ignores any other key. A tool call opens the store read-only through `cmd/read.rs`; `initialize`, `server/discover`, `ping` and `tools/list` never open it.
+- **Refusals:** a `tools/call` can get two protocol errors. `-32022` when `_meta` names a revision other than `2026-07-28`, checked before the tool name is read, so an unknown tool on another revision gets this one. And `-32602` for a missing `params.name`, or a name that is not one of the three tools. Everything else a call cannot do comes back as the tool's own empty document with a `reason`:
   - With `isError` true when the arguments could not be used as given: `arguments` that is not an object, a required argument that is missing, null, blank or of the wrong JSON type, a count that is negative or not a whole number, a `limit` of 0, a time bound that is not one of the two forms, and a `kind` of `observation`.
   - With `isError` false when the archive had no answer: no store yet, a store that cannot be read, a working directory the server cannot read, nothing archived, no archived project covering the scope's path, or a scope whose project is excluded. These are answers, not mistakes to retry.
 
@@ -223,16 +247,22 @@ sequenceDiagram
   participant S as terminus mcp
   participant DB as terminus.db
   CC->>S: starts terminus mcp in the session's directory, stdio piped
-  CC->>S: initialize, with the client's protocolVersion
-  alt a revision in PROTOCOL_VERSIONS
-    S-->>CC: that revision, the tools capability, serverInfo
-  else any other revision, or none
-    S-->>CC: 2025-06-18, the tools capability, serverInfo
+  alt the 2026-07-28 opening, server/discover
+    CC->>S: server/discover, _meta naming 2026-07-28 or no params
+    S-->>CC: supportedVersions 2026-07-28 alone, the tools capability, ttlMs 0, cacheScope private
+    Note over CC,S: no notifications/initialized. Each later request names 2026-07-28 in its _meta
+  else the legacy opening, initialize
+    CC->>S: initialize, with the client's protocolVersion
+    alt a revision in PROTOCOL_VERSIONS
+      S-->>CC: that revision, the tools capability, serverInfo
+    else any other revision, or none
+      S-->>CC: 2025-06-18, the tools capability, serverInfo
+    end
+    CC->>S: notifications/initialized
+    Note over S: a notification gets no response
   end
-  CC->>S: notifications/initialized
-  Note over S: a notification gets no response
   CC->>S: tools/list
-  S-->>CC: the three descriptors, each with readOnlyHint true
+  S-->>CC: the three descriptors, each with readOnlyHint true, ttlMs 0, cacheScope private
   CC->>S: tools/call, a tool name and its arguments
   alt the arguments cannot be used
     S-->>CC: the tool's empty document with a reason, isError true
@@ -249,7 +279,7 @@ sequenceDiagram
   S->>S: EOF, exit 0
 ```
 
-*Figure 1. One `terminus mcp` process from start to exit. The handshake always agrees on a revision. Each `tools/call` checks its arguments before it opens the store, and opens it read-only for that call alone. Every answer the server understood is a tool result, never a protocol error. Closing stdin ends the process.*
+*Figure 1. One `terminus mcp` process from start to exit. A client opens one of two ways. On 2026-07-28 it sends `server/discover`, is answered with that one revision, sends no `notifications/initialized`, and names the revision in the `_meta` of each request after. On an older revision it sends `initialize`, which always agrees on a revision, and then `notifications/initialized`. After either opening, requests are served the same way, and every result carries `resultType` and the server's identity under `_meta`. A request on the 2026-07-28 path that names another revision is refused with `-32022`, drawn in figure 2. Each `tools/call` checks its arguments before it opens the store, and opens it read-only for that call alone. Once a `tools/call` has passed the version check and named a tool the server has, every answer is a tool result, never a protocol error. Closing stdin ends the process.*
 
 The process holds nothing between calls: no connection, no cache and no lock. A call that comes in while an ingest pass is writing reads the last committed state under WAL, and the next call reads whatever the pass has committed since.
 
@@ -269,8 +299,12 @@ flowchart TD
   IT -->|"no"| IR2["error -32600, null id"]
   IT -->|"yes"| JV{"jsonrpc 2.0 and a method?"}
   JV -->|"no"| IR3["error -32600, the request's id"]
-  JV -->|"yes"| M{"which method?"}
-  M -->|"initialize, ping, tools/list"| R["the result"]
+  JV -->|"yes"| E{"initialize, or no protocolVersion in params._meta?"}
+  E -->|"yes"| M{"which method?"}
+  E -->|"no"| V{"_meta names 2026-07-28?"}
+  V -->|"no"| UV["error -32022, data with supported and requested"]
+  V -->|"yes"| M
+  M -->|"initialize, server/discover, ping, tools/list"| R["the result"]
   M -->|"any other"| MN["error -32601"]
   M -->|"tools/call"| T{"params.name one of the three tools?"}
   T -->|"no"| IP["error -32602"]
@@ -281,9 +315,9 @@ flowchart TD
   S -->|"yes"| D["the tool's document, isError false"]
 ```
 
-*Figure 2. What one message becomes. The protocol errors sit on the left, for messages the server could not route. Once a `tools/call` names a tool the server has, every outcome is a tool result, and `isError` says whether the arguments or the archive explain an empty one.*
+*Figure 2. What one message becomes. The protocol errors sit on the left, for messages the server could not route, and `-32022` for a request whose `_meta` names a revision other than 2026-07-28, refused before its method runs. `initialize` never takes that check. Once a `tools/call` names a tool the server has, every outcome is a tool result, and `isError` says whether the arguments or the archive explain an empty one.*
 
-The split between `isError` true and false is the one a client acts on. True means the request could not be used as asked, and the model can retry with other arguments. False with an empty list means the archive was asked and had nothing, which is an answer. A protocol error at this level would read to Claude Code as a broken server, so it is kept for messages that are not requests at all.
+The split between `isError` true and false is the one a client acts on. True means the request could not be used as asked, and the model can retry with other arguments. False with an empty list means the archive was asked and had nothing, which is an answer. A protocol error at this level would read to Claude Code as a broken server, so it is kept for messages that are not requests at all, and for a request on a revision the server does not speak, where the error's `data` tells the client which one it does.
 
 ## 7. Settings
 
