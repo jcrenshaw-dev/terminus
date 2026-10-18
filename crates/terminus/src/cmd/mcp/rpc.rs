@@ -3,8 +3,8 @@
 //! No SDK and no async runtime. `.planning/PROJECT.md` bars a runtime outright -
 //! cold start is the product and the hook path must not pay for one - and the
 //! official SDK would link tokio into the same binary the hooks call. What is
-//! left is small: one message per line, one response line per request, and the
-//! four standard error codes.
+//! left is small: one message per line, one response line per request, the
+//! four standard error codes and one MCP code.
 //!
 //! **Framing is newline-delimited.** One JSON value per line, which is what
 //! Claude Code's stdio transport writes and reads. A blank line is skipped
@@ -27,7 +27,8 @@ use serde_json::{json, Map, Value};
 /// The only `jsonrpc` value this server accepts or emits.
 pub const VERSION: &str = "2.0";
 
-/// The standard JSON-RPC 2.0 error codes, and the only ones this server sends.
+/// The four standard JSON-RPC 2.0 error codes and the one MCP code this server
+/// sends.
 pub mod code {
     /// The line was not JSON at all.
     pub const PARSE_ERROR: i64 = -32700;
@@ -46,6 +47,14 @@ pub mod code {
     /// request the server understood and could not satisfy, which comes back as
     /// a tool result carrying a reason (RCL-10).
     pub const INVALID_PARAMS: i64 = -32602;
+    /// A request whose `_meta` names a protocol revision other than
+    /// `2026-07-28`. Its `data` lists what is supported and echoes what was
+    /// asked, so the client can pick again.
+    ///
+    /// The only MCP-defined code this server sends. `-32020` and `-32021` are
+    /// not: a request without a version in `_meta` is served as the older era,
+    /// never refused for what it left out.
+    pub const UNSUPPORTED_PROTOCOL_VERSION: i64 = -32022;
 }
 
 /// One request that has an id and therefore expects exactly one response.
@@ -172,6 +181,16 @@ pub fn failure(id: Option<&Value>, code: i64, message: &str) -> Value {
     envelope.insert("id".into(), id.cloned().unwrap_or(Value::Null));
     envelope.insert("error".into(), json!({"code": code, "message": message}));
     Value::Object(envelope)
+}
+
+/// An error response that also carries `data`. Only the version refusal uses
+/// it; the other error paths send none.
+pub fn failure_with_data(id: &Value, code: i64, message: &str, data: Value) -> Value {
+    json!({
+        "jsonrpc": VERSION,
+        "id": id,
+        "error": {"code": code, "message": message, "data": data},
+    })
 }
 
 #[cfg(test)]

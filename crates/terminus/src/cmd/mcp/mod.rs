@@ -62,15 +62,15 @@ const SERVER_NAME: &str = "terminus";
 /// answers with one it supports; a client that cannot use the answer
 /// disconnects, and one that can proceeds.
 ///
-/// MCP 2 (`2026-07-28`) is left out until this server implements it: it answers
-/// no `server/discover`, and its `tools/list` carries no `ttlMs` or
-/// `cacheScope`, the shape Claude Code rejected in Baley's 2026-10-02 probe.
-/// Agreeing to a revision the server does not speak is worse than answering an
-/// older one the client then falls back to.
+/// `2026-07-28` is not in this list because that revision has no `initialize`.
+/// It is offered through `server/discover` instead, and a client on it names
+/// it in each request's `_meta`.
 ///
-/// `2025-03-26` is left out for the same reason. It is the one revision that
-/// requires JSON-RPC batching, which `2024-11-05` did not have and `2025-06-18`
-/// removed, and this server answers a batch with a single `-32600`.
+/// `2025-03-26` is left out because agreeing to a revision the server does not
+/// speak is worse than answering an older one the client then falls back to. It
+/// is the one revision that requires JSON-RPC batching, which `2024-11-05` did
+/// not have and `2025-06-18` removed, and this server answers a batch with a
+/// single `-32600`.
 const PROTOCOL_VERSIONS: [&str; 4] = ["2025-11-25", "2025-06-18", "2024-11-05", "2024-10-07"];
 
 /// What the server answers when the client asked for a revision it does not
@@ -81,6 +81,15 @@ const PROTOCOL_VERSIONS: [&str; 4] = ["2025-11-25", "2025-06-18", "2024-11-05", 
 /// fields this server relies on were not in it. `2025-06-18` is the revision
 /// this server's descriptors are written against.
 const DEFAULT_PROTOCOL_VERSION: &str = "2025-06-18";
+
+/// The one revision of the stateless era, the one a request names in `_meta`
+/// rather than agreeing to through `initialize`.
+const MODERN_PROTOCOL_VERSION: &str = "2026-07-28";
+
+/// The `_meta` key a modern request names its revision under. Its presence is
+/// what makes a request modern; a request without it is served as the older
+/// era, with no check that an `initialize` came first.
+const PROTOCOL_VERSION_KEY: &str = "io.modelcontextprotocol/protocolVersion";
 
 /// The parsed command line for `mcp`, which takes nothing.
 ///
@@ -154,35 +163,83 @@ fn answer(line: &str) -> Option<Value> {
         rpc::Incoming::Invalid { id, code, message } => {
             Some(rpc::failure(id.as_ref(), code, &message))
         }
-        rpc::Incoming::Request(request) => Some(match request.method.as_str() {
-            "initialize" => rpc::result(&request.id, initialize(&request.params)),
-            // `ttlMs` 0 so a host fetches the list again rather than keep one
-            // from an older binary; `private` because it comes from one user's
-            // own server.
-            "tools/list" => rpc::result(
-                &request.id,
-                json!({"tools": tools::descriptors(), "ttlMs": 0, "cacheScope": "private"}),
-            ),
-            // The only method that reads the archive. Its `Err` is a protocol
-            // failure - params that do not name a call this server has - and
-            // never a tool that could not answer, which is a result carrying a
-            // reason (RCL-10).
-            "tools/call" => match tools::call(&request.params) {
-                Ok(result) => rpc::result(&request.id, result),
-                Err((code, message)) => rpc::failure(Some(&request.id), code, &message),
-            },
-            // Answered with a result carrying only what every result carries,
-            // not `-32601`: the bundled client implements `ping` on both sides,
-            // and a liveness probe answered "no such method" reads as an
-            // unhealthy server.
-            "ping" => rpc::result(&request.id, json!({})),
-            other => rpc::failure(
-                Some(&request.id),
-                rpc::code::METHOD_NOT_FOUND,
-                &format!("this server has no method {other:?}"),
-            ),
-        }),
+        rpc::Incoming::Request(request) => {
+            // Refused before the method runs, `server/discover` and `ping`
+            // included. `initialize` is the older era's opening and is never
+            // version checked, whatever its `_meta` holds.
+            if request.method != "initialize" {
+                if let Some(requested) = unsupported(&request.params) {
+                    return Some(rpc::failure_with_data(
+                        &request.id,
+                        rpc::code::UNSUPPORTED_PROTOCOL_VERSION,
+                        &format!("this server supports protocol {MODERN_PROTOCOL_VERSION} only"),
+                        json!({"supported": [MODERN_PROTOCOL_VERSION], "requested": requested}),
+                    ));
+                }
+            }
+            Some(route(&request))
+        }
     }
+}
+
+/// Run one request that has passed the version check.
+fn route(request: &rpc::Request) -> Value {
+    match request.method.as_str() {
+        "initialize" => rpc::result(&request.id, initialize(&request.params)),
+        "server/discover" => rpc::result(&request.id, discover()),
+        // `ttlMs` 0 so a host fetches the list again rather than keep one
+        // from an older binary; `private` because it comes from one user's
+        // own server.
+        "tools/list" => rpc::result(
+            &request.id,
+            json!({"tools": tools::descriptors(), "ttlMs": 0, "cacheScope": "private"}),
+        ),
+        // The only method that reads the archive. Its `Err` is a protocol
+        // failure - params that do not name a call this server has - and
+        // never a tool that could not answer, which is a result carrying a
+        // reason (RCL-10).
+        "tools/call" => match tools::call(&request.params) {
+            Ok(result) => rpc::result(&request.id, result),
+            Err((code, message)) => rpc::failure(Some(&request.id), code, &message),
+        },
+        // Answered with a result carrying only what every result carries,
+        // not `-32601`: the bundled client implements `ping` on both sides,
+        // and a liveness probe answered "no such method" reads as an
+        // unhealthy server.
+        "ping" => rpc::result(&request.id, json!({})),
+        other => rpc::failure(
+            Some(&request.id),
+            rpc::code::METHOD_NOT_FOUND,
+            &format!("this server has no method {other:?}"),
+        ),
+    }
+}
+
+/// The revision a modern request named, when it is not the one this server
+/// speaks. `None` for a request that names `2026-07-28` and for one with no
+/// version in `_meta` at all, which is served as the older era.
+///
+/// Read with `get` throughout, so params, `_meta` or the version that are not
+/// what a client should have sent read as absent rather than panic.
+fn unsupported(params: &Value) -> Option<&Value> {
+    let asked = params.get("_meta")?.get(PROTOCOL_VERSION_KEY)?;
+    (asked.as_str() != Some(MODERN_PROTOCOL_VERSION)).then_some(asked)
+}
+
+/// The `server/discover` answer: the one stateless revision, the one
+/// capability, and the cache fields `tools/list` carries.
+///
+/// `supportedVersions` lists `2026-07-28` alone. A client picks one of these
+/// for its stateless requests, and no older revision has a stateless form. No
+/// `instructions`: anything there sits in every session's context, and the
+/// tool descriptions already say what each tool returns.
+fn discover() -> Value {
+    json!({
+        "supportedVersions": [MODERN_PROTOCOL_VERSION],
+        "capabilities": {"tools": {}},
+        "ttlMs": 0,
+        "cacheScope": "private",
+    })
 }
 
 /// The handshake answer: the negotiated revision, the one capability this
