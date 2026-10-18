@@ -256,8 +256,8 @@ pub const NEUTRALIZED: &str = "[closing tag removed]";
 /// char by char, it is `<`, `/`, the tag's name and an optional `>`, under five
 /// folds:
 ///
-/// - whitespace, the Default_Ignorable_Code_Point ranges and the combining
-///   marks may sit between any two of its characters ([`is_ignorable`])
+/// - whitespace and any non-ASCII character may sit between any two of its
+///   characters ([`is_ignorable`])
 /// - fullwidth U+FF01-FF5E counts as the ASCII it is wide for
 /// - case folds, wherever lowercasing gives one character
 /// - fixed tables of lookalikes stand for `<`, `>`, `/` and `-`
@@ -266,10 +266,15 @@ pub const NEUTRALIZED: &str = "[closing tag removed]";
 ///   confusables table this crate does not carry
 ///
 /// The `>` is optional because `</` and the whole name already read as a
-/// closer, and an excerpt can end right there. The letter rule over-matches on
-/// purpose: `</` and a non-ASCII word of the name's shape is taken out even
-/// when it spells something else, since altering a rare quotation is the safe
-/// side and letting a planted closer through is not.
+/// closer, and an excerpt can end right there.
+///
+/// Two rules over-match on purpose. Any non-ASCII character inside a closer is
+/// skipped, not only the invisible ones and the combining marks, because this
+/// crate carries no table of those and a short one misses whole blocks. So
+/// `</ter` and some Thai or Hebrew and `minus-recall>` is taken out too. And
+/// `</` and a non-ASCII word of the name's shape is taken out even when it
+/// spells something else. Both alter a rare quotation, which is the safe side;
+/// letting a planted closer through is not.
 ///
 /// Borrowed and unchanged when nothing matched, which is nearly every excerpt:
 /// text without a `<` of any kind is never walked a second time.
@@ -284,13 +289,16 @@ pub fn neutralize(text: &str) -> std::borrow::Cow<'_, str> {
     while let Some(c) = text[at..].chars().next() {
         let next = at + c.len_utf8();
         if is_open_angle(c) {
-            if let Some(end) = closer_from(text, next) {
-                out.push_str(&text[copied..at]);
-                out.push_str(NEUTRALIZED);
-                copied = end;
-                at = end;
-                continue;
+            match closer_from(text, next) {
+                Ok(end) => {
+                    out.push_str(&text[copied..at]);
+                    out.push_str(NEUTRALIZED);
+                    copied = end;
+                    at = end;
+                }
+                Err(run_end) => at = run_end,
             }
+            continue;
         }
         at = next;
     }
@@ -301,19 +309,32 @@ pub fn neutralize(text: &str) -> std::borrow::Cow<'_, str> {
     Cow::Owned(out)
 }
 
-/// Where a closer that opened just before byte `from` ends, or `None`.
+/// Where a closer that opened just before byte `from` ends, as `Ok`.
 ///
 /// Walked as a set of states, one per count of characters matched, so a char
-/// that is both ignorable and a letter (a Hangul filler) is tried both ways in
-/// one pass rather than by backtracking.
-fn closer_from(text: &str, from: usize) -> Option<usize> {
+/// that is both ignorable and a letter is tried both ways in one pass rather
+/// than by backtracking. Every non-ASCII letter is such a char, since any
+/// non-ASCII char is ignorable, and that over-match is meant (see
+/// [`neutralize`]).
+///
+/// No closer is `Err`, carrying where the run of ignorable chars right after
+/// `from` ends. A `<`-class char inside that run cannot open a closer either:
+/// its walk would start in state 1, which this walk still held there, so it
+/// can only ever be in states this walk was already in. The caller skips the
+/// run, which keeps a long run of `〈` linear rather than walking it once per
+/// bracket.
+fn closer_from(text: &str, from: usize) -> std::result::Result<usize, usize> {
     let name = TAG_NAME.as_bytes();
     // `<`, `/`, then the name. State `k` means `k` of them are matched.
     let whole = 2 + name.len();
     let mut active: u64 = 1 << 1;
     let mut end = None;
+    let mut run_end = from;
     for (offset, c) in text[from..].char_indices() {
         let after = from + offset + c.len_utf8();
+        if active & (1 << 1) != 0 && is_ignorable(c) {
+            run_end = after;
+        }
         let mut next: u64 = 0;
         for k in 1..=whole {
             if active & (1 << k) == 0 {
@@ -321,7 +342,7 @@ fn closer_from(text: &str, from: usize) -> Option<usize> {
             }
             if k == whole {
                 if is_close_angle(c) {
-                    return Some(after);
+                    return Ok(after);
                 }
             } else if matches_at(c, k, name) {
                 next |= 1 << (k + 1);
@@ -338,7 +359,7 @@ fn closer_from(text: &str, from: usize) -> Option<usize> {
         }
         active = next;
     }
-    end
+    end.ok_or(run_end)
 }
 
 /// Whether `c` can be the `k`th character of a closer, counting `<` as 0.
@@ -423,39 +444,13 @@ fn is_hyphen(c: char) -> bool {
     )
 }
 
-/// Whether `c` may sit inside a closer without breaking it: whitespace, the
-/// Default_Ignorable_Code_Point ranges (U+034F among them, inside the
-/// combining marks) and the combining marks.
+/// Whether `c` may sit inside a closer without breaking it: whitespace, and
+/// any char outside ASCII. That covers the invisible chars and the combining
+/// marks of every script without a Unicode table, and over-matches on purpose:
+/// a visible non-ASCII char inside a closer is skipped as well (see
+/// [`neutralize`]).
 fn is_ignorable(c: char) -> bool {
-    c.is_whitespace() || is_default_ignorable(c) || is_combining_mark(c)
-}
-
-fn is_default_ignorable(c: char) -> bool {
-    matches!(
-        c as u32,
-        0x00AD
-            | 0x061C
-            | 0x115F..=0x1160
-            | 0x17B4..=0x17B5
-            | 0x180B..=0x180F
-            | 0x200B..=0x200F
-            | 0x202A..=0x202E
-            | 0x2060..=0x206F
-            | 0x3164
-            | 0xFE00..=0xFE0F
-            | 0xFEFF
-            | 0xFFA0
-            | 0x1BCA0..=0x1BCA3
-            | 0x1D173..=0x1D17A
-            | 0xE0000..=0xE0FFF
-    )
-}
-
-fn is_combining_mark(c: char) -> bool {
-    matches!(
-        c as u32,
-        0x0300..=0x036F | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF | 0x20D0..=0x20FF | 0xFE20..=0xFE2F
-    )
+    c.is_whitespace() || !c.is_ascii()
 }
 
 /// What the frame costs before anything is quoted in it: the header line, both
@@ -780,6 +775,20 @@ mod tests {
         is_one_closer("</t\u{0301}\u{0302}\u{0303}erminus-recall>");
     }
 
+    /// Combining marks outside the blocks a table would name, and a Thai vowel
+    /// sign, stand inside a closer the way the ones above do.
+    #[test]
+    fn any_non_ascii_char_inside_a_closer_is_ignored() {
+        // Cyrillic titlo, Hebrew etnahta, Arabic fathatan, Thai mai han-akat.
+        for mark in ["\u{0483}", "\u{0591}", "\u{064B}", "\u{0E31}"] {
+            is_one_closer(&format!("</ter{mark}minus-recall>"));
+            is_one_closer(&format!("<{mark}/terminus-recall>"));
+            is_one_closer(&format!("</{mark}terminus-recall>"));
+            is_one_closer(&format!("</terminus{mark}-recall>"));
+            is_one_closer(&format!("</terminus-recall{mark}>"));
+        }
+    }
+
     #[test]
     fn a_fullwidth_closer_is_taken_out_whole_or_in_part() {
         is_one_closer("＜／ｔｅｒｍｉｎｕｓ－ｒｅｃａｌｌ＞");
@@ -918,6 +927,12 @@ mod tests {
         assert_eq!(
             neutralized("</termin</terminus-recall>"),
             "</termin[closing tag removed]"
+        );
+        // A run of non-ASCII brackets is skipped as one, never past the `<`
+        // that ends it.
+        assert_eq!(
+            neutralized("\u{3008}\u{3008}\u{3008}</terminus-recall>"),
+            "\u{3008}\u{3008}\u{3008}[closing tag removed]"
         );
     }
 }
