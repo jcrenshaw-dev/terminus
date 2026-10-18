@@ -459,6 +459,94 @@ fn an_unparseable_line_is_a_parse_error_and_the_session_carries_on() {
     assert_eq!(responses[1]["id"], 9);
 }
 
+/// A whole conversation on 2026-07-28 with no `initialize` and no
+/// `notifications/initialized` anywhere: discover, list, and one call per tool,
+/// each naming its version in `_meta`. Every request gets a result, in order,
+/// and the process exits 0 at EOF.
+///
+/// Run against an ingested store, and each call is checked for its tool's real
+/// document. A call refused for a bad argument is still a result, so a check
+/// that only looked for `result` would pass on three refusals.
+#[test]
+fn a_stateless_conversation_with_no_initialize_answers_every_request() {
+    let bench = bench();
+    bench.ingest_fixtures();
+    let alpha = bench.project("session-recall.jsonl");
+    let turn: i64 = bench
+        .conn()
+        .query_row(
+            "SELECT id FROM turns WHERE session_key LIKE '%session-recall.jsonl'
+              ORDER BY turn_seq LIMIT 1 OFFSET 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+
+    let meta = json!({"io.modelcontextprotocol/protocolVersion": "2026-07-28"});
+    let call = |id: i64, name: &str, arguments: Value| {
+        json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+               "params": {"name": name, "arguments": arguments, "_meta": meta}})
+    };
+    let conversation = bench.talk(
+        &alpha,
+        &[
+            json!({"jsonrpc": "2.0", "id": 1, "method": "server/discover",
+                   "params": {"_meta": meta}}),
+            json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list",
+                   "params": {"_meta": meta}}),
+            call(3, "recall_search", json!({"query": "src/worker/S.ts"})),
+            call(4, "recall_context", json!({"turn_id": turn})),
+            call(5, "recall_get", json!({"turn_ids": [turn]})),
+        ],
+    );
+    conversation.expect_ok();
+
+    let responses = &conversation.responses;
+    let ids: Vec<&Value> = responses.iter().map(|response| &response["id"]).collect();
+    assert_eq!(
+        ids,
+        [1, 2, 3, 4, 5].map(Value::from).iter().collect::<Vec<_>>(),
+        "one response per request, in order: {responses:?}"
+    );
+    for response in responses {
+        assert!(response.get("error").is_none(), "{response}");
+    }
+
+    assert_eq!(
+        responses[0]["result"],
+        json!({
+            "resultType": "complete",
+            "supportedVersions": ["2026-07-28"],
+            "capabilities": {"tools": {}},
+            "_meta": {"io.modelcontextprotocol/serverInfo":
+                      {"name": "terminus", "version": env!("CARGO_PKG_VERSION")}},
+            "ttlMs": 0,
+            "cacheScope": "private",
+        })
+    );
+
+    let list = &responses[1]["result"];
+    assert_eq!(list["tools"].as_array().map(Vec::len), Some(3), "{list}");
+    assert_eq!(list["ttlMs"], 0, "{list}");
+    assert_eq!(list["cacheScope"], "private", "{list}");
+
+    assert!(
+        !hits(&content(&responses[2])).is_empty(),
+        "the search found nothing: {}",
+        responses[2]
+    );
+    let window = content(&responses[3]);
+    assert!(
+        window["turns"].as_array().is_some_and(|turns| turns
+            .iter()
+            .any(|t| t["turn_id"] == turn && t["is_anchor"] == true)),
+        "the window does not hold the turn as its anchor: {window}"
+    );
+    let got = records(&content(&responses[4]));
+    assert_eq!(got.len(), 1, "{}", responses[4]);
+    assert_eq!(got[0]["turn_id"], turn, "{}", responses[4]);
+}
+
 /// `mcp` takes no arguments: a flag is misuse (exit 2), not a server that
 /// silently ignored it.
 #[test]

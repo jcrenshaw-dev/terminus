@@ -295,15 +295,18 @@ mod tests {
             );
         }
 
-        // MCP 2 is a revision the server does not speak yet, so it is answered
-        // like any other it does not know.
+        // 2026-07-28 has no `initialize`. It is offered through
+        // `server/discover`, so asking for it here is answered like any
+        // revision the list does not hold. Pinned by name because the loop
+        // above only walks what the list holds.
+        assert!(!PROTOCOL_VERSIONS.contains(&"2026-07-28"));
         let responses = exchange(
             r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28"}}"#,
         );
         assert_eq!(
             responses[0]["result"]["protocolVersion"],
             Value::from(DEFAULT_PROTOCOL_VERSION),
-            "the server agreed to MCP 2, which it does not implement"
+            "initialize agreed to 2026-07-28, which has no initialize and is offered through server/discover"
         );
 
         let responses = exchange(
@@ -390,5 +393,195 @@ mod tests {
         );
         assert_eq!(responses[1]["id"], Value::Null);
         assert!(responses[2]["result"].is_object(), "the loop carried on");
+    }
+
+    /// The `_meta` a stateless request carries, naming `version`.
+    fn meta(version: impl Into<Value>) -> Value {
+        json!({"io.modelcontextprotocol/protocolVersion": version.into()})
+    }
+
+    /// One line per request, in order.
+    fn lines(requests: &[Value]) -> String {
+        requests
+            .iter()
+            .map(|request| format!("{request}\n"))
+            .collect()
+    }
+
+    /// What every result carries under `_meta`.
+    fn server_info() -> Value {
+        json!({"io.modelcontextprotocol/serverInfo":
+               {"name": "terminus", "version": env!("CARGO_PKG_VERSION")}})
+    }
+
+    /// The tool names a `tools/list` result holds, in the order it holds them.
+    fn tool_names(result: &Value) -> Vec<&str> {
+        result["tools"]
+            .as_array()
+            .map(|tools| tools.iter().filter_map(|t| t["name"].as_str()).collect())
+            .unwrap_or_default()
+    }
+
+    /// `server/discover` gets the same whole object with `_meta` naming
+    /// 2026-07-28 and with no params at all.
+    ///
+    /// Compared whole and written out literally, not built from the module's
+    /// constants: a check of single members would still pass with an
+    /// `instructions` key added or an older revision in `supportedVersions`.
+    #[test]
+    fn server_discover_answers_the_one_stateless_revision_with_or_without_meta() {
+        let expected = json!({
+            "resultType": "complete",
+            "supportedVersions": ["2026-07-28"],
+            "capabilities": {"tools": {}},
+            "_meta": server_info(),
+            "ttlMs": 0,
+            "cacheScope": "private",
+        });
+        let responses = exchange(&lines(&[
+            json!({"jsonrpc": "2.0", "id": 1, "method": "server/discover",
+                   "params": {"_meta": meta("2026-07-28")}}),
+            json!({"jsonrpc": "2.0", "id": 2, "method": "server/discover"}),
+        ]));
+        assert_eq!(responses.len(), 2);
+        for response in &responses {
+            assert!(response.get("error").is_none(), "{response}");
+            assert_eq!(response["result"], expected, "{response}");
+        }
+    }
+
+    /// All five methods carry `resultType` and the server's identity, with and
+    /// without `_meta`, and `tools/list` carries its cache fields and the three
+    /// tools in order either way.
+    ///
+    /// Walked over every method because the members are added in one place: a
+    /// method that built its result around that place rather than through it
+    /// would pass a test of any other method.
+    #[test]
+    fn every_result_carries_the_result_type_and_the_servers_identity_on_both_eras() {
+        // No `query`, so the call is refused before the store is opened and this
+        // test reads no archive. The refusal is still a result.
+        let methods = [
+            ("initialize", json!({"protocolVersion": "2025-06-18"})),
+            ("ping", json!({})),
+            ("tools/list", json!({})),
+            (
+                "tools/call",
+                json!({"name": "recall_search", "arguments": {}}),
+            ),
+            ("server/discover", json!({})),
+        ];
+        for era in [None, Some(meta("2026-07-28"))] {
+            for (method, params) in &methods {
+                let mut params = params.clone();
+                if let Some(meta) = &era {
+                    params["_meta"] = meta.clone();
+                }
+                let request =
+                    json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
+                let responses = exchange(&lines(std::slice::from_ref(&request)));
+                assert_eq!(responses.len(), 1, "{request}");
+                let response = &responses[0];
+                assert!(response.get("error").is_none(), "{request} -> {response}");
+                assert_eq!(
+                    response["result"]["resultType"], "complete",
+                    "{request} -> {response}"
+                );
+                assert_eq!(
+                    response["result"]["_meta"],
+                    server_info(),
+                    "{request} -> {response}"
+                );
+
+                if *method == "tools/list" {
+                    assert_eq!(response["result"]["ttlMs"], 0, "{response}");
+                    assert_eq!(response["result"]["cacheScope"], "private", "{response}");
+                    assert_eq!(
+                        tool_names(&response["result"]),
+                        ["recall_search", "recall_context", "recall_get"],
+                        "{response}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A request whose `_meta` names any other revision is refused with
+    /// `-32022` before its method runs, with `data` listing what is supported
+    /// and echoing what was asked as it was sent, a number included.
+    ///
+    /// The `tools/call` here names no query, so a check that ran after the
+    /// method would answer with a refusal result rather than this error.
+    #[test]
+    fn a_request_naming_another_revision_is_refused_with_what_is_supported() {
+        let methods = [
+            ("server/discover", json!({})),
+            ("tools/list", json!({})),
+            (
+                "tools/call",
+                json!({"name": "recall_search", "arguments": {}}),
+            ),
+        ];
+        for asked in [json!("2025-11-25"), json!("2026-07-29"), json!(20260728)] {
+            for (method, params) in &methods {
+                let mut params = params.clone();
+                params["_meta"] = meta(asked.clone());
+                let request =
+                    json!({"jsonrpc": "2.0", "id": 4, "method": method, "params": params});
+                let responses = exchange(&lines(std::slice::from_ref(&request)));
+                assert_eq!(responses.len(), 1, "{request}");
+                let response = &responses[0];
+                assert!(response.get("result").is_none(), "{request} -> {response}");
+                assert_eq!(response["id"], 4, "{response}");
+                assert_eq!(response["error"]["code"], -32022, "{request} -> {response}");
+                assert_eq!(
+                    response["error"]["data"],
+                    json!({"supported": ["2026-07-28"], "requested": asked}),
+                    "{request} -> {response}"
+                );
+            }
+        }
+    }
+
+    /// The version check runs before the method: an unknown tool named on
+    /// another revision is `-32022`, and on 2026-07-28 it is still `-32602`.
+    /// `initialize` is never checked, whatever its `_meta` names.
+    #[test]
+    fn the_version_check_runs_first_and_never_on_initialize() {
+        let responses = exchange(&lines(&[
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                   "params": {"name": "recall_everything", "_meta": meta("2025-11-25")}}),
+            json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                   "params": {"name": "recall_everything", "_meta": meta("2026-07-28")}}),
+            json!({"jsonrpc": "2.0", "id": 3, "method": "initialize",
+                   "params": {"protocolVersion": "2025-06-18", "_meta": meta("2025-11-25")}}),
+        ]));
+        assert_eq!(responses.len(), 3);
+        assert_eq!(responses[0]["error"]["code"], -32022, "{}", responses[0]);
+        assert_eq!(
+            responses[1]["error"]["code"],
+            Value::from(rpc::code::INVALID_PARAMS),
+            "{}",
+            responses[1]
+        );
+        assert_eq!(
+            responses[2]["result"]["protocolVersion"], "2025-06-18",
+            "initialize was version checked: {}",
+            responses[2]
+        );
+    }
+
+    /// A `tools/list` with no `_meta` and no `initialize` before it gets the
+    /// three tools. It is served as the older era with no ordering check, so a
+    /// client that lists before it opens is not refused.
+    #[test]
+    fn a_tools_list_with_no_meta_and_no_initialize_is_served() {
+        let responses = exchange(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#);
+        assert_eq!(responses.len(), 1);
+        assert!(responses[0].get("error").is_none(), "{}", responses[0]);
+        assert_eq!(
+            tool_names(&responses[0]["result"]),
+            ["recall_search", "recall_context", "recall_get"]
+        );
     }
 }

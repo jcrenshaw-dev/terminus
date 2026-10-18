@@ -299,4 +299,28 @@ mod tests {
         assert_eq!(bad["error"]["code"], Value::from(code::PARSE_ERROR));
         assert!(bad.get("result").is_none());
     }
+
+    /// The error envelope that carries `data` has the same members as the plain
+    /// one plus `data`, and no `result`. Compared whole, because a client reads
+    /// `data` to pick a revision again and a check of `code` alone would pass
+    /// with `data` dropped.
+    #[test]
+    fn the_error_envelope_with_data_carries_it_beside_the_code_and_message() {
+        let data = json!({"supported": ["2026-07-28"], "requested": "2025-11-25"});
+        let bad = failure_with_data(
+            &Value::from("7"),
+            code::UNSUPPORTED_PROTOCOL_VERSION,
+            "unsupported",
+            data.clone(),
+        );
+        assert_eq!(
+            bad,
+            json!({
+                "jsonrpc": "2.0",
+                "id": "7",
+                "error": {"code": -32022, "message": "unsupported", "data": data},
+            })
+        );
+        assert!(bad.get("result").is_none());
+    }
 }
