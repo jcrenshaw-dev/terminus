@@ -268,24 +268,35 @@ fn write_pointer(pointer: &Path, destination: &Path) -> Result<(), Failure> {
     std::fs::rename(&temporary, pointer).map_err(|e| io(pointer, e))
 }
 
-/// A relative destination resolved against the working directory.
+/// A relative destination resolved against the working directory, with
+/// trailing slashes and `.` parts dropped (D-08).
 ///
 /// The pointer file holds one ABSOLUTE path and the resolver refuses anything
 /// else, because a relative pointer would resolve against whatever directory a
 /// hook happened to be spawned in - a store per repository rather than one
 /// store. So the resolution happens here, where a working directory still means
 /// what the user meant by it.
+///
+/// The slash matters because `symlink_metadata("link/")` follows the link, so
+/// the symlink check would pass a path the copy then writes through. Every
+/// later use takes this one path, so what was checked and what the pointer
+/// records cannot differ. A `..` stays as written: resolving it as text picks
+/// a different directory when the part before it is a symlink.
 fn absolute(path: &Path) -> Result<PathBuf, Failure> {
-    if path.is_absolute() {
-        return Ok(path.to_path_buf());
-    }
-    let cwd = std::env::current_dir().map_err(|e| {
-        Failure::Operational(format!(
-            "{} is a relative path and the working directory could not be read: {e}",
-            path.display()
-        ))
-    })?;
-    Ok(cwd.join(path))
+    let joined = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        let cwd = std::env::current_dir().map_err(|e| {
+            Failure::Operational(format!(
+                "{} is a relative path and the working directory could not be read: {e}",
+                path.display()
+            ))
+        })?;
+        cwd.join(path)
+    };
+    // `components` drops the trailing slash, repeated slashes and every `.`
+    // after the first part, and keeps `..`.
+    Ok(joined.components().collect())
 }
 
 /// Everything under `from`, copied into `to`, directories included.
@@ -358,4 +369,41 @@ fn bytes(dir: &Path) -> u64 {
         }
     }
     total
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn normalized(path: &str) -> PathBuf {
+        match absolute(Path::new(path)) {
+            Ok(path) => path,
+            Err(_) => panic!("{path} did not resolve"),
+        }
+    }
+
+    #[test]
+    fn a_trailing_slash_is_dropped() {
+        assert_eq!(normalized("/x/store/"), PathBuf::from("/x/store"));
+        assert_eq!(normalized("/x/store//"), PathBuf::from("/x/store"));
+    }
+
+    #[test]
+    fn dot_parts_are_dropped() {
+        assert_eq!(normalized("/x/./store/."), PathBuf::from("/x/store"));
+    }
+
+    #[test]
+    fn a_dot_dot_part_is_kept() {
+        assert_eq!(
+            normalized("/x/link/../store/"),
+            PathBuf::from("/x/link/../store")
+        );
+    }
+
+    #[test]
+    fn a_relative_path_is_resolved_and_normalized() {
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(normalized("rel/./"), cwd.join("rel"));
+    }
 }

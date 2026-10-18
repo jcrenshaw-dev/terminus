@@ -397,6 +397,29 @@ fn a_destination_that_already_holds_files_is_refused() {
     assert!(!bench.pointer().exists(), "the pointer was written anyway");
 }
 
+/// A destination given with a trailing slash is recorded without it (D-08).
+///
+/// The slash is what lets `symlink_metadata` follow a link, so the path the
+/// checks run on and the path the pointer records have to be the same
+/// normalized one.
+#[test]
+fn a_trailing_slash_is_dropped_before_the_pointer_is_written() {
+    let bench = bench();
+    bench.ingest();
+    let destination = bench.root.join("elsewhere").join("terminus");
+    let given = format!("{}/", destination.display());
+
+    let out = bench.run(&["data", "move", &given, "--yes"]);
+    assert!(out.status.success(), "the move failed: {}", text(&out));
+
+    let pointer = std::fs::read_to_string(bench.pointer()).unwrap();
+    assert_eq!(pointer.trim(), destination.to_string_lossy());
+    assert_eq!(
+        bench.status()["data"]["store"].as_str().unwrap(),
+        destination.join(DB_FILE_NAME).to_string_lossy()
+    );
+}
+
 /// The two-word form, held to the `observations regenerate` rule: the verb comes
 /// first or not at all, and a second word that is not the verb is misuse (exit
 /// 2) rather than a move of something the user did not name.
