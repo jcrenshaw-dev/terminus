@@ -500,7 +500,7 @@ fn a_settings_file_install_creates_is_owner_only() {
 }
 
 /// Under umask 022, a `settings.json` the user made 0644 is still 0644 after
-/// install rewrites it.
+/// install rewrites it, and its backup is 0600 (#64).
 #[test]
 fn a_settings_file_keeps_its_own_mode_through_install() {
     use std::os::unix::fs::PermissionsExt;
@@ -521,6 +521,8 @@ fn a_settings_file_keeps_its_own_mode_through_install() {
     assert_eq!(our_entries(&settings, &fixture.stable()).len(), 4);
     let settings_mode = mode(&fixture.settings());
     assert_eq!(settings_mode, 0o644, "settings.json is {settings_mode:o}");
+    let backup_mode = mode(&fixture.claude_dir.join("settings.json.terminus-backup"));
+    assert_eq!(backup_mode, 0o600, "the backup is {backup_mode:o}");
 }
 
 /// A plain file carrying the marker, which is what an install from before the
