@@ -143,8 +143,24 @@ pub fn parse(line: &str) -> Incoming {
     })
 }
 
+/// The `_meta` key a result names the server under.
+pub const SERVER_INFO_KEY: &str = "io.modelcontextprotocol/serverInfo";
+
 /// A successful response to `id`.
-pub fn result(id: &Value, result: Value) -> Value {
+///
+/// Every result passes through here, so this is where `resultType` and the
+/// server's identity under `_meta` are added: a method added later gets them
+/// without having to remember. They go on both eras. 2026-07-28 made them
+/// additive, so a client on an older revision ignores them, and one shape keeps
+/// the answer a function of the line alone.
+pub fn result(id: &Value, mut result: Value) -> Value {
+    if let Some(members) = result.as_object_mut() {
+        members.insert("resultType".into(), Value::from("complete"));
+        members.insert(
+            "_meta".into(),
+            json!({SERVER_INFO_KEY: {"name": super::SERVER_NAME, "version": env!("CARGO_PKG_VERSION")}}),
+        );
+    }
     json!({"jsonrpc": VERSION, "id": id, "result": result})
 }
 

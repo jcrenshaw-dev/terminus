@@ -281,6 +281,15 @@ fn initialized() -> Value {
     json!({"jsonrpc": "2.0", "method": "notifications/initialized"})
 }
 
+/// What `ping` answers: the two members every result carries, and nothing else.
+fn ping_result() -> Value {
+    json!({
+        "resultType": "complete",
+        "_meta": {"io.modelcontextprotocol/serverInfo":
+                  {"name": "terminus", "version": env!("CARGO_PKG_VERSION")}},
+    })
+}
+
 /// The document inside a `tools/call` response's single text content block.
 fn content(response: &Value) -> Value {
     assert!(
@@ -410,7 +419,7 @@ fn ping_is_answered_and_an_unknown_method_does_not_end_the_session() {
     conversation.expect_ok();
 
     assert_eq!(conversation.responses.len(), 3);
-    assert_eq!(conversation.responses[0]["result"], json!({}));
+    assert_eq!(conversation.responses[0]["result"], ping_result());
     assert_eq!(conversation.responses[1]["error"]["code"], -32601);
     assert!(
         conversation.responses[2]["result"].is_object(),
@@ -1282,7 +1291,7 @@ fn the_server_answers_the_next_request_after_a_malformed_one() {
         "the search after the malformed call answered nothing: {:?}",
         conversation.responses[2]
     );
-    assert_eq!(conversation.responses[3]["result"], json!({}));
+    assert_eq!(conversation.responses[3]["result"], ping_result());
 }
 
 /// An argument above a budget is lowered to it, not refused: the answer comes

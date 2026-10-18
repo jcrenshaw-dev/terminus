@@ -156,7 +156,13 @@ fn answer(line: &str) -> Option<Value> {
         }
         rpc::Incoming::Request(request) => Some(match request.method.as_str() {
             "initialize" => rpc::result(&request.id, initialize(&request.params)),
-            "tools/list" => rpc::result(&request.id, json!({"tools": tools::descriptors()})),
+            // `ttlMs` 0 so a host fetches the list again rather than keep one
+            // from an older binary; `private` because it comes from one user's
+            // own server.
+            "tools/list" => rpc::result(
+                &request.id,
+                json!({"tools": tools::descriptors(), "ttlMs": 0, "cacheScope": "private"}),
+            ),
             // The only method that reads the archive. Its `Err` is a protocol
             // failure - params that do not name a call this server has - and
             // never a tool that could not answer, which is a result carrying a
@@ -165,9 +171,10 @@ fn answer(line: &str) -> Option<Value> {
                 Ok(result) => rpc::result(&request.id, result),
                 Err((code, message)) => rpc::failure(Some(&request.id), code, &message),
             },
-            // Answered with an empty result, not `-32601`: the bundled client
-            // implements `ping` on both sides, and a liveness probe answered
-            // "no such method" reads as an unhealthy server.
+            // Answered with a result carrying only what every result carries,
+            // not `-32601`: the bundled client implements `ping` on both sides,
+            // and a liveness probe answered "no such method" reads as an
+            // unhealthy server.
             "ping" => rpc::result(&request.id, json!({})),
             other => rpc::failure(
                 Some(&request.id),
@@ -292,7 +299,14 @@ mod tests {
             vec![&Value::from(1), &Value::from(2), &Value::from(3)],
             "one response per request, in order, and none for the notification"
         );
-        assert_eq!(responses[1]["result"], json!({}), "ping is an empty result");
+        assert_eq!(
+            responses[1]["result"],
+            json!({
+                "resultType": "complete",
+                "_meta": {rpc::SERVER_INFO_KEY: {"name": SERVER_NAME, "version": env!("CARGO_PKG_VERSION")}},
+            }),
+            "ping carries what every result carries and nothing else"
+        );
         assert_eq!(
             responses[2]["result"]["tools"].as_array().map(Vec::len),
             Some(3)
