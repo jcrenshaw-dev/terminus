@@ -1,6 +1,6 @@
 # State
 
 Phase: 2 of 5 (Redaction)
-Status: planned
-Next: /cad-execute 2
+Status: executed
+Next: /cad-verify 2
 Updated: 2026-10-18

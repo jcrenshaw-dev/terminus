@@ -1,0 +1,39 @@
+{
+  "phase": "2",
+  "trigger": "risk_surface",
+  "discriminator": "plan-1",
+  "round": 1,
+  "base": "1ff952f",
+  "head": "bd3d9b8",
+  "base_id": "1ff952f6d43c1dcce88b5ef3f7a903c5a808bf28",
+  "head_id": "bd3d9b88062e53e31e35efaa88d20e70f25358fe",
+  "voices": [
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol"
+    }
+  ],
+  "citations": {
+    "checked": true
+  },
+  "entries": [
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol",
+      "file": "crates/terminus-core/src/observe/egress.rs",
+      "line": 841,
+      "severity": "medium",
+      "claim": "The generic length-only predicate redacts long ordinary words and placeholders that are not credentials.",
+      "failure_scenario": "Input such as `the parser emitted sk-this-is-an-example-placeholder today` contains no secret, but the maximal credential-byte run starts with `sk-` and has at least 20 bytes after it, so it becomes `the parser emitted [redacted:an-sk-key] today`. The corpus-derived floor only protects the currently measured short placeholders; any longer `sk-` identifier or prose coinage is silently changed.",
+      "ruling": "refuted",
+      "convergent": false,
+      "counter_evidence": {
+        "file": "crates/terminus-core/src/observe/egress.rs",
+        "line": 63,
+        "note": "Over-redacting a long sk- run that is not a key is the behaviour locked by phase 2 D-07 (generic sk- prefix, 20-character floor sized against the archive placeholders) and named by the module doc at egress.rs:63-68 as the direction to be wrong in: a false positive costs a caller some detail, a miss costs a key rotation. The plan asked for exactly this predicate; it is not a defect in the diff."
+      },
+      "base_id": "1ff952f6d43c1dcce88b5ef3f7a903c5a808bf28",
+      "head_id": "bd3d9b88062e53e31e35efaa88d20e70f25358fe"
+    }
+  ]
+}
