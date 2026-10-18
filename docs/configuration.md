@@ -117,7 +117,7 @@ Under `lean` and `minimal`, text that was only in the replaced output is no long
 
 ### `[privacy]`
 
-- `redact_recall`, default `false`. With `true`, archived text is filtered on its way into Claude Code: the brief, each prompt's injection, the MCP tools' results, and the excerpts `terminus search` and `terminus show` print. The filter replaces private key blocks, passwords in connection URLs, values named like secrets in headers, JSON, assignments and command-line flags, JSON Web Tokens and GitHub tokens with a marker that names what was taken out. The archive itself is never filtered, and setting it back to `false` returns everything unfiltered. `terminus search --raw` and `terminus show --raw` print unfiltered text for that one run.
+- `redact_recall`, default `false`. With `true`, archived text is filtered on its way into Claude Code: the brief, each prompt's injection, the MCP tools' results, and the excerpts `terminus search` and `terminus show` print. The filter replaces private key blocks, passwords in connection URLs, values named like secrets in headers, JSON, assignments and command-line flags, JSON Web Tokens, GitHub tokens and bare `sk-` keys with a marker that names what was taken out. Values named like secrets inside a tool's input, a tool's result and an attachment are replaced too. The archive itself is never filtered, and setting it back to `false` returns everything unfiltered. `terminus search --raw` and `terminus show --raw` print unfiltered text for that one run.
 
 Only the file sets this. No environment variable or flag turns it on, and `--raw` affects only the command it is passed to, never the hooks or the MCP server.
 

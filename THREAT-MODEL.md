@@ -317,8 +317,12 @@ A same-user process that can already write `~/.claude/projects` or the data dire
   - `name: value` lines, JSON `"name": "value"` pairs, `NAME=value`, and `--name value` flags, where the name contains `token`, `password`, `passwd`, `secret`, `key`, `api`, `bearer`, `cookie` or `authorization`.
   - JWTs starting with `eyJ`.
   - GitHub tokens with the prefixes `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_` and `github_pat_`.
+  - Bare `sk-` keys: a run of ASCII letters, digits, `-` and `_` that opens with `sk-` and has 20 or more characters after it.
+  - A string stored directly under a key whose name contains one of the words above, in a tool's input, a tool's result or an attachment. It is replaced in every excerpt, context window, brief quotation and per-prompt injection, the same as in a `recall_get` body, even though the text those are cut from drops the key's name.
 - **What it misses.**
-  - A bare `sk-` token in prose (issue #5), AWS `AKIA` keys, Slack `xox` tokens, and any vendor key with no secret-looking name beside it. There is no entropy check.
+  - An `sk-` run with fewer than 20 characters after the prefix, and Stripe's `sk_live_` keys, whose underscore puts them outside the `sk-` rule.
+  - A value under a secret-named key that is not a string, such as a list of strings. The filter walks into it rather than replacing it, so its strings go out unless a key inside it is named like a secret or another rule matches them.
+  - AWS `AKIA` keys, Slack `xox` tokens, and any vendor key with no secret-looking name beside it and no prefix the filter knows. There is no entropy check.
   - It never touches the project path and branch in the brief, or the `session_key`, `project` and `tool_name` fields of MCP results.
 
 **Secrets Terminus itself holds:** none. It reads no API key and refuses a `[provider]` table. The release signing key, `~/.ssh/crenshawdev-release`, is mode 0600 on the maintainer's machine and is used only by `scripts/sign-release.sh`, never by the binary or by CI. Whether that key has a passphrase [VERIFY].

@@ -129,6 +129,26 @@ and the versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   history, not instructions, and a closing tag planted in the archived text is
   neutralized in any case, spacing or lookalike spelling. A budget too small
   for the header and both tags now hands over nothing (#60).
+- With `[privacy] redact_recall` on, a secret stored under a secret-named key
+  in a tool's input, a tool's result or an attachment, such as
+  `"api_token": "..."` in a tool call, was replaced in a `recall_get` body but
+  went out whole in `recall_search` excerpts, `recall_context` text,
+  `terminus search` and `terminus show`, the brief and the per-prompt
+  injection. The text those are cut from drops the key that names the value,
+  so no rule could see it. Those values are now replaced with `[redacted]` on
+  every surface (#62).
+- With `[privacy] redact_recall` on, an `sk-` key pasted bare in prose, with no
+  name beside it, reached Claude Code unfiltered, because none of the filter's
+  rules recognized it. A run that opens with `sk-` and has 20 or more key
+  characters after it is now replaced with `[redacted:an-sk-key]`. Shorter
+  words such as `sk-notification` are left alone (#5).
+- With `[privacy] redact_recall` on, a turn with a non-ASCII character in or
+  just before the word ahead of an `=`, such as `café=1`, `Größe=10` or
+  `“token=abc”`, made the filter panic. The MCP server exited mid-request, both
+  hooks injected nothing, and `terminus search` and `terminus show` failed. The
+  filter now reads the name before an `=` as ASCII only: `café=1` and
+  `Größe=10` come back unchanged, and `“token=abc”` loses its value like any
+  other secret assignment (#61).
 
 ## [0.1.1] - 2026-10-15
 
