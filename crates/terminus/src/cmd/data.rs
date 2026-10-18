@@ -106,7 +106,16 @@ pub fn run(options: Options) -> Result<(), Failure> {
     let destination = absolute(&options.destination)?;
     let pointer = store::location_pointer_path()?;
 
-    refuse_impossible_destinations(&source, &destination, || own_uid(&pointer))?;
+    // Learned once, at the first check that meets an existing directory, and
+    // reused by the second: a process's effective uid does not change between
+    // the two.
+    let mut uid = None;
+    let mut learn_uid = || match uid {
+        Some(known) => Ok(known),
+        None => own_uid(&pointer).inspect(|&learned| uid = Some(learned)),
+    };
+
+    let found = refuse_impossible_destinations(&source, &destination, &mut learn_uid)?;
 
     outln!("terminus data move");
     outln!();
@@ -134,6 +143,31 @@ pub fn run(options: Options) -> Result<(), Failure> {
             ))
         }
     };
+
+    // The second check (D-11), as late as it can run: after the answer and the
+    // lock, right before `copy_tree` makes the directory. The question can
+    // wait as long as the user likes, and `owner_only::create_dir_all` accepts
+    // a directory that is already there, so a directory made, swapped or
+    // opened up while it waited would otherwise receive the store (#59). The
+    // whole rule runs again, and what it finds has to be what the first check
+    // found: still nothing, or the same directory by device and inode.
+    let changed = |why: String| {
+        Failure::Operational(format!(
+            "{} changed while the question waited, so nothing was copied: {why}\n  \
+             the store and the pointer are as they were",
+            destination.display()
+        ))
+    };
+    match refuse_unchecked_destination(&destination, &mut learn_uid) {
+        Ok(now) if now == found => {}
+        Ok(Found::Nothing) => return Err(changed("it was there and now is not".to_owned())),
+        Ok(_) if found == Found::Nothing => {
+            return Err(changed("it was not there and now is".to_owned()))
+        }
+        Ok(_) => return Err(changed("it is a different directory now".to_owned())),
+        Err(Failure::Operational(why)) => return Err(changed(why)),
+        Err(other) => return Err(other),
+    }
 
     copy_tree(&source, &destination).map_err(|e| {
         Failure::Operational(format!(
@@ -199,7 +233,7 @@ fn refuse_impossible_destinations(
     source: &Path,
     destination: &Path,
     uid: impl FnOnce() -> Result<u32, Failure>,
-) -> Result<(), Failure> {
+) -> Result<Found, Failure> {
     if destination == source {
         return Err(Failure::Operational(format!(
             "{} is where the data directory already is",
@@ -213,6 +247,15 @@ fn refuse_impossible_destinations(
         )));
     }
     refuse_unchecked_destination(destination, uid)
+}
+
+/// What the destination rule found, for the second check to compare against.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Found {
+    /// Nothing at the path; `copy_tree` will create it 0700.
+    Nothing,
+    /// An empty owner-only directory, named by what a rename cannot carry.
+    Directory { device: u64, inode: u64 },
 }
 
 /// The destination rule (D-07): a path that does not exist, or an empty
@@ -230,11 +273,12 @@ fn refuse_impossible_destinations(
 /// checked (D-09). A wide directory is refused rather than narrowed, because
 /// terminus narrows what it creates and nothing it merely found (D-10). `uid`
 /// is a closure because learning it costs a probe file, and a destination that
-/// does not exist has no owner to compare.
+/// does not exist has no owner to compare. What it returns is what the second
+/// check after the question compares against (D-11).
 fn refuse_unchecked_destination(
     destination: &Path,
     uid: impl FnOnce() -> Result<u32, Failure>,
-) -> Result<(), Failure> {
+) -> Result<Found, Failure> {
     use std::os::unix::fs::MetadataExt;
 
     let refused = |why: String| {
@@ -246,7 +290,7 @@ fn refuse_unchecked_destination(
 
     let found = match std::fs::symlink_metadata(destination) {
         Ok(found) => found,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Found::Nothing),
         Err(e) => return Err(refused(format!("could not be checked: {e}"))),
     };
     if found.file_type().is_symlink() {
@@ -277,7 +321,10 @@ fn refuse_unchecked_destination(
     let mut entries =
         std::fs::read_dir(destination).map_err(|e| refused(format!("could not be listed: {e}")))?;
     match entries.next() {
-        None => Ok(()),
+        None => Ok(Found::Directory {
+            device: found.dev(),
+            inode: found.ino(),
+        }),
         Some(Ok(_)) => Err(refused(
             "already holds files.\n  name a path that does not exist or is empty".to_owned(),
         )),
@@ -533,7 +580,7 @@ mod tests {
                 "{} was refused, but not operationally",
                 destination.display()
             ),
-            Ok(()) => panic!("{} was accepted", destination.display()),
+            Ok(_) => panic!("{} was accepted", destination.display()),
         }
     }
 
