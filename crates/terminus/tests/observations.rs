@@ -41,6 +41,22 @@ const FIRST_TURN_SECONDS_AGO: i64 = 36_000;
 /// Wall-clock seconds between the session's first turn and its last.
 const DURATION_SECONDS: i64 = 100;
 
+/// The error, branch and command a transcript is written with.
+///
+/// Every test but one writes [`ORDINARY`], so the transcripts they ingest stay
+/// what they were; the control-character test plants ESC and BEL in each.
+struct Words<'a> {
+    error: &'a str,
+    branch: &'a str,
+    command: &'a str,
+}
+
+const ORDINARY: Words<'static> = Words {
+    error: ERROR,
+    branch: BRANCH,
+    command: COMMAND,
+};
+
 /// A second session, days older than the first, for the `--since` selector to
 /// leave alone.
 const OLDER_SESSION: &str = "22222222-2222-4222-8222-222222222222";
@@ -105,11 +121,16 @@ impl Bench {
 
     /// Put one transcript into the tree a pass walks, with a chosen clock.
     fn place(&self, session: &str, first_seconds_ago: i64) {
+        self.place_with(session, first_seconds_ago, &ORDINARY);
+    }
+
+    /// [`Bench::place`], with chosen words.
+    fn place_with(&self, session: &str, first_seconds_ago: i64, words: &Words) {
         let dir = self.claude_dir.join("projects").join("project-alpha");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join(format!("{session}.jsonl")),
-            self.transcript(session, first_seconds_ago),
+            self.transcript(session, first_seconds_ago, words),
         )
         .unwrap();
     }
@@ -169,7 +190,7 @@ impl Bench {
 
     /// One session carrying every OBS-01 fact: an edit, two tools, a command
     /// with arguments, a failure, a branch, a commit, six turns and a duration.
-    fn transcript(&self, session: &str, first_seconds_ago: i64) -> String {
+    fn transcript(&self, session: &str, first_seconds_ago: i64, words: &Words) -> String {
         let cwd = self
             .root
             .join("project-alpha")
@@ -182,7 +203,7 @@ impl Bench {
                 "isSidechain": false,
                 "cwd": cwd.clone(),
                 "sessionId": session,
-                "gitBranch": BRANCH,
+                "gitBranch": words.branch,
                 "type": kind,
                 "uuid": format!("{session}-{n}"),
                 "timestamp": ts(seconds_ago),
@@ -224,7 +245,7 @@ impl Bench {
             2,
             serde_json::json!([{
                 "type": "tool_use", "id": "toolu_2", "name": "Bash",
-                "input": {"command": COMMAND},
+                "input": {"command": words.command},
             }]),
             "assistant",
             Value::Null,
@@ -233,9 +254,9 @@ impl Bench {
             first - 3,
             3,
             serde_json::json!([{"tool_use_id": "toolu_2", "type": "tool_result",
-                                "content": ERROR, "is_error": true}]),
+                                "content": words.error, "is_error": true}]),
             "user",
-            serde_json::json!({"toolUseResult": {"stdout": "", "stderr": ERROR}}),
+            serde_json::json!({"toolUseResult": {"stdout": "", "stderr": words.error}}),
         );
         push(
             first - 4,
@@ -549,4 +570,60 @@ fn a_malformed_since_is_misuse_and_rebuilds_nothing() {
         SPOILED,
         "a refused bound still wrote"
     );
+}
+
+/// ESC and BEL archived in an error, a branch and a command print as `\u001b`
+/// and `\u0007` in the human listing, and `--json` still carries the
+/// characters themselves (#63).
+///
+/// Planted through serde_json, so the transcript holds the JSON escapes the way
+/// Claude Code writes them rather than raw bytes no JSON parser would accept.
+///
+/// The file name stays clean. A bare `ingest` walks only `<uuid>.jsonl` at a
+/// project's top level and `agent-*.jsonl` below it, so a name holding a
+/// control is never archived and has no row to list.
+#[test]
+fn archived_control_characters_print_escaped_in_the_listing() {
+    let bench = bench();
+    let words = Words {
+        error: "Bash \u{1b}command\u{07} failed",
+        branch: "phase\u{1b}seven\u{07}",
+        command: "printf '\u{1b}]0;title\u{07}'",
+    };
+    bench.place_with(SESSION, FIRST_TURN_SECONDS_AGO, &words);
+    bench.ingest();
+
+    // `--json` still carries the raw characters (D-06).
+    let value = document(&bench.run(&["observations", "--project", "*", "--json"]));
+    let facts = &value["data"]["observations"][0]["mechanical"];
+    assert!(
+        strings(&facts["errors"])
+            .iter()
+            .any(|e| e.contains('\u{1b}') && e.contains('\u{07}')),
+        "{value}"
+    );
+
+    let out = bench.run(&["observations", "--project", "*"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(
+        !out.stdout.iter().any(|b| *b == 0x1b || *b == 0x07),
+        "the listing wrote ESC or BEL to the terminal:\n{:?}",
+        stdout(&out)
+    );
+    let text = stdout(&out);
+    let header = text.lines().next().unwrap_or_default();
+    assert!(
+        header.contains("phase\\u001bseven\\u0007"),
+        "the branch is not escaped: {text}"
+    );
+    for (label, escaped) in [
+        ("errors", "Bash \\u001bcommand\\u0007 failed"),
+        ("commands", "printf '\\u001b]0;title\\u0007'"),
+    ] {
+        let line = text
+            .lines()
+            .find(|line| line.trim_start().starts_with(label))
+            .unwrap_or_else(|| panic!("no {label} line: {text}"));
+        assert!(line.contains(escaped), "{label} lacks {escaped}: {line}");
+    }
 }
