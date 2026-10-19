@@ -1,0 +1,36 @@
+{
+  "phase": "4",
+  "trigger": "plan",
+  "discriminator": "plan-2b39948",
+  "round": 2,
+  "base": "2b39948",
+  "head": "2b39948",
+  "base_id": "2b3994865c8b3084024a76556786b549d090545f",
+  "head_id": "2b3994865c8b3084024a76556786b549d090545f",
+  "voices": [
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol"
+    }
+  ],
+  "citations": {
+    "checked": true
+  },
+  "entries": [
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol",
+      "file": "PLAN-2.md",
+      "line": 74,
+      "severity": "medium",
+      "claim": "The fix makes a failed member coexist with merges of earlier passing members, but the retained instruction still says that when any member fails, “nothing in the group is deleted,” contradicting Task 3’s requirement to absorb and delete every member that passed.",
+      "failure_scenario": "In the new three-member case, the first longer member passes and becomes the current stream, then the second longer member fails. An implementation following line 74 leaves all three sessions untouched, while Task 3 and its verification require the first longer member to be merged and deleted, leaving only the survivor and the failing member. The plan therefore gives incompatible completion rules for the exact regression case added by the fix.",
+      "ruling": "survived",
+      "convergent": false,
+      "fix_commit": "df8077c704daea346132e3f66d012eebde923e46",
+      "citation_missing": true,
+      "base_id": "2b3994865c8b3084024a76556786b549d090545f",
+      "head_id": "2b3994865c8b3084024a76556786b549d090545f"
+    }
+  ]
+}
