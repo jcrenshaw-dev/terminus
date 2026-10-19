@@ -804,6 +804,28 @@ pub fn plant_old_key(conn: &mut rusqlite::Connection, from: &str, to: &str) {
         .unwrap_or_else(|e| panic!("move {from} to {to}: {e}"));
 }
 
+/// Cut one session's stream again at `block_size`, recording the new size and
+/// checksum. The bytes, and so every turn's offset, stay the same.
+pub fn recut(conn: &rusqlite::Connection, session_key: &str, block_size: u32) {
+    let bytes = stream(conn, session_key).unwrap_or_else(|e| panic!("read {session_key}: {e}"));
+    conn.execute(
+        "UPDATE session_meta SET block_size = ?2 WHERE session_key = ?1",
+        rusqlite::params![session_key, block_size],
+    )
+    .unwrap_or_else(|e| panic!("record the block size of {session_key}: {e}"));
+    rewrite_stream(conn, session_key, &bytes);
+    let hashes: Vec<[u8; 32]> = block_rows(conn, session_key)
+        .into_iter()
+        .map(|(_, _, hash)| hash.try_into().expect("a 32-byte hash"))
+        .collect();
+    let checksum = crate::blob::block::checksum(&hashes);
+    conn.execute(
+        "UPDATE session_meta SET checksum = ?2 WHERE session_key = ?1",
+        rusqlite::params![session_key, checksum.as_slice()],
+    )
+    .unwrap_or_else(|e| panic!("record the checksum of {session_key}: {e}"));
+}
+
 fn clear_blocks(conn: &rusqlite::Connection, session_no: i64) {
     conn.execute("DELETE FROM blocks WHERE session_no = ?1", [session_no])
         .unwrap_or_else(|e| panic!("clear the blocks of session {session_no}: {e}"));
