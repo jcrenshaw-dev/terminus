@@ -145,12 +145,12 @@ pub fn run(options: Options) -> Result<(), Failure> {
     };
 
     // The second check (D-11), as late as it can run: after the answer and the
-    // lock, right before `copy_tree` makes the directory. The question can
-    // wait as long as the user likes, and `owner_only::create_dir_all` accepts
-    // a directory that is already there, so a directory made, swapped or
-    // opened up while it waited would otherwise receive the store (#59). The
-    // whole rule runs again, and what it finds has to be what the first check
-    // found: still nothing, or the same directory by device and inode.
+    // lock, right before the copy. The question can wait as long as the user
+    // likes, and `copy_tree` writes into whatever directory is at the path, so
+    // a directory swapped or opened up while it waited would otherwise receive
+    // the store (#59). The whole rule runs again, and what it finds has to be
+    // what the first check found: still nothing, or the same directory by
+    // device and inode.
     let changed = |why: String| {
         Failure::Operational(format!(
             "{} changed while the question waited, so nothing was copied: {why}\n  \
@@ -170,9 +170,11 @@ pub fn run(options: Options) -> Result<(), Failure> {
     }
 
     // The second check cannot hold the path still, so a destination both
-    // checks found absent is made here with an exclusive `mkdir` rather than
-    // left to `copy_tree`, whose `create_dir_all` takes a directory, or a
-    // symlink to one, that another account put there after the check (#59).
+    // checks found absent is made here with one exclusive `mkdir`, which a
+    // directory, or a symlink to one, that another account put there after
+    // the check fails rather than receives the store (#59). `copy_tree` makes
+    // no directory at the top, so this is the only place an absent
+    // destination is created.
     if found == Found::Nothing {
         create_destination(&destination).map_err(|e| {
             if e.kind() == std::io::ErrorKind::AlreadyExists {
@@ -495,9 +497,16 @@ fn create_destination(destination: &Path) -> std::io::Result<()> {
 
 /// Everything under `from`, copied into `to`, directories included.
 ///
+/// `to` is already there: [`run`] found it as an empty owner-only directory or
+/// made it with [`create_destination`], and nothing here makes a directory at
+/// the top that could stand in for either. Each directory below it is one
+/// exclusive `mkdir`, for the reason [`copy_file`] uses `create_new`.
+///
 /// The `LOCK` file is skipped at the top level: this process is holding it, and
 /// [`run`] creates an empty one at the destination instead.
 fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
+    use std::os::unix::fs::DirBuilderExt;
+
     let failed =
         |path: &Path, e: std::io::Error| format!("{} could not be copied: {e}", path.display());
 
@@ -508,7 +517,6 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
     // a tar, would arrive as wide as it was at the old location.
     // What the destination gets is the mode this build writes, from the
     // creating syscall, whatever the source happens to be.
-    terminus_core::owner_only::create_dir_all(to).map_err(|e| failed(to, e))?;
     let entries = std::fs::read_dir(from).map_err(|e| failed(from, e))?;
     for entry in entries {
         let entry = entry.map_err(|e| failed(from, e))?;
@@ -520,6 +528,10 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
         let destination = to.join(&name);
         let kind = entry.file_type().map_err(|e| failed(&source, e))?;
         if kind.is_dir() {
+            std::fs::DirBuilder::new()
+                .mode(terminus_core::owner_only::DIR_MODE)
+                .create(&destination)
+                .map_err(|e| failed(&source, e))?;
             copy_tree(&source, &destination)?;
         } else {
             copy_file(&source, &destination).map_err(|e| failed(&source, e))?;
