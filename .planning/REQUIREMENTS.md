@@ -36,7 +36,7 @@ names, which holds the detail and the code references behind it.
 
 ### Recall (RCL)
 
-- **RCL-12**: Human-mode output of `terminus search`, `terminus show` and `terminus observations` replaces C0 control characters other than tab and newline, DEL, and C1 controls in archived text with a visible escape, and `--json` output is unchanged. (#63, #65, #66)
+- **RCL-12**: Human-mode output of `terminus search`, `terminus show` and `terminus observations` replaces C0 control characters other than tab and newline, DEL, and C1 controls in archived text with a visible escape, except the archived record `terminus show <id>` prints, which stays byte for byte. `--json` output is unchanged. (#63, #65, #66)
 
 ## Shipped
 
