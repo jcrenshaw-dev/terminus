@@ -1,0 +1,117 @@
+{
+  "status": "gaps",
+  "score": "7/9",
+  "truths": [
+    {
+      "n": 1,
+      "truth": "With ESC and BEL archived in a tool result, human output of search, the show --before/--after window and header, and observations holds no 0x1b or 0x07 byte and shows \\u001b and \\u0007 where they were, including a control planted in a turn's time and a tool name",
+      "status": "VERIFIED",
+      "uat_item": 1,
+      "evidence": "Call sites: search.rs:147-149 (day, file name, project) and :152 (excerpt); show.rs:110-112 (header ts, file name, project), :161-162 (window label and text), :174 (continues_from); observations.rs:266-267 (file name, branch), :282 (six fact lists), :292 (truncated). On HEAD, `cargo test -p terminus --all-features --test recall_cli archived_control_characters_print_escaped_in_search_and_show` and `--test observations archived_control_characters_print_escaped_in_the_listing` each report `1 passed; 0 failed`. Independent probe (/tmp/claude-1000/-code-terminus/37a5a5ca-e9b1-48a6-9242-56fd27975cc1/scratchpad/probe.py, HEAD binary on a scratch store): show header printed `2  2026-10\\u001b19T12:00:00.000\\u0007Z  planted\\u001bfile.jsonl  .../planted\\u001bproject`, window printed `assistant/Ba\\u001bsh` and `\\u001b]52;c;aGVsbG8=\\u0007 quixotrel`, and search, show header+window and observations stdout held no raw control byte. Record type cannot carry a control: parse/record.rs:17 TURN_TYPES admits only user, assistant, attachment, system."
+    },
+    {
+      "n": 2,
+      "truth": "Exactly the 63 code points U+0000-U+001F minus tab and newline plus U+007F-U+009F print as lowercase \\u00XX; tab, newline, U+200B and U+202E print unchanged",
+      "status": "VERIFIED",
+      "uat_item": 2,
+      "evidence": "escape.rs:49-51 `c.is_control() && c != '\\t' && c != '\\n'`, escape.rs:41 `write!(out, \"\\\\u{:04x}\", ...)`. `cargo test -p terminus --all-features --lib escape::` -> 3 passed, including exactly_the_controls_other_than_tab_and_newline_change, which walks U+0000..U+10FFFF and asserts 63 changed. End to end: a Bash command holding all 63 controls then `|TAB\\t|NL\\n|ZWSP\\u200b|RLO\\u202e|END`, bare-ingested, printed in human `observations` as exactly BEGIN\\u0000...\\u009f followed by raw tab, newline, U+200B and U+202E (probe check `observations prints the full escape set exactly` PASS); the branch printed `phase\\u001bseven\\u0007\\u007f\\u009b`. In search and the show window VT, FF, CR and NEL arrive as spaces because core's flatten collapses whitespace before the helper runs (D-08); every other control printed escaped and stdout held no byte in 0x00-0x08, 0x0b-0x1f, 0x7f or C2 80-9F."
+    },
+    {
+      "n": 3,
+      "truth": "--json output of search, show and observations is byte-identical to the pre-change build",
+      "status": "VERIFIED",
+      "uat_item": 3,
+      "evidence": "Built the pre-fix binary from HEAD with crates/terminus/src replaced by 23b2db8^ and ran both binaries on one scratch store: `search --json` (with and without --raw, two queries), `show --json --before 1 --after 1` (with and without --raw, two anchors) and `observations --json` were byte-identical in all 7 comparisons (660, 660, 808, 1763, 1763, 1997 and 833 bytes). `git diff --stat 23b2db8^ HEAD -- Cargo.toml Cargo.lock crates/terminus/Cargo.toml crates/terminus-core crates/terminus/src/cmd/json.rs crates/terminus/src/out.rs` prints nothing, and the phase diff has no hunk in search.rs's `if args.json` branch (:101-134), show.rs `emit`/`window_value` (:188-252) or observations.rs `to_value`/`nested`. The JSON still carries DEL and U+009B raw, as THREAT-MODEL.md:127 states."
+    },
+    {
+      "n": 4,
+      "truth": "The body show <id> prints is byte-identical to the pre-change build, and with --raw the header and window are still escaped",
+      "status": "VERIFIED",
+      "uat_item": 4,
+      "evidence": "show.rs:121-127 `Some(bytes) => out.write_all(bytes)` is unchanged by the phase diff. Probe: for two anchors, with and without --raw, line 2 of human show output was identical between the HEAD and pre-fix binaries and equal to the transcript line as written (4 PASS), while the header and window lines held no raw control under --raw too (`show header+window free of controls ['--raw']` PASS twice). The body still carries DEL and C1 raw (DEL=True, CSI=True), the limit D-01 accepts and THREAT-MODEL.md:127 documents. The regression test's body assertion (recall_cli.rs, `show --raw={raw} lost the archived line`) passed on both the HEAD and pre-fix trees."
+    },
+    {
+      "n": 5,
+      "truth": "Both regression tests fail before the fix and pass after it",
+      "status": "VERIFIED",
+      "uat_item": 5,
+      "evidence": "HEAD tests on a pre-fix tree (crates/terminus/src from 23b2db8^): archived_control_characters_print_escaped_in_search_and_show FAILED at recall_cli.rs:1572 `show --raw=false wrote ESC or BEL to the terminal`, after its --json and body assertions had passed; archived_control_characters_print_escaped_in_the_listing FAILED at observations.rs:608 `the listing wrote ESC or BEL to the terminal`. On HEAD both pass. One full run, `cargo test --workspace --all-features --locked` on the HEAD tree: exit 0, 68 test binaries, 987 passed, 0 failed."
+    },
+    {
+      "n": 6,
+      "truth": "THREAT-MODEL.md, docs/commands.md and CHANGELOG.md describe the escape, the DEL and C1 the show body passes, and --json passing DEL and C1, without saying --json escapes",
+      "status": "VERIFIED",
+      "uat_item": 6,
+      "evidence": "`grep -n \"nothing filters control characters\" THREAT-MODEL.md` exits 1. THREAT-MODEL.md:127 names the \\u00XX escape for search, the show header and window, and observations with or without --raw (`bin/escape.rs`, which follows the path convention at THREAT-MODEL.md:5), says DEL and C1 reach the terminal through the body, says --json passes DEL and C1 raw, and marks terminal behavior [VERIFY]. docs/commands.md:61 (search), :74 (show, keeps byte for byte for the record) and :92 (observations) describe the escape; no line there says --json escapes control characters. CHANGELOG.md: [Unreleased] at :10, ### Fixed at :35, the new entry ends at :199 `(#63, #65, #66)` before `## [0.1.1]` at :201, with no other heading between. `git diff --stat 23b2db8^ HEAD -- SECURITY.md docs/json-shapes.md` is empty."
+    },
+    {
+      "n": 7,
+      "truth": "One shared helper in the terminus binary, std only, no new crate, no terminal check, reached from all three commands",
+      "status": "VERIFIED",
+      "uat_item": null,
+      "evidence": "crates/terminus/src/escape.rs:33 `pub(crate) fn controls(text: &str) -> Cow<'_, str>`, imports only std::borrow::Cow and std::fmt::Write (:25-26), no isatty check; declared at lib.rs:18 with no cfg_attr left. `grep -rn \"escape::\" crates/terminus/src` shows callers only in search.rs, show.rs and observations.rs; no other is_control or \\\\u{:04x} escaping on the three command paths (the only other one is install/json_file.rs:1027, the settings.json writer). Cargo manifests and lockfile unchanged."
+    },
+    {
+      "n": 8,
+      "truth": "The observations regression test plants a control in every D-04 field a transcript can carry, the session file name included when a bare ingest accepts such a name",
+      "status": "FAILED",
+      "uat_item": null,
+      "evidence": "tests/observations.rs:582-584 says a bare ingest walks only <uuid>.jsonl and agent-*.jsonl, so a name holding a control is never archived, and SUMMARY.md:33 repeats that as the reason for the deviation. That is false: discover.rs:257-268 admits any name starting `agent-` and ending `.jsonl`. Probe /tmp/claude-1000/-code-terminus/37a5a5ca-e9b1-48a6-9242-56fd27975cc1/scratchpad/probe_agent.py placed `agent-\\x1bx\\x07.jsonl` under claude/projects/project-alpha, ran a bare ingest, and `observations --project *` listed it: HEAD printed `agent-\\u001bx\\u0007.jsonl  main  3 turn(s)`, pre-fix printed raw `agent-\\x1bx\\x07.jsonl`. The code is right, but removing escape::controls from observations.rs:266 would leave the new test passing."
+    },
+    {
+      "n": 9,
+      "truth": "The pull request that lands phase 5 carries Fixes #63, #65 and #66, and all three close on merge",
+      "status": "UNCERTAIN",
+      "uat_item": 7,
+      "evidence": "No PR exists yet; this can only be checked on GitHub after landing."
+    }
+  ],
+  "passes": [
+    {
+      "k": 1,
+      "name": "ESC and BEL print escaped in search, the show window and observations",
+      "evidence": "Both new tests pass on HEAD. Probe on a scratch store: search, show header+window and observations stdout held no raw control byte; show header `2026-10\\u001b19T12:00:00.000\\u0007Z  planted\\u001bfile.jsonl  .../planted\\u001bproject`, window `assistant/Ba\\u001bsh` and `\\u001b]52;c;aGVsbG8=\\u0007 quixotrel`. Call sites search.rs:147-152, show.rs:110-112, :161-162, :174, observations.rs:266-292."
+    },
+    {
+      "k": 2,
+      "name": "The full escape set and nothing else",
+      "evidence": "escape.rs:49-51; the escape:: unit tests pass (all of U+0000..U+10FFFF walked, 63 changed). End to end, an observations command holding all 63 controls plus tab, newline, U+200B and U+202E printed exactly as the 63 lowercase escapes with those four raw. In search and show, VT, FF, CR and NEL arrive as spaces through core's flatten (D-08)."
+    },
+    {
+      "k": 3,
+      "name": "--json output unchanged",
+      "evidence": "HEAD and pre-fix (crates/terminus/src at 23b2db8^) binaries on one store produced byte-identical --json for search (x3), show (x3, --raw included) and observations. No phase hunk in the JSON branches; terminus-core, Cargo.toml and Cargo.lock unchanged."
+    },
+    {
+      "k": 4,
+      "name": "show body unchanged and --raw still escapes",
+      "evidence": "show.rs:121-127 unchanged. Body line identical between HEAD and pre-fix binaries and equal to the written transcript line for two anchors, with and without --raw; the header and window held no raw control under --raw."
+    },
+    {
+      "k": 5,
+      "name": "Regression tests fail before the fix and pass after",
+      "evidence": "On the pre-fix tree the search/show test failed at recall_cli.rs:1572 and the observations test at observations.rs:608, each on its no-ESC-or-BEL assertion; on HEAD both pass. The full suite on HEAD exits 0: 68 binaries, 987 passed, 0 failed."
+    },
+    {
+      "k": 6,
+      "name": "Docs describe the escape",
+      "evidence": "The old THREAT-MODEL sentence is gone (grep exits 1). THREAT-MODEL.md:127 covers the escape, the DEL and C1 the body passes, and --json passing DEL and C1. docs/commands.md:61, :74 and :92 cover all three commands. CHANGELOG.md has #63, #65 and #66 under [Unreleased] ### Fixed (:35-:199). SECURITY.md and docs/json-shapes.md are untouched."
+    }
+  ],
+  "gaps": [
+    {
+      "name": "The observations regression test leaves the session file name clean on a false premise",
+      "reason": "behavior wrong - test coverage: Task 3 required planting a control in the file name if a bare ingest accepts such a name, and it does accept one (agent-*.jsonl). The test skipped it, and its comment and the SUMMARY deviation both claim it cannot be done.",
+      "evidence": "crates/terminus/tests/observations.rs:582-584 states a name holding a control is never archived; crates/terminus-core/src/discover.rs:257-268 admits any `agent-*.jsonl`; a bare ingest of `agent-\\x1bx\\x07.jsonl` listed it in `observations` (HEAD escaped, pre-fix raw). .planning/phases/5/SUMMARY.md:33 repeats the false claim. Dropping escape::controls at crates/terminus/src/cmd/observations.rs:266 would not fail any test.",
+      "severity": "minor",
+      "missing": "In archived_control_characters_print_escaped_in_the_listing, also write the transcript under an `agent-` name holding ESC and BEL (for example `agent-<ESC>planted<BEL>.jsonl` under claude/projects/project-alpha), and assert the header holds the escaped name and stdout holds no 0x1b or 0x07. Correct the comment at tests/observations.rs:582-584 and the deviation at SUMMARY.md:33."
+    }
+  ],
+  "human_checks": [
+    {
+      "name": "After the phase 5 PR merges, check that its description carries `Fixes #63`, `Fixes #65` and `Fixes #66`, and that all three issues on crenshawdev/terminus show as closed by it",
+      "expected": "The PR body has all three Fixes lines, and #63, #65 and #66 are closed and linked to the merged PR",
+      "why_human": "Out-of-reach resource: the PR does not exist until landing, and checking it needs GitHub, which this verifier may not reach (no network)"
+    }
+  ]
+}
