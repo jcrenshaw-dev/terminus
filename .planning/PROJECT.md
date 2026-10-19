@@ -16,11 +16,25 @@ The verbatim transcript is the record: every session archived losslessly and per
 
 ### Active
 
-**hardin, opened 2026-10-18.**
+No cycle open.
 
-The fixes the 2026-10-18 sentinel audit says must land before the first release, all filed as issues. Injected recall marks archived tool output as quoted history instead of handing it to the model as the user's own turns (#60). Redaction catches a secret stored under a secret-named JSON key and a bare `sk-` token, never panics on a multi-byte character, and its test proves each rule's own marker (#62, #5, #61, #4). Install's `settings.json` temporaries and the destination of `terminus data move` are owner-only from the start (#64, #59). A session keeps its key when its transcript directory moves behind a symlink, and the archive that already holds both keys is repaired (#57). Human-mode output neutralizes control characters in archived text (#63, #65, #66).
+**Shipped: hardin, closed 2026-10-19.**
 
-The version is named at the release. The fixes and features phases 12 to 14 left under `## [Unreleased]` in `CHANGELOG.md` ship with it.
+The fixes the 2026-10-18 sentinel audit said must land before the first release. Injected recall marks archived tool output as quoted history (#60). Redaction catches keyed JSON secrets and bare `sk-` tokens, never panics on a multi-byte name, and its test proves each rule's own marker (#62, #5, #61, #4). Install's temporaries and the destination of `terminus data move` are owner-only from the start (#64, #59). A session keeps its key when its transcript directory moves behind a symlink, the doubled archive is repaired, and a same-named file from another project folder is refused on every ingest path (#57, #67, #69). Human output of `search`, `show` and `observations` escapes control characters (#63, #65, #66).
+
+| | |
+|---|---|
+| Phases | 5 (Recall injection framing; Redaction; Owner-only files; Session keys; Terminal output escaping) |
+| Requirements | 9, all Complete: INJ-09, PRIV-06..09, INST-15, STOR-12, ING-13, RCL-12. Thirteen issues closed by PR #68 |
+| Commits | 91 on `hardin`, 2026-10-18 to 2026-10-19, excluding merges, merged by PR #68; then the phase 5 UAT, the #70 filing and this close on `mayors` |
+| Audit | PASS, 9/9 traced requirement -> phase -> plan -> verified, 0 broken, 0 deferred; 35/35 acceptance criteria covered by a UAT item, 0 breaks |
+| Manifest | 0.1.1 (`Cargo.toml` workspace), not bumped at close. The version is named at the release; the hardin fixes and the work of v0.0.1's phases 11 to 14 stand under `## [Unreleased]` |
+
+Where it lives now: the requirement rows under `## Shipped` in REQUIREMENTS.md, labelled hardin; the per-phase deviations, UAT results and context decisions in `.planning/ARCHIVE.md` (107 rows added); the full phase directories under `.planning/_archive-hardin/`, since no tag names this close.
+
+Carried out of the close: `.planning/risk-carry/` holds 16 `risk_surface` reviews and adjudications from phases 1, 2, 4 and 5. It is transient, never committed, and the `/cad-land` that confirms the merge deletes it.
+
+Still outstanding: the merge of `mayors` to `main` is `/cad-land`'s. No release tag is cut for this close. The slow `observations regenerate` query found during phase 4 is filed as #70.
 
 **Shipped: v0.0.1, closed 2026-10-17.**
 
