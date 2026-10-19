@@ -43,29 +43,31 @@ evidence: one_pass_repairs_a_store_keyed_on_absolute_paths (crates/terminus-core
 ### 5. The repair on a copy of the live store
 expected: On a copy of the live store, after one ingest pass, recall_search returns each turn once, terminus status counts each session once, the -code-cadence/388a000f orphan is still archived, and no label or decision turn id points at a turn that does not exist.
 criterion: AC4
-status: fail
+status: pass
 first_pass: fail
 source: model
-evidence: Copied the live store with sqlite3 .backup into the scratchpad and ran one `terminus ingest` with the HEAD release binary (TERMINUS_DATA_DIR and TERMINUS_CONFIG_DIR set to scratch dirs). Exit 0 in 106 s; the run's note reads 're-keyed 2922 session(s) to their path below `projects` and merged 2028 twin(s) into the older session'. Before: 4,950 sessions, all absolute keys, 509,952 turn uuids held more than once. After: `terminus status --json` shows 2,923 sessions and 614,555 turns, no absolute key is left, and 21,165 uuids are held more than once. Orphan: session 2000 is now -code-cadence/388a000f-7ac1-4333-9880-96d8ab237e51.jsonl, with 857,565 bytes, 14 blocks and the same checksum as before. Dangling: 0 labels and 0 injected, candidate or dropped decision turn ids point at a missing turn (0 before as well). `terminus verify`: 2923 session(s) checked, 0 failed. Every regular transcript on disk has one session; the 10 links are keyed on their targets; 176 sessions are archive-only. recall_search with project '*', over 8 queries: 7 returned no turn twice. 'symlink' returned 4 of its 10 hits twice, under -code-cadence/be0a247d-.../subagents/workflows/wf_c61a181c-c13/ and under -code-cadence-v3-9-1/ with the same path. 175 transcripts are archived under both -code-cadence/ and -code-cadence-v3-9-1/ with the same path below the project folder: 173 have identical checksums, 1 has the old copy longer and 1 has it shorter. All 175 -code-cadence/ files are gone from disk, so 12,897 turns show twice. The live 0.1.1 store already held both copies (e.g. sessions 4448 and 4727, both under /data keys), so this did not come from #57's root move.
+evidence: Fresh sqlite3 .backup of the live store (no decision files waiting), then one `terminus ingest` with the release build of 9829de5, TERMINUS_DATA_DIR and TERMINUS_CONFIG_DIR set to scratch dirs. Exit 0 in 107 s. runs.error is the one summary line 're-keyed 2775 session(s) to their path below the project folder and merged 2203 twin(s) into the older session', with files_failed 0 and no 'not merged' line. Before: 4,978 sessions, all absolute keys, 510,635 turn uuids held by more than one session. After: `terminus status --json` shows 2,775 sessions and 607,083 turns; 0 keys begin with / or -. On disk, 2,784 transcript paths (10 of them links) reduce to 2,774 keys, each held by exactly one session, and no key is held by two regular files; the one archive-only session is the orphan. Orphan: 388a000f-7ac1-4333-9880-96d8ab237e51.jsonl is still session 2000 with 857,565 bytes, 14 blocks and the same checksum (67BCA0D4...CBC15498) as before. Dangling: 0 labels and 0 candidate, injected or suppressed decision turn ids point at a missing turn, before and after. `terminus verify`: 2775 session(s) checked, 0 failed. No two sessions share a checksum. The 9,022 uuids still held by two sessions all sit in sessions of different transcripts: 6,843 where one continues the other, 1,798 where both continue one session, 381 between sidecars of one session, none other. `terminus search --json --project '*'` over 8 queries (symlink, watermark, retention, brillig, sentinel, ingest, session key, compaction): 7 return 10 distinct records of 10 hits; 'retention' returns 9 of 10, the repeat being one record in efced699-... and in 6825b00d-..., whose continues_from is efced699, a record Claude Code copied into the resumed file. MCP recall_search for 'symlink' with project '*' returns 10 distinct records, where before 4 of its 10 showed twice under be0a247d-.../wf_c61a181c-c13/. That meets AC4 as John ruled it in PLAN-4 Notes: each transcript is archived once. A second pass committed 1 grown live file, runs.error null, sessions still 2,775.
 severity: major
 cause: The transcripts moved from one project folder to another (-code-cadence to -code-cadence-v3-9-1) and the old files are gone. D-01 keys on the path below `projects`, which includes the project folder, so the moved file is a new key and the archive-only copy is kept untouched under D-12. These are the '175 new-key sessions whose files are also gone' that D-12 counted as having no twin: they have no twin under the same key, but each is a copy of a live session in another project folder. The repair only pairs sessions whose old keys reduce to the same new key (D-10), so it never looks across project folders.
-fix: routed to /cad-plan
+fix: plan 4 (b48c8c3 key drops the project folder), retest on a fresh copy of the live store
 
 ### 6. session_key output and the docs carry the new key
 expected: session_key in --json output and MCP results is the path below projects. THREAT-MODEL.md, docs/json-shapes.md and design docs 0003 and 0004 describe the new key, and CHANGELOG.md [Unreleased] carries #57 under ### Fixed.
 criterion: AC5
 status: pass
 first_pass: pass
-source: verifier
-evidence: `terminus sessions --json`, `terminus search --json` and the MCP recall_search result all show '-tmp-p/11111111-1111-4111-8111-111111111111.jsonl'. THREAT-MODEL.md:12/:17/:21/:240, 0003-ingest.md:18/:35/:133-140, 0004:15/:66 and json-shapes.md:76-80/:86/:313/:390 describe the path below projects. CHANGELOG.md:174-188 carries #57 under [Unreleased] ### Fixed.
+source: model
+evidence: The key is now the path below the project folder, per John's override of D-01 in PLAN-4 Notes, which AC5's wording 'the path below projects' predates. On temp dirs with the release build of 9829de5: `terminus search --json --project '*' brillig` and the MCP recall_search result both show session_key '11111111-1111-4111-8111-111111111111.jsonl', and `terminus sessions --json --project '*'` shows that key and '11111111-.../subagents/agent-a.jsonl'. THREAT-MODEL.md:240 (Session identity, keeping the forged-sessionId property and naming the same session file in two project folders), 0003-ingest.md:18, 0004-archive-and-block-rows.md:66 and json-shapes.md:73/:88/:315/:543 describe the key below the project folder. The grep from PLAN-4 Task 4 for the old forms ('below `projects`', 'project dir>/', '-code-app/', '-code-verbatim/', '-data-code-app/', '-abs-path-repo/') prints nothing in those five files, and the Task 1 grep prints nothing under crates. CHANGELOG.md's #57 entry sits under [Unreleased] ### Fixed (heading at :35, entry ending :191) and says moving a project folder keeps the key, the repair merges the copies a moved project folder left, and retention no longer deletes a moved session.
+fix: plan 4 changed the key form (b48c8c3) and these docs (a24a04b) after this passed, retest
 
 ### 7. Each regression test fails before the fix and passes after
 expected: Each phase 4 regression test fails on the commit before the fix and passes after it.
 criterion: AC6
 status: pass
 first_pass: pass
-source: verifier
-evidence: At an exported copy of c505fb0 with the tests added: the move test FAILED 'session count moved from 3 to 6', and the planted-store test FAILED 'the session count is 15 where one per transcript is 11'. Both pass at HEAD.
+source: model
+evidence: Plans 1-2's tests, as recorded before: at an exported copy of c505fb0 with the tests added, the move test FAILED 'session count moved from 3 to 6' and the planted-store test FAILED 'the session count is 15 where one per transcript is 11'. Plan 4's three tests: in `git archive 742e352` with tests/pass.rs, tests/session_keys.rs and tests/retention.rs copied in from HEAD unchanged, `cargo test -p terminus-core --all-features --locked` compiled them and all three FAILED: a_moved_project_folder_archives_nothing_twice 'the session count moved from 2 to 4 when the project folder moved' (pass.rs:969); one_pass_merges_the_copies_a_moved_project_folder_left 'the session count is 6 where one per transcript is 3' (session_keys.rs:799); a_moved_claude_dir_keeps_every_session_whose_transcript_is_still_on_disk 'rows of [sessions, session_meta, turns, observations] went missing: the session was deleted while its transcript is still on disk', left [0, 0, 0, 0] right [1, 1, 8, 1] (retention.rs:887). All of them pass at HEAD 9829de5: full suite 979 passed, 0 failed, with the three hook-budget skips test.yml uses.
+fix: plan 4 added three regression tests (ebf7b65, 95411fa) after this passed, retest them at 742e352
 
 ### 8. The landing PR closes #57
 expected: The pull request that lands this phase carries Fixes #57, and #57 closes once it merges. (human-verify: needs GitHub, after landing)
@@ -84,14 +86,14 @@ evidence: a_second_roots_file_never_appends_onto_the_first_roots_session (crates
 ### 10. A move with no symlink lets delete retention remove sessions whose files are still on disk
 expected: behavior wrong - an up-to-date pass never refreshes session_meta.transcript_path. After .claude moves with no symlink left behind, that column names a path that is gone, so retention's delete rule removes a session whose transcript is still on disk under the new root, along with its observation row, and the next pass archives the file a second time from offset 0.
 origin: verifier
-status: fail
+status: pass
 first_pass: fail
-source: verifier
-evidence: crates/terminus-core/src/ingest/mod.rs:515-517: apply returns Outcome::UpToDate before the session_meta upsert at :1390-1397, which is the only place ingest writes transcript_path. crates/terminus-core/src/retention/mod.rs:206 and :248-253: the delete rule asks transcript_is_gone of that stored path. CONTEXT.md D-13 says ingest 'already overwrites [transcript_path] on every pass', which is false for an unchanged file. PLAN-2.md Task 3 (line 89) names this exact hazard, 'an old root's path would read as gone after a move made without a symlink', and fixes it only for merged twins. Probe on temp dirs: run 1 archived one session (8 turns). I then moved the root (mv a b, no symlink), set CLAUDE_CONFIG_DIR=b and [retention] action = "delete", age_days = 30. Run 2 had files_seen 1 and committed 0, and its notes read 'retention deleted 1 session(s), removing 1 observation row(s) with them - the session's archive went too, so no rebuild reproduces them', while b/projects/-tmp-p/11111111-...jsonl (5,656 bytes) was still on disk. Run 3 archived it again from offset 0 with 8 turns added. On a real store the new session_no would differ, leaving label and decision turn ids naming nothing. Not a regression: before this phase the same move archived new copies under new keys and retention deleted the old ones, losing the same rows.
+source: model
+evidence: Release build of 9829de5 on temp dirs. Run 1 with CLAUDE_CONFIG_DIR=a archived one session (8 turns, 1 observation row). Then `mv a b` with no symlink and terminus.toml [retention] action = "delete", age_days = 30 (the fixture's turns are from 2026-08-12). Run 2 with CLAUDE_CONFIG_DIR=b: files_seen 1, committed 0, turns_added 0, notes NULL (no deletion); session 0 keeps its checksum, 8 turns and its observation row, session_meta.transcript_path now names b/projects/-tmp-p/11111111-...jsonl, and `terminus sessions --json --project '*'` lists it with watermark 5656. Run 3: committed 0, turns_added 0, notes NULL, nothing changed. a_moved_claude_dir_keeps_every_session_whose_transcript_is_still_on_disk (crates/terminus-core/tests/retention.rs:817) passes in the full suite (979 passed, 0 failed).
 reported: behavior wrong - an up-to-date pass never refreshes session_meta.transcript_path. After .claude moves with no symlink left behind, that column names a path that is gone, so retention's delete rule removes a session whose transcript is still on disk under the new root, along with its observation row, and the next pass archives the file a second time from offset 0.
 severity: minor
 cause: An up-to-date pass returns at ingest/mod.rs:515-517 before the session_meta upsert at :1397, the only writer of transcript_path, so after a move with no symlink the stored path of every unchanged file names a path that is gone. Retention delete (retention/mod.rs:206) asks transcript_is_gone of that stored path and deletes a session whose file is still on disk under the new root.
-fix: routed to /cad-plan
+fix: plan 4 (95411fa records where an unchanged file was read from), retest
 
 ### 11. John reads each changed doc in RustRover
 expected: THREAT-MODEL.md, docs/design/0003-ingest.md, docs/design/0004-archive-and-block-rows.md, docs/json-shapes.md and the CHANGELOG.md #57 entry read as his own, and say what the code does.
@@ -99,13 +101,22 @@ origin: verifier
 why_human: A judgment only John can make. PLAN-3 Task 1 makes his review of the wording its acceptance, because this is prose he puts his name on. The factual content was checked here against the code.
 status: pass
 first_pass: pass
+source: model
 reported: fine go
+fix: a24a04b changed these docs again after this passed, re-read
+
+### 12. A moved project folder keeps its session count
+expected: After a pass over a transcript tree, renaming a project folder inside projects with no symlink left behind and running ingest again, terminus status shows the same session count, and the second pass commits no file and adds no turn.
+status: pass
+first_pass: pass
+source: model
+evidence: Release build of 9829de5 on temp dirs, a tree holding projects/-tmp-old/11111111-...jsonl and its sidecar 11111111-.../subagents/agent-a.jsonl. Run 1: files_seen 2, committed 2, 11 turns; `terminus status --json` shows 2 sessions and 11 turns, keyed 11111111-...jsonl and 11111111-.../subagents/agent-a.jsonl. After `mv projects/-tmp-old projects/-tmp-new` with no symlink, run 2: files_seen 2, committed 0, turns_added 0, error NULL; status still shows 2 sessions and 11 turns under the same two keys. a_moved_project_folder_archives_nothing_twice (crates/terminus-core/tests/pass.rs:927) passes in the full suite.
 
 ## Summary
 
-total: 11
-passed: 8
-failed: 2
+total: 12
+passed: 11
+failed: 0
 pending: 0
 skipped: 1
 blocked: 0
