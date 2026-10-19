@@ -807,3 +807,105 @@ fn a_pass_records_no_failure_for_an_evicted_session_whose_transcript_grew() {
     let third = tree.pass();
     assert!(third.failures.is_empty(), "{:?}", third.failures);
 }
+
+/// Moving `.claude` with no link left behind must not let the delete rule
+/// remove a session whose transcript is still on disk. The pass over the moved,
+/// unchanged file has nothing to archive, and records where the file is now, so
+/// retention asks about the file that is there rather than the path that is
+/// gone.
+#[test]
+fn a_moved_claude_dir_keeps_every_session_whose_transcript_is_still_on_disk() {
+    let dir = tempfile::tempdir().unwrap();
+    let data_dir = dir.path().join("data");
+    let (a, b) = (dir.path().join("a"), dir.path().join("b"));
+    let name = "11111111-1111-4111-8111-111111111111.jsonl";
+    let project = a.join("projects/-tmp-p");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::copy(
+        testkit::fixture_path("session-basic.jsonl"),
+        project.join(name),
+    )
+    .unwrap();
+    let run = |config: &Config| match pass::run_with(&data_dir, config).unwrap() {
+        pass::PassOutcome::Ran(summary) => summary,
+        pass::PassOutcome::LockHeld => panic!("nothing else holds the lock"),
+    };
+    let conn = || Connection::open(data_dir.join(DB_FILE_NAME)).unwrap();
+    let key = terminus_core::ingest::path_key(&project.join(name)).unwrap();
+    let count = |table: &str| -> i64 {
+        conn()
+            .query_row(
+                &format!("SELECT count(*) FROM {table} WHERE session_key = ?1"),
+                [&key],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+    let tables = ["sessions", "session_meta", "turns", "observations"];
+    let counts = || tables.map(count);
+    let identity = || -> (i64, Vec<u8>) {
+        conn()
+            .query_row(
+                "SELECT s.session_no, m.checksum
+                   FROM sessions s JOIN session_meta m USING (session_key)
+                  WHERE s.session_key = ?1",
+                [&key],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+    };
+    let meta = || -> Vec<rusqlite::types::Value> {
+        let conn = conn();
+        let mut statement = conn
+            .prepare("SELECT * FROM session_meta WHERE session_key = ?1")
+            .unwrap();
+        let columns = statement.column_count();
+        statement
+            .query_row([&key], |r| (0..columns).map(|i| r.get(i)).collect())
+            .unwrap()
+    };
+
+    let first = run(&Config::from_parts(vec![a.clone()], Vec::new()));
+    assert_eq!(first.files_committed, 1, "{:?}", first.failures);
+    let counts_before = counts();
+    let identity_before = identity();
+    assert!(
+        counts_before[..3].iter().all(|n| *n > 0),
+        "{tables:?} {counts_before:?}"
+    );
+
+    std::fs::rename(&a, &b).unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        config_dir.path().join(CONFIG_FILE_NAME),
+        format!("roots = ['{}']\n{DELETE_30}", b.display()),
+    )
+    .unwrap();
+    let delete = Config::load_from(config_dir.path()).unwrap();
+
+    let second = run(&delete);
+    assert_eq!(
+        counts(),
+        counts_before,
+        "rows of {tables:?} went missing: the session was deleted while its \
+         transcript is still on disk"
+    );
+    assert_eq!(identity(), identity_before);
+    let live = b.join("projects/-tmp-p").join(name).canonicalize().unwrap();
+    let stored: String = conn()
+        .query_row(
+            "SELECT transcript_path FROM session_meta WHERE session_key = ?1",
+            [&key],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, live.to_string_lossy());
+    assert_eq!(second.files_committed, 0, "the moved file was committed");
+    assert!(second.failures.is_empty(), "{:?}", second.failures);
+
+    let meta_before = meta();
+    let third = run(&delete);
+    assert_eq!(third.files_committed, 0, "the third pass committed a file");
+    assert_eq!(third.turns_added, 0, "the third pass added turns");
+    assert_eq!(meta(), meta_before, "the third pass changed session_meta");
+}

@@ -42,7 +42,10 @@ pub enum Outcome {
     /// (ING-02).
     LockHeld,
     /// The transcript has no complete record past the stored watermark. No row
-    /// is added anywhere, not even to `runs`.
+    /// is added anywhere, not even to `runs`. The one write it can make is to
+    /// the archived session's `session_meta.transcript_path`, and only when
+    /// the file was read from somewhere else than the path stored there, so a
+    /// moved file's row names where it is now.
     UpToDate,
     /// The transcript is inside a project the config excludes, named with the
     /// directory that excluded it. Nothing was opened and nothing was written.
@@ -265,6 +268,10 @@ pub(crate) struct Prepared {
     /// happens whether or not there are new bytes - a flagged session with
     /// nothing new must still stop being flagged.
     clear_divergence: bool,
+    /// The session is archived and `session_meta.transcript_path` names some
+    /// other path than this one. Only read when there is no `work`, because
+    /// the meta write that comes with `work` stores the path anyway.
+    moved: bool,
     /// `None` when there is no complete record past the watermark.
     work: Option<Work>,
 }
@@ -336,6 +343,7 @@ pub(crate) fn prepare(
             session_key,
             path: path.to_path_buf(),
             clear_divergence: false,
+            moved: existing.moved(path),
             work: None,
         });
     }
@@ -376,6 +384,7 @@ pub(crate) fn prepare(
             session_key,
             path: path.to_path_buf(),
             clear_divergence,
+            moved: existing.moved(path),
             work: None,
         });
     }
@@ -471,6 +480,7 @@ pub(crate) fn prepare(
     Ok(Prepared {
         path: path.to_path_buf(),
         clear_divergence,
+        moved: false,
         work: Some(Work {
             stream_base,
             existing_session_no: existing.session.as_ref().map(|s| s.session_no),
@@ -506,6 +516,7 @@ pub(crate) fn apply(
         session_key,
         path,
         clear_divergence,
+        moved,
         work,
     } = prepared;
 
@@ -516,6 +527,15 @@ pub(crate) fn apply(
     }
 
     let Some(work) = work else {
+        // Nothing new, but the file may have moved, as when `.claude` moves
+        // with no link left behind. Retention asks whether the stored path is
+        // gone, so it has to name the file that is still on disk.
+        if moved {
+            store.conn().execute(
+                "UPDATE session_meta SET transcript_path = ?2 WHERE session_key = ?1",
+                rusqlite::params![session_key, path.to_string_lossy()],
+            )?;
+        }
         return Ok(Outcome::UpToDate);
     };
     let Work {
@@ -916,6 +936,10 @@ pub(crate) struct Existing {
     /// `session_meta.block_size` as stored. Checked where it is used, so a bad
     /// value fails only a pass that has something to append.
     block_size: Option<i64>,
+    /// `session_meta.transcript_path` as stored: where the file was last read
+    /// from. Off the same row as the flags, so knowing whether it moved costs
+    /// no extra query.
+    transcript_path: Option<String>,
     session: Option<ExistingSession>,
 }
 
@@ -939,7 +963,15 @@ impl Existing {
         // All three flags off the one `session_meta` row rather than three
         // round trips: a pass reads this for every one of two thousand
         // transcripts.
-        type MetaFlags = (bool, bool, bool, i64, Option<String>, Option<i64>);
+        type MetaFlags = (
+            bool,
+            bool,
+            bool,
+            i64,
+            Option<String>,
+            Option<i64>,
+            Option<String>,
+        );
         let (
             agent_meta_stored,
             diverged,
@@ -947,11 +979,12 @@ impl Existing {
             uncompressed_len,
             stored_capture_mode,
             block_size,
+            transcript_path,
         ): MetaFlags = conn
             .query_row(
                 "SELECT agent_meta IS NOT NULL, coalesce(transcript_diverged, 0) <> 0,
                         coalesce(is_evicted, 0) <> 0, uncompressed_len, capture_mode,
-                        block_size
+                        block_size, transcript_path
                  FROM session_meta WHERE session_key = ?1",
                 [session_key],
                 |r| {
@@ -962,11 +995,12 @@ impl Existing {
                         r.get(3)?,
                         r.get(4)?,
                         r.get(5)?,
+                        r.get(6)?,
                     ))
                 },
             )
             .optional()?
-            .unwrap_or((false, false, false, 0, None, None));
+            .unwrap_or((false, false, false, 0, None, None, None));
         let uncompressed_len = uncompressed_len.max(0) as u64;
         let turn_count: i64 = conn.query_row(
             "SELECT count(*) FROM turns WHERE session_key = ?1",
@@ -1048,8 +1082,15 @@ impl Existing {
             uncompressed_len,
             stored_capture_mode,
             block_size,
+            transcript_path,
             session,
         })
+    }
+
+    /// Is this an archived session whose stored path is not `path`? Compared
+    /// the way `write_session_meta` writes the path.
+    fn moved(&self, path: &Path) -> bool {
+        self.session.is_some() && self.transcript_path.as_deref() != Some(&*path.to_string_lossy())
     }
 }
 
