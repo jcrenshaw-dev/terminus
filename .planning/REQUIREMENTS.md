@@ -13,30 +13,21 @@ names, which holds the detail and the code references behind it.
 
 ### Injection (INJ)
 
-- **INJ-09**: Text the `UserPromptSubmit` hook and the `SessionStart` brief inject never hands archived tool output to the model as the user's own history: tool_result and `toolUseResult` turns are either left out of injected excerpts or labelled with their record type and tool, and the quoted block sits inside a delimiter the excerpt cannot close, under a header that says it is quoted history, not instructions. (#60)
 
 ### Privacy (PRIV)
 
-- **PRIV-06**: With `[privacy] redact_recall` on, a secret stored as a string value under a secret-named key in a `tool_use` input, a `toolUseResult` or an attachment is redacted in `recall_search` excerpts, `recall_context` text and injected text, as `recall_get` already redacts it. (#62)
-- **PRIV-07**: With `[privacy] redact_recall` on, a bare `sk-` provider token in prose is redacted. (#5)
-- **PRIV-08**: Redaction never panics on a multi-byte character directly before a `NAME=` run, and recall, the hooks and the read commands return normally on a turn that holds one. (#61)
-- **PRIV-09**: The egress test proves each planted shape is replaced by its own rule's marker, in the turn that holds it. (#4)
 
 ### Install (INST)
 
-- **INST-15**: Install and uninstall never hold `settings.json`'s contents in a file wider than owner-only: every temporary, the rewrite and the backup alike, is created 0600, and a `settings.json` Terminus creates is 0600. (#64)
 
 ### Archive (STOR)
 
-- **STOR-12**: `terminus data move` refuses a destination that is a symlink, is owned by another uid, has group or world bits, or cannot be listed, and checks the destination again after the confirmation. Whether `Store::open` also refuses a store another uid owns, which reverses the open's deliberate skip of a failed chmod, is settled at context. (#59)
 
 ### Ingest (ING)
 
-- **ING-13**: A session's key does not change when its `.claude` directory moves or is reached through a symlink, so a transcript is not archived a second time, and an archive that already holds sessions under both an old and a new path is repaired without losing a session that exists only in the archive. (#57)
 
 ### Recall (RCL)
 
-- **RCL-12**: Human-mode output of `terminus search`, `terminus show` and `terminus observations` replaces C0 control characters other than tab and newline, DEL, and C1 controls in archived text with a visible escape, except the archived record `terminus show <id>` prints, which stays byte for byte. `--json` output is unchanged. (#63, #65, #66)
 
 ## Shipped
 
@@ -128,6 +119,15 @@ table).
 | DOC-02 (User docs beside the README cover installing (the one-line install, a local build, updating by rerunning `install.sh`, and uninstalling), every command with its options, and every `terminus.toml` setting with its key, default and effect, and name no command, option, path or key the code does not have.) | 9 | Complete | v0.0.1 |
 | DOC-03 (A release page under `docs/` explains how a release is built in CI and signed on the owner's machine, what `install.sh` checks before it installs anything, which key it pins, what the binary never does (no network connection, no model call, no API key), and how to verify a downloaded release by hand with `ssh-keygen -Y verify`.) | 9 | Complete | v0.0.1 |
 | DOC-04 (Design docs explain how Terminus works as it stands, for an engineer: an overview with one diagram of the whole system, then one doc per part (hooks, ingest, the archive and its block rows, search, recall through the MCP server, injection, install and release), each with at least one Mermaid diagram that GitHub renders.) | 11 | Complete | v0.0.1 |
+| INJ-09 (Text the `UserPromptSubmit` hook and the `SessionStart` brief inject never hands archived tool output to the model as the user's own history: tool_result and `toolUseResult` turns are either left out of injected excerpts or labelled with their record type and tool, and the quoted block sits inside a delimiter the excerpt cannot close, under a header that says it is quoted history, not instructions. (#60)) | 1 | Complete | hardin |
+| PRIV-08 (Redaction never panics on a multi-byte character directly before a `NAME=` run, and recall, the hooks and the read commands return normally on a turn that holds one. (#61)) | 2 | Complete | hardin |
+| PRIV-07 (With `[privacy] redact_recall` on, a bare `sk-` provider token in prose is redacted. (#5)) | 2 | Complete | hardin |
+| PRIV-06 (With `[privacy] redact_recall` on, a secret stored as a string value under a secret-named key in a `tool_use` input, a `toolUseResult` or an attachment is redacted in `recall_search` excerpts, `recall_context` text and injected text, as `recall_get` already redacts it. (#62)) | 2 | Complete | hardin |
+| PRIV-09 (The egress test proves each planted shape is replaced by its own rule's marker, in the turn that holds it. (#4)) | 2 | Complete | hardin |
+| INST-15 (Install and uninstall never hold `settings.json`'s contents in a file wider than owner-only: every temporary, the rewrite and the backup alike, is created 0600, and a `settings.json` Terminus creates is 0600. (#64)) | 3 | Complete | hardin |
+| STOR-12 (`terminus data move` refuses a destination that is a symlink, is owned by another uid, has group or world bits, or cannot be listed, and checks the destination again after the confirmation. Whether `Store::open` also refuses a store another uid owns, which reverses the open's deliberate skip of a failed chmod, is settled at context. (#59)) | 3 | Complete | hardin |
+| ING-13 (A session's key does not change when its `.claude` directory moves or is reached through a symlink, so a transcript is not archived a second time, and an archive that already holds sessions under both an old and a new path is repaired without losing a session that exists only in the archive. (#57)) | 4 | Complete | hardin |
+| RCL-12 (Human-mode output of `terminus search`, `terminus show` and `terminus observations` replaces C0 control characters other than tab and newline, DEL, and C1 controls in archived text with a visible escape, except the archived record `terminus show <id>` prints, which stays byte for byte. `--json` output is unchanged. (#63, #65, #66)) | 5 | Complete | hardin |
 
 ## v2 Requirements
 
@@ -172,15 +172,6 @@ Explicit exclusions. The reason prevents scope creep later.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| INJ-09 | Phase 1 | Complete |
-| PRIV-08 | Phase 2 | Complete |
-| PRIV-07 | Phase 2 | Complete |
-| PRIV-06 | Phase 2 | Complete |
-| PRIV-09 | Phase 2 | Complete |
-| INST-15 | Phase 3 | Complete |
-| STOR-12 | Phase 3 | Complete |
-| ING-13 | Phase 4 | Complete |
-| RCL-12 | Phase 5 | Complete |
 
 Bare headers — `/cad-plan` seeds a row per requirement when its phase is planned.
 
