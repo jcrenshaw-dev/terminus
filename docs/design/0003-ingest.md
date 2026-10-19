@@ -15,8 +15,8 @@ It takes work from the hook in [0002: Hooks](0002-hooks.md), which starts `termi
 | Pass | One run of ingest over every configured transcript root, from taking `LOCK` to the `runs` row, then the snapshot step. |
 | Transcript | A file discovery accepts: a `<uuid>.jsonl` directly inside a project directory, or an `agent-*.jsonl` anywhere below one. |
 | Sidecar | A subagent's transcript, an `agent-*.jsonl` under `<project>/<sessionId>/subagents/`, at any depth below that. |
-| Session key | The canonical path of a transcript file. Each file is one session, keyed on the file and never on the `sessionId` its records carry, because a sidecar's records carry its parent's id. |
-| Watermark | How many bytes of a transcript file the archive has taken, stored per session key in `watermarks`. It always sits just past the last `\n` the pass read, so a line still being written is not archived until it is complete. |
+| Session key | A transcript's path below the `projects` folder: `<project dir>/<uuid>.jsonl`, or `<project dir>/<sessionId>/subagents/[workflows/wf_*/]agent-*.jsonl` for a sidecar. `ingest::path_key` reads it off the shape of the path, never by stripping a configured root, so a transcript reached through a moved or symlinked `.claude` keeps its key. A transcript that is a symlink takes the key of the file it points at. A path outside those two shapes, such as a file under no `projects` folder, keeps its canonical path as its key. Each file is one session, keyed on its path before any byte is read and never on the `sessionId` its records carry, because a sidecar's records carry its parent's id. The absolute path the file was last read from is `session_meta.transcript_path`. |
+| Watermark | How many bytes of a transcript file the archive has taken, stored in `watermarks` under the session key, in the column named `transcript_path`. It always sits just past the last `\n` the pass read, so a line still being written is not archived until it is complete. |
 | Capture mode | How much of each record the archive stores, from `[capture] mode`: `full`, `lean` or `minimal`. Only `full` stores the transcript byte for byte. |
 | Elision | What `lean` and `minimal` do to a record: the top-level `toolUseResult` or `attachment` value is replaced with a `terminusElided` mark giving its size. Nothing else in the record changes. |
 | Final | A session whose last turn is more than `IDLE_HOURS`, 6 hours, old. `feedback::outcomes` sets `session_meta.is_final`, and a final session gets its labels and its observation. |
@@ -32,7 +32,7 @@ The pass and every step in it live in the library crate, `crates/terminus-core`.
 | [`crates/terminus-core/src/ingest/pass.rs`](../../crates/terminus-core/src/ingest/pass.rs) | The pass over the whole tree, in the order in section 6, the `runs` row, and the snapshot step. |
 | [`crates/terminus-core/src/ingest/lock.rs`](../../crates/terminus-core/src/ingest/lock.rs) | `LOCK`: an OS lock taken with `File::try_lock`, which fails at once rather than waiting, and which the OS releases when the process dies. |
 | [`crates/terminus-core/src/ingest/backfill.rs`](../../crates/terminus-core/src/ingest/backfill.rs) | The same walk spread across `std::thread` workers, with one thread owning the SQLite connection and making every write. |
-| [`crates/terminus-core/src/recover.rs`](../../crates/terminus-core/src/recover.rs) | Recovery at the top of every pass: rebuilds the derived tables when the store's derived schema differs from the build's, and sweeps the watermarks. |
+| [`crates/terminus-core/src/recover.rs`](../../crates/terminus-core/src/recover.rs) | Recovery at the top of every pass: re-keys every session whose stored key is still an absolute path, merges each proven twin into the oldest session of its group, rebuilds the derived tables when the store's derived schema differs from the build's, and sweeps the watermarks. |
 | [`crates/terminus-core/src/discover.rs`](../../crates/terminus-core/src/discover.rs) | Walks each root's `projects` folder and returns every transcript, sorted, without opening any of them. Never lists an excluded project's directory. |
 | [`crates/terminus-core/src/parse/mod.rs`](../../crates/terminus-core/src/parse/mod.rs) | Splits a byte range on `\n`, never trimming, into records, and finds the resume offset just past the last `\n`. |
 | [`crates/terminus-core/src/parse/record.rs`](../../crates/terminus-core/src/parse/record.rs) | Classifies one line. A record is a turn when it has both `uuid` and `timestamp` and its type is `user`, `assistant`, `attachment` or `system`. Every other line is kept in the bytes and makes no turn. |
@@ -89,14 +89,14 @@ Options are in [commands.md](../commands.md#archiving), and the `--json` fields 
 ### `terminus ingest <path.jsonl>`
 
 - **Inputs:** one transcript path.
-- **Outputs:** canonicalizes the path, takes `LOCK`, runs `recover::recover`, and archives that one file in one transaction. When the file has new bytes, that transaction also writes the file's own `runs` row. It does not drain decisions, close sessions, label, observe, apply retention or take a snapshot. Those are steps of the whole-tree pass.
+- **Outputs:** canonicalizes the path, takes `LOCK`, runs `recover::recover`, and archives that one file in one transaction. When the file has new bytes, that transaction also writes the file's own `runs` row. It does not drain decisions, close sessions, label, observe, apply retention or take a snapshot. Those are steps of the whole-tree pass. The one drain it does is recovery's: when the re-key has work, recovery drains the decision files first, as in step 2 of the pass.
 - **Refusals:** a file inside an excluded project is not opened. The command names the project on stderr and exits 0. A held `LOCK` exits 0.
 
 ### `terminus backfill`
 
 - **Inputs:** the same roots, transcripts and store as a pass.
 - **Outputs:** first an estimate, read-only and without creating a store: how many transcripts there are, how many bytes sit past their watermarks, and a time at a measured rate for `WORKERS`, 4, workers. Then it starts `terminus backfill --work` detached through the double fork in [0002: Hooks](0002-hooks.md) and returns. `terminus install` starts it the same way, from the stable path.
-- **The work:** the detached process takes `LOCK`, runs `recover::recover` and `discover::discover`, then walks the transcripts in rounds of `QUEUE_PER_WORKER`, 2, files per worker. The `std::thread` workers each read a file past its watermark, scan it, elide it and compress it into block rows. The one writer thread owns the SQLite connection, applies each prepared file in discovery order, one transaction per file, and writes the one `runs` row. A backfill and a sequential pass over the same tree reach the same archive: the same rows, checksums and watermarks, and the same bytes in every block. Only the `runs` row each writes differs. A backfill does not drain decisions, label, observe, apply retention or take a snapshot; the next pass a hook starts does.
+- **The work:** the detached process takes `LOCK`, runs `recover::recover` and `discover::discover`, then walks the transcripts in rounds of `QUEUE_PER_WORKER`, 2, files per worker. The `std::thread` workers each read a file past its watermark, scan it, elide it and compress it into block rows. The one writer thread owns the SQLite connection, applies each prepared file in discovery order, one transaction per file, and writes the one `runs` row. A backfill and a sequential pass over the same tree reach the same archive: the same rows, checksums and watermarks, and the same bytes in every block. Only the `runs` row each writes differs. A backfill does not drain decisions, label, observe, apply retention or take a snapshot; the next pass a hook starts does. The one drain it does is recovery's: when the re-key has work, recovery drains the decision files first, as in step 2 of the pass.
 - **Refusals:** a held `LOCK` exits the working process 0. A hook that fires during a backfill finds `LOCK` held and exits 0. `--work` is left out of the usage text, and typing it runs the pass in the foreground.
 
 ### `terminus retention --dry-run`
@@ -130,7 +130,14 @@ Options are in [commands.md](../commands.md#archiving), and the `--json` fields 
 The pass in [`crates/terminus-core/src/ingest/pass.rs`](../../crates/terminus-core/src/ingest/pass.rs), in order:
 
 1. **Try-lock `LOCK`.** It fails at once if another process holds it, and then the pass exits 0 having written nothing. The lock is taken before the store is opened, so a contended run costs one file open and one system call.
-2. **`recover::recover`.** Opens the store. When the `derived_schema` in `meta` differs from `DERIVED_SCHEMA`, the build's, it rebuilds every derived table from the block rows first, as `terminus reindex` does. Then it sweeps the watermarks: a watermark past the bytes a `full` session's archive holds is lowered to that length, so the next read takes the gap again, and a non-zero watermark for a path with no session is removed. It touches no archived byte.
+2. **`recover::recover`.** Opens the store, then re-keys every session whose stored key is still an absolute path, in one transaction, before anything is rebuilt or read. A store with no such key reads only that range of the `sessions` primary key and writes nothing. When there is one:
+   - The decision files waiting under `decisions/` are drained into `decisions` first, because a merge rewrites the turn ids they name. A drain that fails is reported the same way as a twin that is not merged, below, and the re-key goes on.
+   - A session that is the only one reducing to its key is re-keyed in place. The key moves in every table that holds it, and its watermark moves with it. Its block rows, `session_no` and turn ids do not change, whether or not its transcript is still on disk.
+   - Sessions that reduce to one key are twins. Each twin, in `session_no` order, is tested against the oldest session's stream as it stands after the earlier merges, and is merged into it only when one stream is provably a prefix of the other: every full block hash of the shorter stream matches, and its last, partial block is the start of the longer stream's block at that place. The oldest keeps its `session_no`. When the twin's stream is longer, its block rows move to the oldest as they are, never recompressed, with the `session_meta` columns that describe its stream and with its watermark, and the turns past the oldest's old end are derived. Every `session_meta` column the oldest has null takes the twin's value, and `transcript_path` is the twin's. Labels and decision turn ids that named the twin's turns are pointed at the same turns in the oldest, and the twin is deleted.
+   - A twin that fails the test is kept as it is, and a pass or a backfill names it, with the reason, in its `runs` row's `error`, on every run until it merges. The oldest session takes the new key only once it has merged a twin, and only when no twin it could not merge already holds that key.
+   - A sidecar's `parent_session_key` that is still an absolute path is reduced the same way.
+
+   Then, when the `derived_schema` in `meta` differs from `DERIVED_SCHEMA`, the build's, it rebuilds every derived table from the block rows, as `terminus reindex` does. That comes after the re-key, so a twin about to be deleted is never rebuilt. Last it sweeps the watermarks: a watermark past the bytes a `full` session's archive holds is lowered to that length, so the next read takes the gap again, and a non-zero watermark for a path with no session is removed. No archived byte is lost: a session is re-keyed in place, and a twin is deleted only after the oldest session holds every byte it held. A re-key that fails stops the run, because ingesting under the new keys over a store still holding the old ones would archive every session again.
 3. **`feedback::drain`.** First deletes `.decision-*.tmp` files under `decisions/` and `.inject-*.tmp` files under `injection/` that are more than 10 minutes old, which are writes the hook abandoned at its deadline. Then reads every `decisions/*.json`, inserts the decisions in one transaction, and deletes the files. An empty `.json` less than 10 minutes old is a write still in flight and is left for the next pass.
 4. **`discover::discover`.** Walks the `projects` folder of each root, in the configured order, at any depth and including names that start with a dot. It accepts `<uuid>.jsonl` directly inside a project directory and `agent-*.jsonl` at any depth below one, which is where the `subagents/agent-*.jsonl` sidecars sit, and nothing else, by name alone. A project directory whose path is in `exclude` is never listed, so none of its files is opened.
 5. **The walk.** Each transcript, in sorted order, in a transaction of its own. Figure 2 shows one file. A file that fails is recorded with its path and skipped, and the walk goes on, so one damaged transcript cannot stop the rest.
@@ -146,7 +153,7 @@ Steps 3 and 6 to 8 never fail the pass: what they could not do becomes a line in
 flowchart TD
   S["terminus ingest"] --> L{"try-lock LOCK"}
   L -->|"held by another process"| X["exit 0, nothing written"]
-  L -->|"acquired"| R["recover::recover: rebuild derived tables if DERIVED_SCHEMA differs, sweep watermarks"]
+  L -->|"acquired"| R["recover::recover: re-key absolute keys, merge proven twins into the oldest, rebuild derived tables if DERIVED_SCHEMA differs, sweep watermarks"]
   R --> D["feedback::drain: decisions/*.json into decisions"]
   D --> F["discover::discover: every transcript, excluded projects never opened"]
   F --> W["the walk: one transaction per file"]
@@ -209,15 +216,19 @@ stateDiagram-v2
   [*] --> Unread: discovery finds a new transcript
   Unread --> Current: a file transaction commits, watermark after the last newline
   Current --> Current: new complete records, the next transaction moves it on
+  Current --> Current: recovery re-keys the session, and the watermark moves to the new key
+  Current --> Current: recovery merges a longer twin into the session, which takes the watermark of the twin
   Current --> Behind: recovery finds it past the archived length
   Behind --> Current: the next pass reads the gap again
   Current --> Diverged: the file is shorter than the watermark or rewritten
   Diverged --> Current: the file matches the archive again
   Current --> Frozen: retention evicts the session
-  Current --> [*]: retention deletes the session, recovery removes the watermark
+  Current --> [*]: retention deletes the session and its watermark
+  Current --> [*]: recovery merges the session into an older twin, deleting it and its watermark
+  Current --> [*]: recovery finds no archived session for it and removes it
 ```
 
-*Figure 3. The states a session's watermark passes through. It moves only inside the transaction that archives the bytes it covers, and recovery only lowers or removes it.*
+*Figure 3. The states a session's watermark passes through. Ingest moves it only inside the transaction that archives the bytes it covers. Recovery lowers one past the archived length, removes one that names no archived session, moves one to its session's new key, and gives the oldest session of a merged group the longer twin's watermark, which can raise it. The re-key and the merge commit each watermark in the same transaction as the key and block rows it describes.*
 
 The sweep that finds a watermark behind applies only to sessions captured under `full`. Under `lean` and `minimal` a watermark is a file offset and the archived length is a count of stored bytes, which are smaller, so the comparison means nothing there. The watermark and the bytes still commit in one transaction under every mode.
 
