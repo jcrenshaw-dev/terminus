@@ -918,3 +918,64 @@ fn a_moved_claude_dir_behind_a_symlink_archives_nothing_twice() {
         "one session per transcript file, not one per path: {keys_before:?}"
     );
 }
+
+/// Moving a project folder inside `projects`, with no symlink left behind,
+/// changes no session key, because the key is the path below the project
+/// folder. The second pass finds every session it archived and archives
+/// nothing again.
+#[test]
+fn a_moved_project_folder_archives_nothing_twice() {
+    let bench = bench();
+    let session = "66666666-6666-4666-8666-666666666666";
+    let from = "-code-cadence";
+    let to = "-code-cadence-v3-9-1";
+    bench.place(from, &format!("{session}.jsonl"), "session-basic.jsonl");
+    bench.place(
+        from,
+        &format!("{session}/subagents/agent-a.jsonl"),
+        "subagents/agent-alpha.jsonl",
+    );
+
+    let config = Config::from_parts(vec![bench.claude_dir.clone()], Vec::new());
+    let run = || match pass::run_with(&bench.data_dir, &config).unwrap() {
+        PassOutcome::Ran(summary) => summary,
+        PassOutcome::LockHeld => panic!("nothing else holds the lock"),
+    };
+    let observe = || {
+        let conn = Connection::open(bench.data_dir.join(DB_FILE_NAME)).unwrap();
+        let counted = terminus_core::config::visible::counts(&conn, &config)
+            .unwrap()
+            .sessions;
+        let mut keys: Vec<String> = conn
+            .prepare("SELECT session_key FROM sessions")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        keys.sort();
+        (counted, keys)
+    };
+
+    let first = run();
+    assert!(first.failures.is_empty(), "{:?}", first.failures);
+    let (count_before, keys_before) = observe();
+    assert_eq!(count_before, 2, "{keys_before:?}");
+
+    std::fs::rename(bench.projects().join(from), bench.projects().join(to)).unwrap();
+
+    let second = run();
+    let (count_after, keys_after) = observe();
+    assert_eq!(
+        count_after, count_before,
+        "the session count moved from {count_before} to {count_after} when the project \
+         folder moved"
+    );
+    assert_eq!(keys_after, keys_before);
+    assert!(second.failures.is_empty(), "{:?}", second.failures);
+    assert_eq!(
+        second.files_committed, 0,
+        "the second pass committed a file"
+    );
+    assert_eq!(second.turns_added, 0, "the second pass added turns");
+}

@@ -709,3 +709,147 @@ fn recovery_with_nothing_to_repair_leaves_decision_files_waiting() {
     assert!(!report.repaired(), "{report:?}");
     assert_eq!(files(), 1, "recovery moved a decision file");
 }
+
+/// The copies a moved project folder leaves: each transcript archived under an
+/// absolute key in one project folder of an old `.claude` that is gone, and
+/// again in a second project folder of the tree the pass walks, where the file
+/// is on disk. The gone copy was archived first, so it has the lower number.
+/// One pass leaves one session per transcript, holding the live file.
+#[test]
+fn one_pass_merges_the_copies_a_moved_project_folder_left() {
+    let mut bench = Bench::new();
+    let basic = testkit::fixture_bytes("session-basic.jsonl");
+    let alpha = testkit::fixture_bytes("subagents/agent-alpha.jsonl");
+    let head = lines("session-basic.jsonl", 0..10);
+    let (from, to) = ("-code-cadence", "-code-cadence-v3-9-1");
+    let workflow = "subagents/workflows/wf_c61a181c-c13/agent-w.jsonl";
+
+    let identical = [
+        bench.gone("old-home", &format!("{from}/{U1}.jsonl")),
+        bench.place(&format!("{to}/{U1}.jsonl"), &basic),
+    ];
+    bench.plant(&basic, identical[0].clone());
+    bench.plant(&basic, identical[1].clone());
+
+    // The gone copy is the shorter one, and the live file extends it.
+    let prefix = [
+        bench.gone("old-home", &format!("{from}/{U2}.jsonl")),
+        bench.place(&format!("{to}/{U2}.jsonl"), &basic),
+    ];
+    bench.plant(&head, prefix[0].clone());
+    bench.plant(&basic, prefix[1].clone());
+
+    let sidecar = [
+        bench.gone("old-home", &format!("{from}/{U3}/{workflow}")),
+        bench.place(&format!("{to}/{U3}/{workflow}"), &alpha),
+    ];
+    bench.plant(&alpha, sidecar[0].clone());
+    bench.plant(&alpha, sidecar[1].clone());
+    let parents = [
+        bench.gone("old-home", &format!("{from}/{U3}.jsonl")),
+        bench
+            .claude_dir
+            .join(format!("projects/{to}/{U3}.jsonl"))
+            .display()
+            .to_string(),
+    ];
+
+    bench.key_planted();
+    {
+        let conn = bench.conn();
+        for (key, parent) in sidecar.iter().zip(&parents) {
+            conn.execute(
+                "UPDATE session_meta SET parent_session_key = ?2 WHERE session_key = ?1",
+                [key, parent],
+            )
+            .unwrap();
+        }
+        // Small blocks, so the prefix pair has full blocks to compare.
+        for key in &prefix {
+            testkit::recut(&conn, key, 1024);
+        }
+    }
+
+    let groups = [&identical, &prefix, &sidecar];
+    let (oldest, live): (Vec<i64>, Vec<String>) = {
+        let conn = bench.conn();
+        groups
+            .iter()
+            .map(|group| {
+                (
+                    session_no(&conn, &group[0]).min(session_no(&conn, &group[1])),
+                    ingest::path_key(std::path::Path::new(&group[1])).unwrap(),
+                )
+            })
+            .unzip()
+    };
+    for group in groups {
+        assert!(
+            session_no(&bench.conn(), &group[0]) < session_no(&bench.conn(), &group[1]),
+            "the gone copy was planted first"
+        );
+    }
+
+    bench.pass();
+
+    let conn = bench.conn();
+    let found = keys(&conn);
+    let mut expected = live.clone();
+    expected.sort();
+    assert_eq!(
+        found.len(),
+        expected.len(),
+        "the session count is {} where one per transcript is {}: {found:#?}",
+        found.len(),
+        expected.len()
+    );
+    assert_eq!(found, expected, "one session per transcript");
+    for (key, oldest) in live.iter().zip(&oldest) {
+        assert_eq!(session_no(&conn, key), *oldest, "{key}");
+    }
+
+    // The prefix pair's survivor holds the live file, byte for byte.
+    let survivor = archived(&conn, &live[1]);
+    assert_eq!(testkit::stream(&conn, &live[1]).unwrap(), basic);
+    assert_eq!(survivor.watermark, Some(basic.len() as i64));
+    assert_eq!(survivor.transcript_path, prefix[1]);
+
+    let parent: String = conn
+        .query_row(
+            "SELECT parent_session_key FROM session_meta WHERE session_key = ?1",
+            [&live[2]],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(parent, format!("{U3}.jsonl"));
+
+    assert_eq!(
+        last_error(&conn).as_deref(),
+        Some(
+            "re-keyed 3 session(s) to their path below the project folder and merged 3 twin(s) \
+             into the older session"
+        )
+    );
+    let report = terminus_core::verify::verify(&Store::open(&bench.data_dir).unwrap()).unwrap();
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+    assert_eq!(foreign_key_violations(&conn), Vec::<String>::new());
+
+    let turns = |conn: &Connection| -> i64 {
+        conn.query_row("SELECT count(*) FROM turns", [], |r| r.get(0))
+            .unwrap()
+    };
+    let turns_before = turns(&conn);
+    let config = Config::from_parts(vec![bench.claude_dir.clone()], vec![]);
+    let second = match pass::run_with(&bench.data_dir, &config).unwrap() {
+        PassOutcome::Ran(summary) => summary,
+        PassOutcome::LockHeld => panic!("nothing else holds the lock"),
+    };
+    assert_eq!(
+        second.files_committed, 0,
+        "the second pass committed a file"
+    );
+    assert_eq!(second.turns_added, 0, "the second pass added turns");
+    assert!(second.failures.is_empty(), "{:?}", second.failures);
+    assert_eq!(turns(&conn), turns_before);
+    assert_eq!(last_error(&conn), None, "the second pass reported an error");
+}
