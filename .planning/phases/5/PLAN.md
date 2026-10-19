@@ -1,0 +1,91 @@
+---
+phase: 5
+plan: 1
+requirements: [RCL-12]
+files:
+  - crates/terminus/src/escape.rs
+  - crates/terminus/src/lib.rs
+  - crates/terminus/src/cmd/search.rs
+  - crates/terminus/src/cmd/show.rs
+  - crates/terminus/tests/recall_cli.rs
+  - crates/terminus/src/cmd/observations.rs
+  - crates/terminus/tests/observations.rs
+  - THREAT-MODEL.md
+  - docs/commands.md
+  - CHANGELOG.md
+---
+
+# Phase 5: Terminal output escaping - Plan
+
+## Goal
+
+The human output of `terminus search`, the header and window of `terminus show`, and `terminus observations` no longer writes control characters from archived text to the terminal. One shared helper in the `terminus` binary prints each one as a visible `\u00XX` escape, and `--json` and the `show` record body stay byte for byte what they were.
+
+## Must be true when done
+
+- After a tool result holding ESC and BEL is archived, `terminus search` prints `\u001b` and `\u0007` in the excerpt where they were, and its stdout holds no 0x1b or 0x07 byte, with or without `--raw`.
+- `terminus show <id> --before N --after N` prints its header and every window line with controls escaped, including a control planted in the turn's time or a tool's name, with or without `--raw`. The record body it prints is still the archived line, byte for byte.
+- `terminus observations` prints every fact with controls escaped, while the stored observation document and `observations --json` still hold the raw characters.
+- Every code point from U+0000 to U+001F except tab and newline, and from U+007F to U+009F, prints as its lowercase `\u00XX` escape. Tab, newline, U+200B and U+202E print unchanged.
+- The `--json` output of all three commands is byte-identical to before the change, so its values still decode to the raw characters.
+- Each regression test fails with the fix taken out and passes with it in.
+- `THREAT-MODEL.md`, `docs/commands.md` and `CHANGELOG.md` describe the escape, the DEL and C1 the `show` body still passes, and `--json` passing DEL and C1 through.
+
+## Context
+
+- Locked in `phases/5/CONTEXT.md`. The `show` body stays byte for byte (D-01). The helper lives in the binary crate and runs after core has redacted, flattened and windowed, so nothing in `terminus-core` changes, nor do `--json`, the MCP tools, the hooks or the recall golden (D-02, D-06). Nothing is stripped at ingest (D-03). `--raw` still only lifts redaction (D-07). There is no terminal-only switch and no new crate (D-10).
+- Out of scope (D-05): `sessions`, `usage`, `status`, `export`, `doctor`, and the scope reasons printed on stderr.
+- Follow `crates/terminus/src/out.rs` for how a small binary-side module is written and documented. All prose the executor writes (comments, docs, commit messages) follows `~/.claude/john-voice.md`, read from the file.
+
+## Tasks
+
+### Task 1: Add the shared escape helper
+
+- **Files:** crates/terminus/src/escape.rs, crates/terminus/src/lib.rs
+- **Action:** Create `crates/terminus/src/escape.rs` as a sibling of `out.rs`, and declare it in `lib.rs` beside `mod out;` and `mod cmd;` (D-02). I picked the file name. The module holds one crate-visible function that takes a `&str` and returns it with every escaped code point replaced by its visible form. The escaped set is exactly `char::is_control` minus U+0009 and U+000A, which is U+0000 to U+001F plus U+007F to U+009F, 63 code points in all (D-08). CR, VT, FF and NEL are in the set. Format characters such as U+200B and U+202E are not, and neither is the backslash. The visible form is the JSON spelling: a backslash, a `u`, and four lowercase hex digits, as in `\u001b`, `\u0007`, `\u007f`, `\u009b` (D-09). Do not use `str::escape_debug`, `\x1b`, caret notation or Control Pictures, for the reasons D-09 gives. Use std alone, and escape the same way whatever stdout is, with no terminal check (D-10). Text holding no escaped code point must come back unchanged. A literal backslash-u sequence already in the input passes through as it is, which is the same ambiguity the archived JSON line has. Write the module doc and the function doc as this codebase's design record: what the set is and why CR is in it, and why the JSON spelling was chosen. Cite D-08 and D-09 the way `out.rs` and the command modules cite their decisions. Put the unit tests in the module's own `#[cfg(test)]` block. Nothing calls the function until Task 2, so the non-test build reports it as unused. Do not silence that warning with an allow attribute, because Task 2 removes the cause.
+- **Verify:** `cargo test -p terminus --lib escape::` passes. Its tests walk every `char` from U+0000 to U+10FFFF and assert that a character is changed exactly when it is a control other than tab and newline, that exactly 63 code points are changed, and that each one comes out as a backslash, a `u` and four lowercase hex digits (checked by name for U+001B, U+0007, U+000D, U+007F, U+0085 and U+009B). They also assert that tab, newline, U+200B, U+202E and a backslash come out unchanged. `git diff --stat -- Cargo.toml Cargo.lock crates/terminus/Cargo.toml` prints nothing.
+
+### Task 2: Escape archived text in the recall commands' terminal output
+
+- **Files:** crates/terminus/src/cmd/search.rs, crates/terminus/src/cmd/show.rs, crates/terminus/tests/recall_cli.rs
+- **Action:** Route every archived string that `search` and `show` print in human mode through the Task 1 helper (D-04).
+  - **`search::run`, the human loop:** the day `day()` cuts from `hit.ts`, the file name `session_of` returns, `hit.project` when present, and `hit.excerpt`. Escape after the day cut and after core's 240-character excerpt cut. An excerpt holding a control prints longer than `EXCERPT_CHARS`, and that is accepted (D-02).
+  - **`show`'s `render`, the header:** `record.ts` when present, the file name `file_name` returns, and `record.project` when present.
+  - **`render_window`:** each turn's `text`, the `record_type` and `tool_name` that `label` joins, and the `continues_from` value in the "(this session continues from ...)" line.
+  - **What stays out:** the placeholders "(no time)", "(no project)" and "(body evicted)" are the command's own text and need no escape. Leave the `Some(bytes)` arm that writes `record.body` with `write_all` exactly as it is (D-01). Add a sentence to the show module doc saying the header and window are escaped and the body is not, and why. Leave search's `if args.json` branch, show's `emit` and `window_value`, and everything in `terminus-core` untouched (D-02, D-06).
+  - **`--raw`:** escaping applies with and without `--raw`. The flag keeps its one job, lifting redaction (D-07, and v0.1.1/phases/4/UAT.md, phase 4, where `--raw` is the owner's only way past the filter).
+  - **The test transcript:** add one test to `recall_cli.rs`. Its bench ingests a transcript the test writes itself into `bench.work`, through `ingest <path>`, and does not call `ingest_fixtures`. This is the planner's call that the CONTEXT flagged assumption leaves open; the reason is in Notes. Build each record with serde_json from Rust strings holding the real characters, so the file carries the JSON escapes `\u001b` and `\u0007` the way Claude Code writes them. A raw ESC byte is not valid JSON, so a line holding one is archived with no projection and the test would pass before the fix (D-11). The transcript needs four records. A user text turn. An assistant `tool_use` turn whose tool `name` carries a control. A user `tool_result` turn whose `content` string and `toolUseResult.stderr` both hold ESC and BEL, an OSC 52 clipboard write being the realistic shape, around a token no other turn holds, with a `timestamp` that carries one control inside its first ten characters, which search's day column prints, and one after them, which only show's header prints. A turn after that. Set the `cwd` to a directory under `bench.root` that the test creates.
+  - **Every other field D-04 names:** plant a control in each one a transcript can carry, so a field the fix misses fails the test. Name the transcript file and the `cwd` directory with an ESC in each, for the file name and project columns of both commands. Give one record a foreign `sessionId` holding a control, for show's `continues_from` line. The record type is stored from the record's `type`: plant a control there only if ingest keeps such a record as a turn. If ingest refuses a planted name or keeps no such record, say so in the test's comment and in the task report as a deviation, and do not drop the field silently.
+  - **What the test asserts:** human `search --project *` on the token, and the same with `--raw`, write no 0x1b or 0x07 byte, and the excerpt line holds `\u001b` and `\u0007`. Human `show --project * --before 1 --after 1` on that hit, and the same with `--raw`, write no 0x1b or 0x07 byte. The header line holds the escaped timestamp control, the anchor's window line holds `\u001b` and `\u0007`, and the tool_use turn's window line holds the escaped tool-name control. The search hit line holds the escaped day, file name and project controls, show's header holds the escaped file name and project controls, the `continues_from` line holds its escaped control, and the window holds the escaped record-type control when one was planted. The tool_result line exactly as the test wrote it appears in stdout byte for byte, which is the body (D-01). Make the visible-escape assertions on the header and window lines, not on stdout as a whole: the body already carries the JSON spelling `\u001b`, so a whole-stdout check would pass before the fix. The `--json` output of `search` and `show` still decodes the excerpt, the window turn's `text` and `tool_name`, and the record's `ts` to strings holding the raw characters (D-12).
+- **Verify:** `cargo test -p terminus --all-features --test recall_cli` passes, the new test and every existing one. Then run `git stash push -- crates/terminus/src/cmd/search.rs crates/terminus/src/cmd/show.rs`. The new test now fails on an assertion that human stdout holds no ESC or BEL byte, while its `--json` and body assertions still pass. After `git stash pop` it passes again (AC5). `git diff -- crates/terminus/src/cmd/search.rs crates/terminus/src/cmd/show.rs` has no hunk inside search's `if args.json` branch, show's `emit` or `window_value`, or the `Some(bytes)` arm of `render` (AC3, AC4). `git diff --stat -- crates/terminus-core` prints nothing. `cargo test -p terminus-core --features testkit --test recall_golden` passes with `TERMINUS_REGENERATE_RECALL_GOLDEN` unset.
+
+### Task 3: Escape archived text in the observations listing
+
+- **Files:** crates/terminus/src/cmd/observations.rs, crates/terminus/tests/observations.rs
+- **Action:** In `Row::print`, route every archived string through the Task 1 helper (D-04).
+  - **The header:** the file name `file_name` returns, and the branch `text(&facts["branch"])` returns when present. The "(no branch)" placeholder is the command's own text.
+  - **The fact lists:** every value of the six fact lists. Also the `truncated` list, because `print` reads it out of the same stored document and D-04 covers every fact list.
+  - **The stored document:** observation `commands` are only clipped, so a heredoc command keeps a raw newline and can hold a CR. Newline prints as it is and CR prints as `\u000d`, which is what D-08 chose so that a stored command cannot overprint its own line. Leave `Row::to_value`, `nested` and the `regenerate` path untouched (D-06). Strip nothing in core or at ingest, so the stored document keeps its controls (D-03).
+  - **The test:** add one test to `tests/observations.rs` that uses the file's own inline transcript builder, `Bench::transcript` through `place` and a bare `ingest`, because only a bare `ingest` closes a session and writes its observation row (D-12). Let that test choose the error text the errored tool result carries, in both the `tool_result` `content` and `toolUseResult.stderr`. Plant ESC and BEL inside `ERROR`'s own words, written through serde_json as the transcript's other strings already are (D-11). Let it choose the branch and the command the same way, and plant ESC and BEL in each, so the header's branch and the `commands` list carry controls too. Plant one in the session's file name as well if `place` and a bare `ingest` accept such a name; if they do not, say so in the test's comment and in the task report as a deviation. Every existing caller must keep writing `ERROR`, `BRANCH` and `COMMAND`, so the transcripts the other tests ingest stay byte-identical.
+  - **What it asserts:** human `observations --project *` writes no 0x1b or 0x07 byte, and its `errors` line, its `commands` line and its header's branch hold `\u001b` and `\u0007`, as does its file name when one was planted. `observations --project * --json` still decodes the `errors` fact to a string holding the raw ESC and BEL.
+- **Verify:** `cargo test -p terminus --test observations` passes, the new test and every existing one. Then run `git stash push -- crates/terminus/src/cmd/observations.rs`. The new test now fails on its no-ESC-or-BEL-byte assertion, while its `--json` assertion still passes. After `git stash pop` it passes again (AC5). `git diff -- crates/terminus/src/cmd/observations.rs` has no hunk inside `Row::to_value` or `nested`, and `git diff --stat -- crates/terminus-core` prints nothing. `cargo test --workspace --all-features --locked` passes.
+
+### Task 4: Describe the escape in the docs
+
+- **Files:** THREAT-MODEL.md, docs/commands.md, CHANGELOG.md
+- **Action:** Read `~/.claude/john-voice.md` in full first, as John's CLAUDE.md requires for doc prose and README text. Make the three changes D-13 names, and change nothing else.
+  - **`THREAT-MODEL.md`:** rewrite the **CLI.** bullet in the "stdout and stderr" list. That bullet now says nothing filters control characters out of `show` or `search` output and carries a `[VERIFY]`. It should say four things. The human output of `search`, the `show` header and window, and `observations` prints C0 controls other than tab and newline, DEL, and C1 controls in archived text as `\u00XX` escapes. The `show` record body is still the archived line byte for byte: JSON escapes every C0 control, so ESC and BEL cannot reach the terminal through it, but DEL and C1 can, because JSON does not require escaping them (D-01). `--json` passes DEL and C1 through raw, because serde_json escapes only U+0000 to U+001F, the quote and the backslash (D-06). What a given terminal does with a UTF-8 C1 control, an OSC 52 clipboard write or an OSC 8 link depends on the terminal. That claim is unsettled (CONTEXT flagged assumption), so word it that way and mark it `[VERIFY]`, as this file marks its other open claims.
+  - **`docs/commands.md`:** in the `terminus search <words>`, `terminus show <id>...` and `terminus observations` sections, say that control characters in archived text print as `\u00XX` escapes, with or without `--raw`. The show section keeps its "byte for byte" promise for the record itself, and says the header and the `--before`/`--after` turns are escaped. Nothing may say `--json` escapes control characters (D-06).
+  - **`CHANGELOG.md`:** under `## [Unreleased]`, add one entry to `### Fixed` naming #63, #65 and #66, in the shape of the entries already there.
+  - **What stays:** `SECURITY.md` and `docs/json-shapes.md` stay as they are (D-13).
+- **Verify:** `grep -n "nothing filters control characters" THREAT-MODEL.md` prints nothing. The rewritten **CLI.** bullet names the `\u00XX` escape, the DEL and C1 the `show` body passes, and `--json` passing DEL and C1. `perl -ne 'print if /^### .terminus search/../^### .terminus sessions/' docs/commands.md` shows the escape in both the search and show sections, and `perl -ne 'print if /^### .terminus observations.$/../^### .terminus observations regenerate/' docs/commands.md` shows it in the observations section. Every line `grep -ni escap docs/commands.md` returns has been read, and none says `--json` escapes control characters. `perl -ne 'print if /^## \[Unreleased\]/../^## \[\d/' CHANGELOG.md` shows a `### Fixed` entry carrying #63, #65 and #66. `git diff --stat -- SECURITY.md docs/json-shapes.md` prints nothing.
+
+## Notes
+
+- **Inline transcript instead of a shared fixture.** The CONTEXT flagged assumption leaves the choice for `search` and `show` open. I chose an inline transcript in `recall_cli.rs` over a sixteenth rooted fixture in `TRANSCRIPT_FIXTURES`. A shared fixture is ingested by every test that loops over the corpus: `fixtures.rs`, `recall.rs`, `redacted_recall.rs`, `index.rs`, `reindex.rs`, `backfill.rs`, `mcp.rs`, `cli.rs` and the recall golden among them. It would also need `testkit.rs` and `tests/fixtures/README.md` to change. A timestamp holding a control would sit in a corpus that other tests sort and bound by time. The inline transcript reaches the same code paths, `ingest <path>` then `search` and `show`, and leaves the corpus and the golden alone. D-12's "joins `TRANSCRIPT_FIXTURES` last" sentence applies only if a shared fixture is used, so nothing locked is skipped.
+- **Search and show in one task.** Task 2 covers both because D-12 gives them one regression test in one file over one planted transcript. Splitting them would build that transcript in one task only for the next to reuse it.
+- **Plan shape.** One plan, as CONTEXT directs. Four tasks, at the ceiling.
+- **Plan review.** The plan review found that both regression tests planted controls in too few of the fields D-04 names, so a fix that missed one would still pass. John chose to fold both findings in, which is why Tasks 2 and 3 plant a control in every field a transcript can carry.
+- **ROADMAP success criterion 1** still reads as covering all of `show`. D-01 and the corrected RCL-12 row narrow it to the window and the header. Verify should hold the body to byte for byte, not to escaped.
+- **AC7 (human-verify).** The pull request that lands this phase carries `Fixes #63`, `Fixes #65` and `Fixes #66`, and all three close when it merges. The orchestrator owns git, so this is not a task. Check it on GitHub after landing.
+- **Doc review.** Per John's standing memory, open `THREAT-MODEL.md`, `docs/commands.md` and `CHANGELOG.md` in RustRover once Task 4 has written them, so he can review them himself.
