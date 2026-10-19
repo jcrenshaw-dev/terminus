@@ -12,6 +12,8 @@ use std::path::PathBuf;
 use rusqlite::Connection;
 use terminus_core::config::Config;
 use terminus_core::ingest::pass::{self, PassOutcome};
+use terminus_core::inject::decision::{Candidate, Decision, Injected};
+use terminus_core::inject::state::{Reason, Suppressed};
 use terminus_core::store::{Store, DB_FILE_NAME};
 use terminus_core::{ingest, testkit};
 
@@ -254,6 +256,86 @@ fn unmerged(error: &str) -> Vec<String> {
     named
 }
 
+fn turn_ids(conn: &Connection, key: &str) -> Vec<i64> {
+    conn.prepare("SELECT id FROM turns WHERE session_key = ?1 ORDER BY turn_seq")
+        .unwrap()
+        .query_map([key], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+}
+
+/// The four turn-id lists of a decision, as the drain writes them.
+fn documents(
+    candidates: &[i64],
+    injected: &[i64],
+    suppressed: &[i64],
+    dropped: &[i64],
+) -> [String; 4] {
+    let candidates: Vec<Candidate> = candidates
+        .iter()
+        .map(|&turn_id| Candidate {
+            turn_id,
+            // Floats that do not survive every parse and print unchanged.
+            relevance: 0.1 + 0.2,
+            entity_score: 1.0 / 3.0,
+            entity_count: 2,
+            matched_on: vec![terminus_core::recall::search::MatchedEntity {
+                kind: "path".into(),
+                value: "/turn_id".into(),
+            }],
+        })
+        .collect();
+    let injected: Vec<Injected> = injected
+        .iter()
+        .map(|&turn_id| Injected {
+            turn_id,
+            chars: 120,
+        })
+        .collect();
+    let suppressed: Vec<Suppressed> = suppressed
+        .iter()
+        .map(|&turn_id| Suppressed {
+            turn_id,
+            reason: Reason::AlreadyInjected,
+        })
+        .collect();
+    [
+        serde_json::to_string(&candidates).unwrap(),
+        serde_json::to_string(&injected).unwrap(),
+        serde_json::to_string(&suppressed).unwrap(),
+        serde_json::to_string(dropped).unwrap(),
+    ]
+}
+
+fn decision_documents(conn: &Connection, id: i64) -> [String; 4] {
+    conn.query_row(
+        "SELECT candidates, injected, suppressed, dropped FROM decisions WHERE id = ?1",
+        [id],
+        |r| Ok([r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?]),
+    )
+    .unwrap()
+}
+
+/// How many label and decision turn ids name no turn.
+fn dangling(conn: &Connection) -> i64 {
+    let mut sql = String::from(
+        "SELECT (SELECT count(*) FROM labels
+                  WHERE turn_id IS NOT NULL AND turn_id NOT IN (SELECT id FROM turns))",
+    );
+    for column in ["candidates", "injected", "suppressed"] {
+        sql.push_str(&format!(
+            " + (SELECT count(*) FROM decisions d, json_each(d.{column}) j
+                  WHERE json_extract(j.value, '$.turn_id') NOT IN (SELECT id FROM turns))"
+        ));
+    }
+    sql.push_str(
+        " + (SELECT count(*) FROM decisions d, json_each(d.dropped) j
+              WHERE j.value NOT IN (SELECT id FROM turns))",
+    );
+    conn.query_row(&sql, [], |r| r.get(0)).unwrap()
+}
+
 #[test]
 fn one_pass_repairs_a_store_keyed_on_absolute_paths() {
     let mut bench = Bench::new();
@@ -363,6 +445,52 @@ fn one_pass_repairs_a_store_keyed_on_absolute_paths() {
         )
         .unwrap();
     }
+    // A decision and two labels naming turns in both prefix twins: the older
+    // one's second turn, and the newer one's first and last. The last is past
+    // the older stream's end, so the survivor has it only once it merges.
+    let (older, newer) = {
+        let conn = bench.conn();
+        (turn_ids(&conn, &prefix[0]), turn_ids(&conn, &prefix[1]))
+    };
+    let (s1, n0, nl) = (older[1], newer[0], *newer.last().unwrap());
+    assert!(newer.len() > older.len());
+    let planted = documents(&[s1, nl], &[nl], &[s1, n0], &[nl, s1]);
+    let decision: i64 = {
+        let conn = bench.conn();
+        conn.execute(
+            "INSERT INTO decisions (prompt, candidates, injected, suppressed, dropped)
+             VALUES ('a planted decision', ?1, ?2, ?3, ?4)",
+            rusqlite::params![planted[0], planted[1], planted[2], planted[3]],
+        )
+        .unwrap();
+        let id = conn.last_insert_rowid();
+        for turn in [s1, nl] {
+            conn.execute(
+                "INSERT INTO labels (decision_id, turn_id, label) VALUES (?1, ?2, 'hit')",
+                [id, turn],
+            )
+            .unwrap();
+        }
+        id
+    };
+    // A decision the prompt hook wrote and no pass has drained yet.
+    let mut waiting = Decision::opened(
+        Some("c0000000-0000-4000-8000-000000000000"),
+        None,
+        "waiting",
+    );
+    waiting.candidates = vec![Candidate {
+        turn_id: nl,
+        relevance: 1.0,
+        entity_score: 1.0,
+        entity_count: 1,
+        matched_on: Vec::new(),
+    }];
+    assert!(
+        waiting.save(&bench.data_dir),
+        "the decision file was not written"
+    );
+
     let kept: Vec<String> = apart
         .iter()
         .chain(&tail_apart)
@@ -454,6 +582,41 @@ fn one_pass_repairs_a_store_keyed_on_absolute_paths() {
         Some("b0000000-0000-4000-8000-000000000000")
     );
 
+    // Ids into the newer twin now name the same turn in the survivor; ids into
+    // the survivor, and every other byte, are as they were.
+    let survivor_no = survivors[2].1;
+    let moved = |id: i64| (survivor_no << 24) | (id & ((1 << 24) - 1));
+    let (n0, nl) = (moved(n0), moved(nl));
+    assert_eq!(
+        decision_documents(&conn, decision),
+        documents(&[s1, nl], &[nl], &[s1, n0], &[nl, s1])
+    );
+    let labelled: Vec<i64> = conn
+        .prepare("SELECT turn_id FROM labels WHERE decision_id = ?1 ORDER BY id")
+        .unwrap()
+        .query_map([decision], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(labelled, vec![s1, nl]);
+    let drained: String = conn
+        .query_row(
+            "SELECT candidates FROM decisions WHERE prompt = 'waiting'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let drained: Vec<Candidate> = serde_json::from_str(&drained).unwrap();
+    assert_eq!(
+        drained[0].turn_id, nl,
+        "the waiting decision was not repointed"
+    );
+    let left: usize = std::fs::read_dir(bench.data_dir.join("decisions"))
+        .map(|dir| dir.count())
+        .unwrap_or(0);
+    assert_eq!(left, 0, "a decision file is still waiting");
+    assert_eq!(dangling(&conn), 0, "a label or decision names no turn");
+
     // Not provably one stream: kept exactly as they were.
     for (key, was) in kept.iter().zip(&kept_before) {
         assert_eq!(&archived(&conn, key), was, "{key} changed");
@@ -504,4 +667,36 @@ fn one_pass_repairs_a_store_keyed_on_absolute_paths() {
         "the second pass reported more than the unmerged twins: {second}"
     );
     assert_eq!(unmerged(&second), unmerged(&error));
+}
+
+/// Recovery drains decision files only when it has a repair to do, so on a
+/// store with no old keys a waiting file is left for the pass.
+#[test]
+fn recovery_with_nothing_to_repair_leaves_decision_files_waiting() {
+    let bench = Bench::new();
+    bench.place(
+        &format!("-p/{U0}.jsonl"),
+        &testkit::fixture_bytes("session-basic.jsonl"),
+    );
+    bench.pass();
+
+    let waiting = Decision::opened(
+        Some("c0000000-0000-4000-8000-000000000000"),
+        None,
+        "waiting",
+    );
+    assert!(
+        waiting.save(&bench.data_dir),
+        "the decision file was not written"
+    );
+    let files = || {
+        std::fs::read_dir(bench.data_dir.join("decisions"))
+            .unwrap()
+            .count()
+    };
+    assert_eq!(files(), 1);
+
+    let (_store, report) = terminus_core::recover::recover(&bench.data_dir).unwrap();
+    assert!(!report.repaired(), "{report:?}");
+    assert_eq!(files(), 1, "recovery moved a decision file");
 }

@@ -107,6 +107,9 @@ pub struct Recovered {
     pub merged: usize,
     /// Reported again on every run until they are merged.
     pub unmerged: Vec<UnmergedTwin>,
+    /// What the repair could not do and carried on past: a decision document
+    /// that does not parse, a drain that failed.
+    pub notes: Vec<String>,
     pub duration: Duration,
 }
 
@@ -117,6 +120,7 @@ impl Recovered {
             || self.rekeyed > 0
             || self.merged > 0
             || !self.unmerged.is_empty()
+            || !self.notes.is_empty()
     }
 
     /// One line per repair, for a `runs.error` or a `status` report. The re-key
@@ -149,6 +153,7 @@ impl Recovered {
                 t.session_key, t.survivor_key, t.new_key, t.reason
             ));
         }
+        out.extend(self.notes.iter().cloned());
         out
     }
 }
@@ -188,12 +193,26 @@ fn rekey(store: &mut Store, report: &mut Recovered) -> Result<()> {
         return Ok(());
     }
 
+    // Decision files still waiting name turn ids too, and the pass drains them
+    // only after recovery, when a merged twin's ids would be gone. So they are
+    // moved in here, only when there is a repair to do, and rewritten with the
+    // rest. A drain that fails is said and the repair goes on, as in the pass.
+    let data_dir = store.data_dir().to_path_buf();
+    match crate::feedback::drain(store.conn_mut(), &data_dir) {
+        Ok(drained) => report.notes.extend(drained.lines()),
+        Err(e) => report
+            .notes
+            .push(format!("the decision log could not be drained: {e}")),
+    }
+
     let tx = store.conn_mut().transaction()?;
     // The key is a parent of four tables, none declared `ON UPDATE CASCADE`.
     // Deferred, the parent and its children move in any order and are checked
     // at commit, which still refuses a child left behind.
     tx.execute_batch("PRAGMA defer_foreign_keys = ON")?;
 
+    // Each merged twin's `session_no`, and the survivor's that replaces it.
+    let mut merged_into: BTreeMap<i64, i64> = BTreeMap::new();
     for (new, old) in &groups {
         let held = tx.query_row(
             "SELECT count(*) FROM sessions WHERE session_key = ?1",
@@ -230,6 +249,7 @@ fn rekey(store: &mut Store, report: &mut Recovered) -> Result<()> {
             match merged {
                 Ok(()) => {
                     absorbed += 1;
+                    merged_into.insert(member.session_no, survivor.session_no);
                     survivor = Member::read(&tx, &survivor.key)?;
                 }
                 Err(reason) => {
@@ -254,6 +274,9 @@ fn rekey(store: &mut Store, report: &mut Recovered) -> Result<()> {
             move_key(&tx, &survivor.key, new)?;
             report.rekeyed += 1;
         }
+    }
+    if !merged_into.is_empty() {
+        repoint(&tx, &merged_into, report)?;
     }
     for (old, new) in &parents {
         tx.execute(
@@ -603,6 +626,139 @@ fn merge(
     }
     crate::retention::apply::delete_session(tx, &member.key)?;
     Ok(Ok(()))
+}
+
+/// Point every label and decision turn id into a merged twin at the same
+/// `turn_seq` in its survivor, which holds every turn the twin held (D-11).
+///
+/// A decision document is rewritten in place, number by number, so every
+/// other byte of it is kept. One that does not parse is left as it is and
+/// named. `decisions.watermark_session_no` is not touched.
+fn repoint(
+    tx: &Connection,
+    merged_into: &BTreeMap<i64, i64>,
+    report: &mut Recovered,
+) -> Result<()> {
+    use crate::store::schema::{split_turn_id, turn_id};
+    let remap = |id: i64| {
+        let (session_no, turn_seq) = split_turn_id(id);
+        merged_into
+            .get(&session_no)
+            .map(|survivor| turn_id(*survivor, turn_seq))
+    };
+
+    let labels: Vec<(i64, i64)> = tx
+        .prepare("SELECT id, turn_id FROM labels WHERE turn_id IS NOT NULL")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<std::result::Result<_, _>>()?;
+    for (id, turn) in labels {
+        if let Some(to) = remap(turn) {
+            tx.execute("UPDATE labels SET turn_id = ?2 WHERE id = ?1", [id, to])?;
+        }
+    }
+
+    type Documents = (i64, [Option<String>; 4]);
+    let decisions: Vec<Documents> = tx
+        .prepare("SELECT id, candidates, injected, suppressed, dropped FROM decisions")?
+        .query_map([], |r| {
+            Ok((r.get(0)?, [r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?]))
+        })?
+        .collect::<std::result::Result<_, _>>()?;
+    let columns = ["candidates", "injected", "suppressed", "dropped"];
+    for (id, documents) in decisions {
+        for (column, document) in columns.iter().zip(documents) {
+            let Some(document) = document else {
+                continue;
+            };
+            if serde_json::from_str::<serde_json::Value>(&document).is_err() {
+                report.notes.push(format!(
+                    "decision {id}: its {column} document does not parse, so its turn ids \
+                     were left as they are"
+                ));
+                continue;
+            }
+            // `dropped` is a list of ids; the others are lists of entries, each
+            // with its id under `turn_id`.
+            if let Some(rewritten) = remap_ids(&document, *column == "dropped", &remap) {
+                tx.execute(
+                    &format!("UPDATE decisions SET {column} = ?2 WHERE id = ?1"),
+                    rusqlite::params![id, rewritten],
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `document` with each turn id `remap` answers for replaced, and every other
+/// byte as it was, or `None` when nothing changed. The document has already
+/// parsed.
+///
+/// Not a parse and a re-serialize: `serde_json` here does not promise a float
+/// comes back as the same `f64`, and a candidate's scores are floats.
+fn remap_ids(document: &str, bare: bool, remap: &dyn Fn(i64) -> Option<i64>) -> Option<String> {
+    let bytes = document.as_bytes();
+    let mut out = String::with_capacity(document.len());
+    let mut copied = 0;
+    // Open containers, and the last key read in the innermost object.
+    let mut open: Vec<u8> = Vec::new();
+    let mut key: &str = "";
+    let mut want_key = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => {
+                let start = i + 1;
+                i += 1;
+                while i < bytes.len() && bytes[i] != b'"' {
+                    i += if bytes[i] == b'\\' { 2 } else { 1 };
+                }
+                if want_key {
+                    key = &document[start..i.min(bytes.len())];
+                    want_key = false;
+                }
+            }
+            b'{' => {
+                open.push(b'{');
+                want_key = true;
+            }
+            b'[' => open.push(b'['),
+            b'}' | b']' => {
+                open.pop();
+            }
+            b',' => want_key = open.last() == Some(&b'{'),
+            b'-' | b'0'..=b'9' => {
+                let start = i;
+                while i < bytes.len()
+                    && matches!(bytes[i], b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9')
+                {
+                    i += 1;
+                }
+                let id = if bare {
+                    open.as_slice() == b"["
+                } else {
+                    open.as_slice() == b"[{" && key == "turn_id"
+                };
+                if let Some(to) = id
+                    .then(|| document[start..i].parse::<i64>().ok())
+                    .flatten()
+                    .and_then(remap)
+                {
+                    out.push_str(&document[copied..start]);
+                    out.push_str(&to.to_string());
+                    copied = i;
+                }
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    if copied == 0 {
+        return None;
+    }
+    out.push_str(&document[copied..]);
+    Some(out)
 }
 
 /// Move one session's key in every table that holds it. Block rows, turn ids and
