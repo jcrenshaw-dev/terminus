@@ -126,10 +126,20 @@ impl Bench {
 
     /// [`Bench::place`], with chosen words.
     fn place_with(&self, session: &str, first_seconds_ago: i64, words: &Words) {
+        self.place_as(
+            &format!("{session}.jsonl"),
+            session,
+            first_seconds_ago,
+            words,
+        );
+    }
+
+    /// [`Bench::place_with`], under a chosen file name.
+    fn place_as(&self, file: &str, session: &str, first_seconds_ago: i64, words: &Words) {
         let dir = self.claude_dir.join("projects").join("project-alpha");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
-            dir.join(format!("{session}.jsonl")),
+            dir.join(file),
             self.transcript(session, first_seconds_ago, words),
         )
         .unwrap();
@@ -579,9 +589,8 @@ fn a_malformed_since_is_misuse_and_rebuilds_nothing() {
 /// Planted through serde_json, so the transcript holds the JSON escapes the way
 /// Claude Code writes them rather than raw bytes no JSON parser would accept.
 ///
-/// The file name stays clean. A bare `ingest` walks only `<uuid>.jsonl` at a
-/// project's top level and `agent-*.jsonl` below it, so a name holding a
-/// control is never archived and has no row to list.
+/// The file name carries them too: a bare `ingest` admits any `agent-*.jsonl`
+/// name, so a sidecar name holding a control is archived and listed.
 #[test]
 fn archived_control_characters_print_escaped_in_the_listing() {
     let bench = bench();
@@ -590,7 +599,12 @@ fn archived_control_characters_print_escaped_in_the_listing() {
         branch: "phase\u{1b}seven\u{07}",
         command: "printf '\u{1b}]0;title\u{07}'",
     };
-    bench.place_with(SESSION, FIRST_TURN_SECONDS_AGO, &words);
+    bench.place_as(
+        "agent-\u{1b}planted\u{07}.jsonl",
+        SESSION,
+        FIRST_TURN_SECONDS_AGO,
+        &words,
+    );
     bench.ingest();
 
     // `--json` still carries the raw characters (D-06).
@@ -615,6 +629,10 @@ fn archived_control_characters_print_escaped_in_the_listing() {
     assert!(
         header.contains("phase\\u001bseven\\u0007"),
         "the branch is not escaped: {text}"
+    );
+    assert!(
+        header.contains("agent-\\u001bplanted\\u0007.jsonl"),
+        "the file name is not escaped: {text}"
     );
     for (label, escaped) in [
         ("errors", "Bash \\u001bcommand\\u0007 failed"),

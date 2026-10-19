@@ -30,7 +30,7 @@ A shared `escape::controls` helper in the `terminus` binary now prints every C0 
 
 - [deviation] The plan said to commit Task 1 with the unused-function warning showing. The project's clippy run uses `-D warnings`, which turns that warning into an error, so the executor put `#[cfg_attr(not(test), expect(dead_code))]` on `mod escape;`. Task 2 (4d6164c) removed it once the helper had callers, so the final tree matches the plan. (23b2db8)
 - [deviation] Task 2 asked for a control planted in the record type if ingest keeps such a record as a turn. It does not: `parse::record` makes a turn only for `user`, `assistant`, `attachment` and `system`. The test leaves the type clean and says why. `render_window` still escapes the type through the label. (4d6164c)
-- [deviation] Task 3 asked for a control planted in the session's file name if ingest accepts such a name. It does not: `discover::is_transcript_name` admits only `<uuid>.jsonl` and `agent-*.jsonl`. The test leaves the file name clean and says why. `Row::print` still escapes the file name. (5d9f4f4)
+- [deviation] Task 3 asked for a control planted in the session's file name if ingest accepts such a name. The executor wrongly concluded it does not and left the file name clean. `discover::is_agent_transcript` admits any `agent-*.jsonl` name, so UAT added the planted name to the test; it fails with the escape removed from `Row::print`. (5d9f4f4, fixed in UAT)
 
 ## Open items
 
