@@ -573,3 +573,73 @@ fn a_session_that_lost_its_metadata_row_is_refused_rather_than_re_ingested() {
         "the refused pass moved the watermark past the committed blob"
     );
 }
+
+/// Two roots holding different files at one path below `projects` share a
+/// key. Named one file, ingest asks the store which file holds the key and
+/// refuses a different one before reading a byte of it, so the second file is
+/// never appended onto the first one's session. Once the first root has moved
+/// away, the file at its new location is the same transcript and appends.
+#[test]
+fn a_second_roots_file_never_appends_onto_the_first_roots_session() {
+    let bench = bench();
+    let config = terminus_core::Config::from_parts(Vec::new(), Vec::new());
+    let name = "11111111-1111-4111-8111-111111111111.jsonl";
+    let place = |root: &str, bytes: &[u8]| {
+        let dir = bench.work.join(root).join("projects").join("-tmp-p");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        path.canonicalize().unwrap()
+    };
+    let basic = testkit::fixture_bytes("session-basic.jsonl");
+    let continuation = testkit::fixture_bytes("session-continuation.jsonl");
+
+    let first = place("a", &basic);
+    let pass = match ingest::run_with(&bench.data_dir, &first, &config).unwrap() {
+        Outcome::Committed(pass) => pass,
+        other => panic!("{other:?}"),
+    };
+    let key = pass.session_key;
+    assert_eq!(key, format!("-tmp-p/{name}"));
+
+    let conn = bench.conn();
+    let state = |conn: &Connection| {
+        let meta: (Vec<u8>, i64) = conn
+            .query_row(
+                "SELECT checksum, uncompressed_len FROM session_meta WHERE session_key = ?1",
+                [&key],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        (meta, testkit::stored(conn, &key), watermark(conn, &key))
+    };
+    let before = state(&conn);
+
+    // A longer, different file at the same path below `projects`.
+    let mut other = continuation.clone();
+    other.extend_from_slice(&basic);
+    let second = place("b", &other);
+    let error = ingest::run_with(&bench.data_dir, &second, &config)
+        .expect_err("a second root's file must be refused")
+        .to_string();
+    assert!(error.contains(second.to_str().unwrap()), "{error}");
+    assert!(error.contains(first.to_str().unwrap()), "{error}");
+    assert_eq!(state(&conn), before, "the refused file changed the session");
+
+    // The first root moves away. A longer copy of the original at the new
+    // location is the same transcript, and appends to the same session.
+    std::fs::rename(bench.work.join("a"), bench.work.join("moved")).unwrap();
+    let moved = bench.work.join("moved/projects/-tmp-p").join(name);
+    let mut grown = basic.clone();
+    grown.extend_from_slice(&continuation);
+    std::fs::write(&moved, &grown).unwrap();
+    match ingest::run_with(&bench.data_dir, &moved, &config).unwrap() {
+        Outcome::Committed(pass) => assert_eq!(pass.session_key, key),
+        other => panic!("{other:?}"),
+    }
+    let sessions: i64 = conn
+        .query_row("SELECT count(*) FROM sessions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(sessions, 1);
+    assert_eq!(stream(&conn, &key), grown, "the moved file did not append");
+}

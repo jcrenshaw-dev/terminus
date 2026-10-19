@@ -44,7 +44,7 @@
 //! in discovery order, exactly as the sequential walk applies them, so the two
 //! reach byte-identical stores rather than merely equivalent ones.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -55,7 +55,7 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::ingest::lock::{self, Attempt};
 use crate::ingest::pass::{note, PassOutcome, Summary};
-use crate::ingest::{Existing, Outcome, Prepared, RunRow};
+use crate::ingest::{claim, Claim, Existing, Outcome, Prepared, RunRow};
 use crate::project::Resolver;
 use crate::store::Store;
 
@@ -279,11 +279,13 @@ fn pipeline(
         // last worker exits rather than never.
         drop(done_tx);
 
+        // Across rounds, not per round: a link and its target can fall in two.
+        let mut taken = HashMap::new();
         let mut outcome = Ok(());
         for batch in transcripts.chunks(round) {
-            if let Err(e) =
-                dispatch_round(store, batch, summary, projects, threads, &job_tx, &done_rx)
-            {
+            if let Err(e) = dispatch_round(
+                store, batch, summary, projects, threads, &mut taken, &job_tx, &done_rx,
+            ) {
                 outcome = Err(e);
                 break;
             }
@@ -304,26 +306,41 @@ fn dispatch_round(
     summary: &mut Summary,
     projects: &mut Resolver,
     threads: &mut HashSet<ThreadId>,
+    taken: &mut HashMap<String, PathBuf>,
     job_tx: &mpsc::SyncSender<(usize, Job)>,
     done_rx: &mpsc::Receiver<Done>,
 ) -> Result<()> {
-    // Two files never share a session key - the key IS the canonical path (D-01)
-    // - so reading a whole round's rows before applying any of it cannot read
-    // something a later apply in the same round would have changed.
+    // Two paths can share a key (D-01, D-03), and [`claim`] lets only the first
+    // through, so no two jobs in this round share one. That is what makes
+    // reading a whole round's rows before applying any of it safe: no apply in
+    // the round can change a row another job in it already read.
     let mut sent = 0usize;
     let mut results: Vec<Option<Result<Prepared>>> = (0..batch.len()).map(|_| None).collect();
+    // The file each slot reads, which is a link's target, not the link.
+    let mut files: Vec<PathBuf> = batch.to_vec();
 
     for (slot, path) in batch.iter().enumerate() {
         summary.files_walked += 1;
-        let job = match read_existing(store, path) {
-            Ok(job) => job,
-            // A path that is not UTF-8, or a store row this build refuses.
-            // Recorded and skipped like any other per-file failure.
+        let claimed = claim(taken, path).and_then(|claim| match claim {
+            Claim::Ingest { file, session_key } => {
+                read_existing(store, file, session_key).map(Some)
+            }
+            Claim::Same => Ok(None),
+            Claim::Held(e) => Err(e),
+        });
+        let job = match claimed {
+            Ok(Some(job)) => job,
+            // Another path to a file this walk already took: nothing to do.
+            Ok(None) => continue,
+            // A path that is not UTF-8, a key another file holds, or a store
+            // row this build refuses. Recorded and skipped like any other
+            // per-file failure.
             Err(e) => {
                 results[slot] = Some(Err(e));
                 continue;
             }
         };
+        files[slot] = job.path.clone();
         // Cannot block: the channel is bounded at the round size and this loop
         // sends at most one round.
         if job_tx.send((slot, job)).is_err() {
@@ -346,7 +363,7 @@ fn dispatch_round(
 
     for (slot, result) in results.into_iter().enumerate() {
         let Some(result) = result else { continue };
-        commit_one(store, &batch[slot], result, summary, projects)?;
+        commit_one(store, &files[slot], result, summary, projects)?;
     }
     Ok(())
 }
@@ -398,11 +415,9 @@ fn commit_one(
 
 /// What the store already holds for one transcript, read on the writer thread.
 ///
-/// A link is read as the file it points at (D-03), so the worker reads, and the
-/// store records, that file.
-fn read_existing(store: &Store, path: &Path) -> Result<Job> {
-    let path = crate::ingest::link_target(path).unwrap_or_else(|| path.to_path_buf());
-    let session_key = crate::ingest::path_key(&path)?;
+/// `path` is the file [`claim`] resolved, a link's target and never the link,
+/// so the worker reads, and the store records, that file (D-03).
+fn read_existing(store: &Store, path: PathBuf, session_key: String) -> Result<Job> {
     let existing = Existing::read(store.conn(), &session_key)?;
     Ok(Job {
         path,

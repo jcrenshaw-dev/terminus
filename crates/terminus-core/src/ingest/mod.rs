@@ -117,6 +117,24 @@ pub fn run_with(
     // (STOR-05), so a pass never appends turn rows in one shape beside rows
     // written in another.
     let (mut store, _recovered) = crate::recover::recover(data_dir)?;
+
+    // Before a byte of the file is read. Two roots can hold the same path below
+    // `projects`, and outside a flagged divergence `prepare` checks a file
+    // against the watermark by length alone, so a second root's longer file
+    // would be appended onto the first root's session. A walk remembers which
+    // file took a key first; one named file has only the store to ask.
+    let session_key = path_key(&canonical)?;
+    if let Some(holder) = holder_of(store.conn(), &session_key)? {
+        match Path::new(&holder).canonicalize() {
+            Ok(held) if held == canonical => {}
+            // Moved: the file the session was read from is gone, and this is
+            // where it went.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            // Another file, or one that cannot be told apart from another.
+            _ => return Err(key_held(&canonical, Path::new(&holder))),
+        }
+    }
+
     // One resolver for one invocation: a single file has one `cwd`, so the memo
     // buys nothing here and costs nothing either, and `ingest_locked` takes the
     // same shape whether its caller named one file or walked two thousand.
@@ -124,11 +142,69 @@ pub fn run_with(
     ingest_locked(
         &mut store,
         &canonical,
+        session_key,
         started,
         RunRow::PerFile,
         &mut projects,
         config.capture_mode(),
     )
+}
+
+/// The file the session under this key was last read from, if it is archived.
+fn holder_of(conn: &Connection, session_key: &str) -> Result<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT transcript_path FROM session_meta WHERE session_key = ?1",
+            [session_key],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten())
+}
+
+/// A second file whose key another file already holds. It is never opened.
+pub(crate) fn key_held(path: &Path, holder: &Path) -> Error {
+    Error::io(
+        path,
+        std::io::Error::other(format!(
+            "its session key is already held by {}, so it was not read",
+            holder.display()
+        )),
+    )
+}
+
+/// What a walk does with one discovered path.
+pub(crate) enum Claim {
+    /// The first path to yield this key: ingest `file`, the link's target or
+    /// the path itself.
+    Ingest { file: PathBuf, session_key: String },
+    /// Another path to a file this walk already took.
+    Same,
+    /// A different file whose key an earlier one in this walk took.
+    Held(Error),
+}
+
+/// Resolve a discovered path once and decide whether this walk ingests it.
+///
+/// After D-01 two paths can share a key: a sidecar link and the file it points
+/// at (D-03), or two roots holding the same path below `projects`. The first
+/// path a walk meets takes the key, and a later one naming a different file is
+/// refused without being opened, because ingest appends from the watermark and
+/// would mix two files into one stream with nothing to detect it.
+pub(crate) fn claim(
+    taken: &mut std::collections::HashMap<String, PathBuf>,
+    path: &Path,
+) -> Result<Claim> {
+    let file = link_target(path).unwrap_or_else(|| path.to_path_buf());
+    let session_key = path_key(&file)?;
+    Ok(match taken.get(&session_key) {
+        None => {
+            taken.insert(session_key.clone(), file.clone());
+            Claim::Ingest { file, session_key }
+        }
+        Some(holder) if *holder == file => Claim::Same,
+        Some(holder) => Claim::Held(key_held(&file, holder)),
+    })
 }
 
 /// Who owns the `runs` row for this file's transaction.
@@ -149,23 +225,22 @@ pub(crate) enum RunRow {
 }
 
 /// The pass itself, with the lock already held and the store already open.
+///
+/// `path` is the file to read, never a link, and `session_key` is what
+/// [`path_key`] made of it. The session is keyed on the transcript's path below
+/// `projects`, never on the record's session id (D-01, D-02): 812 real sidecar
+/// files report their parent's sessionId, and keying on that writes a 3 KB
+/// agent transcript over a parent session's archive. The watermark is keyed on
+/// the same value.
 pub(crate) fn ingest_locked(
     store: &mut Store,
     path: &Path,
+    session_key: String,
     started: Instant,
     run_row: RunRow,
     projects: &mut Resolver,
     mode: CaptureMode,
 ) -> Result<Outcome> {
-    // The session is keyed on the transcript's path below `projects`, never on
-    // the record's session id (D-01, D-02): 812 real sidecar files report their
-    // parent's sessionId, and keying on that writes a 3 KB agent transcript
-    // over a parent session's archive. The watermark is keyed on the same
-    // value. A link is read as the file it points at (D-03), so the key, the
-    // read and the stored `transcript_path` all name that file.
-    let target = link_target(path);
-    let path = target.as_deref().unwrap_or(path);
-    let session_key = path_key(path)?;
     let existing = Existing::read(store.conn(), &session_key)?;
     let prepared = prepare(path, session_key, &existing, mode)?;
     apply(store, prepared, started, run_row, projects)

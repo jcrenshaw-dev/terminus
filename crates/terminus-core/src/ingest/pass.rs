@@ -33,7 +33,7 @@ use crate::config::Config;
 use crate::discover;
 use crate::error::Result;
 use crate::ingest::lock::{self, Attempt};
-use crate::ingest::{Outcome, RunRow};
+use crate::ingest::{Claim, Outcome, RunRow};
 use crate::project::Resolver;
 
 /// What one pass over the tree did.
@@ -367,6 +367,10 @@ fn walk(
     // pass would be a store whose blobs disagree about what a pass captured.
     mode: crate::config::CaptureMode,
 ) -> Result<()> {
+    // Which file took each key this walk, so a second path with the same key is
+    // never ingested twice (D-03) and a second file is never appended onto the
+    // first one's session.
+    let mut taken = std::collections::HashMap::new();
     for path in transcripts {
         if let Some(after) = crate::ingest::fault::pass_fails_after(data_dir) {
             if summary.files_walked >= after {
@@ -378,11 +382,21 @@ fn walk(
         }
 
         summary.files_walked += 1;
+        let (path, session_key) = match crate::ingest::claim(&mut taken, path) {
+            Ok(Claim::Ingest { file, session_key }) => (file, session_key),
+            Ok(Claim::Same) => continue,
+            Ok(Claim::Held(e)) | Err(e) => {
+                summary.failures.push((path.clone(), e.to_string()));
+                continue;
+            }
+        };
+        let path = &path;
         // A fresh `Instant` per file: the elapsed time the pass reports is the
         // walk's, measured by the caller, not this file's.
         match crate::ingest::ingest_locked(
             store,
             path,
+            session_key,
             Instant::now(),
             RunRow::PassOwns,
             projects,
