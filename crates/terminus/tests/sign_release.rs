@@ -455,6 +455,17 @@ fn a_bad_tag_is_refused(shell: Shell) {
     assert!(fx.ssh_calls().is_empty(), "{:?}", fx.ssh_calls());
 }
 
+/// A part of u64's largest value is a legal version, so the tag gets past the
+/// tag check and the first `gh` call asks about that release.
+fn the_largest_u64_part_passes_the_tag_check(shell: Shell) {
+    let fx = fixture(shell);
+    let tag = "v18446744073709551615.0.0";
+    fx.run(tag);
+    let gh = fx.gh_calls();
+    assert!(!gh.is_empty(), "no gh call");
+    assert_eq!(gh[0][..3], ["release", "view", tag], "{gh:?}");
+}
+
 /// Run the script on `fx`'s draft and assert it was refused before anything
 /// was signed: non-zero, the draft checked and downloaded and nothing more
 /// asked of `gh`, no `ssh-keygen -Y sign` and nothing uploaded. Returns stderr.
@@ -570,6 +581,7 @@ fn a_published_release_is_refused(shell: Shell) {
 both_shells!(
     a_good_draft_is_signed_and_published,
     a_bad_tag_is_refused,
+    the_largest_u64_part_passes_the_tag_check,
     a_draft_missing_a_file_is_refused,
     a_binary_that_does_not_match_its_manifest_is_refused,
     a_manifest_naming_another_version_is_refused,
