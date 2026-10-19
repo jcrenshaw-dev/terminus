@@ -1,0 +1,75 @@
+{
+  "phase": "4",
+  "trigger": "risk_surface",
+  "discriminator": "plan-2",
+  "round": 1,
+  "base": "66b5e1f",
+  "head": "0c2fa88",
+  "base_id": "66b5e1f6845789d3ca31cb51542bf5efa05abc50",
+  "head_id": "0c2fa8863145116ce24bd6d8520272db03f0c00e",
+  "voices": [
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol"
+    }
+  ],
+  "citations": {
+    "checked": true
+  },
+  "entries": [
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol",
+      "file": "crates/terminus-core/src/recover.rs",
+      "line": 190,
+      "severity": "high",
+      "claim": "Decision draining is performed before and outside the re-key transaction, so recovery is not atomic across a crash or later re-key failure.",
+      "failure_scenario": "If `feedback::drain` commits decision rows and removes their pending files, then the process crashes before `tx.commit()` (or the re-key later fails on a constraint or I/O error), the decisions remain drained while every session key and twin remains unrepaired. Recovery therefore exposes a partially completed repair despite the stated one-transaction guarantee, and retrying cannot restore the pre-recovery filesystem/DB state.",
+      "ruling": "refuted",
+      "convergent": false,
+      "counter_evidence": {
+        "file": "crates/terminus-core/src/feedback/mod.rs",
+        "line": 174,
+        "note": "drain commits its decision rows in its own transaction (lines 174-187), the same step the pass runs after recovery, moved ahead of the repair on purpose (c505fb0). Until the repair transaction commits, no twin is deleted, so every drained turn id stays valid; a crash or a failed re-key leaves the stale keys in place, and the next run re-enters rekey (recover.rs:189-195) and repoints those rows. Nothing is lost and no reference dangles."
+      },
+      "base_id": "66b5e1f6845789d3ca31cb51542bf5efa05abc50",
+      "head_id": "0c2fa8863145116ce24bd6d8520272db03f0c00e"
+    },
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol",
+      "file": "crates/terminus-core/src/recover.rs",
+      "line": 541,
+      "severity": "high",
+      "claim": "When a longer twin has no watermark row, merging it leaves the survivor's old, shorter watermark in place even though the survivor now holds the longer stream.",
+      "failure_scenario": "Create a valid prefix survivor of length S with watermark S and a longer twin of length L whose blocks and metadata are intact but whose watermark is absent. `one_stream` accepts the pair, `merge` replaces the survivor's blocks and metadata with the L-byte stream, but the `INSERT ... SELECT` copies zero rows and leaves watermark S untouched. The subsequent sweep only lowers overlarge watermarks, so ingest resumes at S and appends bytes S..L a second time to an archive that already contains them, corrupting the transcript stream and potentially leaving verification or derived rows inconsistent.",
+      "ruling": "downgraded",
+      "convergent": false,
+      "counter_evidence": {
+        "file": "crates/terminus-core/src/ingest/mod.rs",
+        "line": 620,
+        "note": "The mechanism is real: ingest resumes from the watermark (ingest/mod.rs:357) and appends at the stream end (:388). The precondition is not reachable by any writer: ingest commits the blob and its watermark in one transaction (:620), retention deletes both together (retention/apply.rs:205), the sweep removes only watermarks naming no archived session (recover.rs:821-832), and move_key carries a watermark with its session. Only a damaged store reaches it, so low."
+      },
+      "base_id": "66b5e1f6845789d3ca31cb51542bf5efa05abc50",
+      "head_id": "0c2fa8863145116ce24bd6d8520272db03f0c00e"
+    },
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol",
+      "file": "crates/terminus-core/src/recover.rs",
+      "line": 662,
+      "severity": "high",
+      "claim": "The textual JSON rewriter does not decode escaped object keys, so a valid decision document can retain turn IDs belonging to a twin that is then deleted.",
+      "failure_scenario": "Store a valid candidate document such as `[{\"turn\\u005fid\":<deleted-twin-turn-id>,...}]`. Serde's validation parses the escaped key as `turn_id`, but `remap_ids` compares the raw source substring to `turn_id`, performs no replacement, and reports no parse error. Recovery then deletes the twin and its turns, leaving the decision with a dangling turn reference; consumers that deserialize the JSON see it as an ordinary `turn_id`, and `terminus verify` can continue to fail.",
+      "ruling": "refuted",
+      "convergent": false,
+      "counter_evidence": {
+        "file": "crates/terminus-core/src/feedback/mod.rs",
+        "line": 305,
+        "note": "Every decision document is written by serde_json::to_string of Terminus own typed structs (feedback/mod.rs:134, :305-306). drain parses each pending file into a typed decision before inserting (:176-180), so an escaped key in a file comes back out as plain turn_id. serde_json escapes only quote, backslash and control characters, never an underscore, so no stored document can hold turn\\u005fid."
+      },
+      "base_id": "66b5e1f6845789d3ca31cb51542bf5efa05abc50",
+      "head_id": "0c2fa8863145116ce24bd6d8520272db03f0c00e"
+    }
+  ]
+}

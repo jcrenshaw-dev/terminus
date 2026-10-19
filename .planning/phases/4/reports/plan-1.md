@@ -1,0 +1,17 @@
+PLAN COMPLETE
+Plan: .planning/phases/4/PLAN-1.md
+Tasks: 3 of 3
+| Task | Commit | Note |
+|---|---|---|
+| 1 - Key every session on the path below `projects` | 6fe9190 | `path_key` is public and keys on D-01's shape from the end of the path; a last-component link keys on its target (link metadata only). 49 tests failed on the new key, exactly the plan's count, all in the 12 leased files; each now gets its expected key from `path_key`. `two_paths_to_one_transcript_produce_one_session` runs under a `projects/-tmp-p/` tree. By hand: `sessions --json`, `search --json` and MCP `recall_search` all show `-tmp-p/11111111-1111-4111-8111-111111111111.jsonl`. Clippy clean. |
+| 2 - Ingest each key once per walk | 45420d8 | `ingest::claim` resolves a link once and lets the first path per key through; the tree walk and backfill (memory held across rounds) skip another path to the same file and record a different file as a per-file failure, unread. Single-file `run_with` asks `session_meta.transcript_path` and refuses a different existing file. New test `a_second_roots_file_never_appends_onto_the_first_roots_session` passes. By hand: backfill then ingest over A, A's sidecar and B's link to it leave 3 sessions, sidecar keyed `-tmp-p/11111111-.../subagents/agent-a.jsonl` with parent `-tmp-p/11111111-...jsonl`, no failure; with a second root holding a different `-tmp-p/11111111-...jsonl`, ingest added no session or turn (14 turns before and after) and `runs.error` names both files. |
+| 3 - Regression test for a moved `.claude` | 66b5e1f | `a_moved_claude_dir_behind_a_symlink_archives_nothing_twice` in tests/pass.rs passes. Copied unchanged into a worktree at 2b39948 it compiles and fails on the session count: `the session count moved from 3 to 6 when .claude moved` (AC6). |
+Suite: `cargo test --workspace --all-features --locked --no-fail-fast` with the three Linux hook-budget `--skip`s from `.github/workflows/test.yml` (no `workflow.test_command` set): 974 passed, 0 failed.
+Deviations:
+- [deviation] Task 1's Verify says `cargo fmt --check` is clean. At HEAD before this plan it already fails on `crates/terminus/src/cmd/hook.rs`, `crates/terminus/tests/hook.rs`, `crates/terminus/tests/release_workflows.rs` and `crates/terminus/tests/sign_release.rs` (rustfmt 1.10.0, edition 2021; the HEAD copy of tests/hook.rs passes only under edition 2024). None of those files is in this plan's lease. Every file this plan changed is rustfmt-clean; the four were left alone.
+Open items:
+- `cargo fmt --check` drift in the four files above predates this plan and needs its own fix outside the lease.
+- `crates/terminus/tests/lifecycle.rs` joined `session_meta` to `watermarks` with `USING (transcript_path)`, which only matched while the key was the absolute path; it now joins on `w.transcript_path = m.session_key`. No production code made that join.
+- The MCP half of Task 1's by-hand check needs `"project":"*"` in the `recall_search` arguments; without it the search scopes to the working directory's project and returns no hits.
+- Single-file ingest refuses when the stored `transcript_path` exists but cannot be canonicalized for a reason other than NotFound (a permission error, say), the same safe direction retention's `transcript_is_gone` takes. The plan named only the exists-and-different and gone cases.
+- `terminus backfill` without `--work` spawns a detached worker and returns at once, so a by-hand check has to wait for the `runs` row before reading the store.
