@@ -11,9 +11,13 @@
 //! ([`crate::ingest::path_key`]), and a store written before that is re-keyed
 //! here, in one transaction, before anything is rebuilt or read. A session with
 //! no twin is re-keyed in place: its key moves in every table that holds it, and
-//! its block rows, `session_no` and turn ids do not change. Sessions that share
-//! a new key are left exactly as they are. The steady state reads the stored
-//! keys that are still absolute paths and writes nothing.
+//! its block rows, `session_no` and turn ids do not change. Twins, sessions that
+//! reduce to one key, are merged into the oldest of them only when one stream
+//! is provably a prefix of the other's (D-10, D-11). The oldest keeps its number
+//! and takes the longer stream, and a twin is deleted only after it holds every
+//! byte the twin held. A twin that fails the test is reported on every run and
+//! left as it is. The steady state reads the stored keys that are still
+//! absolute paths and writes nothing.
 //!
 //! **The rebuild.** `reindex::up_to_date` brings a store older than this build
 //! forward before a single transcript is read, so a walk never appends turn
@@ -30,7 +34,8 @@
 //!
 //! No archived byte is lost here. A watermark is lowered so the next pass
 //! re-reads the gap, an orphaned watermark is removed because it claims bytes
-//! nothing archived, and a session is re-keyed in place.
+//! nothing archived, a session is re-keyed in place, and a twin is deleted only
+//! after the survivor holds every byte it held.
 //!
 //! **The sweep's first arm is outside a session that was not captured under
 //! `full`** (ING-07, phase 8 D-05). It compares a FILE offset against a count of
@@ -98,6 +103,8 @@ pub struct Recovered {
     pub removed: Vec<RemovedWatermark>,
     /// Sessions whose absolute-path key moved to the path below `projects`.
     pub rekeyed: usize,
+    /// Twins merged into an older session and deleted.
+    pub merged: usize,
     /// Reported again on every run until they are merged.
     pub unmerged: Vec<UnmergedTwin>,
     pub duration: Duration,
@@ -108,6 +115,7 @@ impl Recovered {
         !self.lowered.is_empty()
             || !self.removed.is_empty()
             || self.rekeyed > 0
+            || self.merged > 0
             || !self.unmerged.is_empty()
     }
 
@@ -116,10 +124,11 @@ impl Recovered {
     /// store moves thousands.
     pub fn lines(&self) -> Vec<String> {
         let mut out = Vec::new();
-        if self.rekeyed > 0 {
+        if self.rekeyed > 0 || self.merged > 0 {
             out.push(format!(
-                "re-keyed {} session(s) to their path below `projects`",
-                self.rekeyed
+                "re-keyed {} session(s) to their path below `projects` and merged {} twin(s) \
+                 into the older session",
+                self.rekeyed, self.merged
             ));
         }
         for w in &self.lowered {
@@ -206,24 +215,44 @@ fn rekey(store: &mut Store, report: &mut Recovered) -> Result<()> {
             group.push(Member::read(&tx, key)?);
         }
         group.sort_by_key(|m| m.session_no);
-        let (survivor, others) = group.split_first().expect("a group has members");
-        let mut current = survivor;
+        // Each member that passes is merged at once, so the survivor always
+        // holds the group's stream so far and the next member is tested
+        // against exactly what it would be merged into.
+        let (first, others) = group.split_first().expect("a group has members");
+        let mut survivor = Member::read(&tx, &first.key)?;
+        let mut absorbed = 0;
+        let mut new_key_kept = false;
         for member in others {
-            match one_stream(&tx, current, member)? {
+            let merged = match one_stream(&tx, &survivor, member)? {
+                Ok(()) => merge(&tx, &survivor, member)?,
+                Err(reason) => Err(reason),
+            };
+            match merged {
                 Ok(()) => {
-                    if member.stream.as_ref().map(|s| s.len)
-                        > current.stream.as_ref().map(|s| s.len)
-                    {
-                        current = member;
-                    }
+                    absorbed += 1;
+                    survivor = Member::read(&tx, &survivor.key)?;
                 }
-                Err(reason) => report.unmerged.push(UnmergedTwin {
-                    session_key: member.key.clone(),
-                    survivor_key: survivor.key.clone(),
-                    new_key: new.clone(),
-                    reason,
-                }),
+                Err(reason) => {
+                    new_key_kept |= member.key == *new;
+                    report.unmerged.push(UnmergedTwin {
+                        session_key: member.key.clone(),
+                        survivor_key: survivor.key.clone(),
+                        new_key: new.clone(),
+                        reason,
+                    });
+                }
             }
+        }
+        report.merged += absorbed;
+
+        // The new key goes to the survivor only once it has absorbed a member.
+        // Left free, the next pass archives the file fresh under it, and that
+        // copy merges on the following run if the survivor is its prefix.
+        // Handed to a stream that may not be the file's prefix, ingest would
+        // append one file's bytes onto another's.
+        if absorbed > 0 && !new_key_kept && survivor.key != *new {
+            move_key(&tx, &survivor.key, new)?;
+            report.rekeyed += 1;
         }
     }
     for (old, new) in &parents {
@@ -446,6 +475,134 @@ fn block(
                 .map_err(|e| e.to_string())
         });
     Ok(read)
+}
+
+/// Merge `member` into `survivor`, whose stream it was just proven to share,
+/// then delete it (D-11). `Err` leaves both as they were.
+///
+/// A longer member's block rows move to the survivor as they are, never
+/// recompressed, with the columns that describe the stream and its watermark,
+/// and the survivor's turns past its old end are derived through the seam
+/// ingest uses. Turn ids the survivor already had do not change. Every other
+/// column keeps the survivor's value unless it is null, and `transcript_path`
+/// is the member's: it is the spelling the latest pass read, and retention
+/// judges a transcript gone by it.
+fn merge(
+    tx: &Connection,
+    survivor: &Member,
+    member: &Member,
+) -> Result<std::result::Result<(), String>> {
+    let (Some(s), Some(m)) = (&survivor.stream, &member.stream) else {
+        return Ok(Err("one of the two has no session_meta row".into()));
+    };
+    if m.len > s.len {
+        // Read before anything is written, so a block that will not decode
+        // leaves the pair as it was.
+        let from = s.len as u64;
+        let wanted = [(from, (m.len - s.len) as u64)];
+        let tail = match crate::store::archive::ranges(tx, &member.key, &wanted)?
+            .and_then(|read| read.bytes.into_iter().next())
+        {
+            Some(Ok(tail)) => tail,
+            Some(Err(e)) => return Ok(Err(format!("its added bytes will not read: {e}"))),
+            None => return Ok(Err("its added bytes will not read".into())),
+        };
+        let turn_count: i64 = tx.query_row(
+            "SELECT count(*) FROM turns WHERE session_key = ?1",
+            [&survivor.key],
+            |r| r.get(0),
+        )?;
+
+        tx.execute(
+            "DELETE FROM blocks WHERE session_no = ?1",
+            [survivor.session_no],
+        )?;
+        tx.execute(
+            "UPDATE blocks SET session_no = ?1 WHERE session_no = ?2",
+            [survivor.session_no, member.session_no],
+        )?;
+        tx.execute(
+            "UPDATE session_meta SET
+                checksum = m.checksum, uncompressed_len = m.uncompressed_len,
+                block_size = m.block_size, capture_mode = m.capture_mode,
+                last_turn_at = m.last_turn_at
+               FROM (SELECT * FROM session_meta WHERE session_key = ?2) AS m
+              WHERE session_meta.session_key = ?1",
+            [&survivor.key, &member.key],
+        )?;
+
+        let scan = crate::parse::scan_from(&tail, from, turn_count);
+        for (record, turn) in scan.turns() {
+            let at = (record.offset - from) as usize;
+            crate::derive::derive_turn(
+                tx,
+                crate::derive::TurnRow {
+                    session_key: &survivor.key,
+                    session_no: survivor.session_no,
+                    turn,
+                    stream_offset: record.offset,
+                    byte_len: record.len,
+                    record: &tail[at..at + record.len as usize],
+                    subtype: record.subtype.as_deref(),
+                    compact_metadata: record.compact_metadata.as_deref(),
+                },
+            )?;
+        }
+        for record in &scan.records {
+            crate::derive::derive_boundary(tx, &survivor.key, record)?;
+        }
+
+        // The watermark has to match the stream the survivor now holds. Its
+        // own, lower one would make the next pass append bytes it already has.
+        tx.execute(
+            "INSERT INTO watermarks (transcript_path, byte_offset, updated_at)
+             SELECT ?1, byte_offset, updated_at FROM watermarks WHERE transcript_path = ?2
+             ON CONFLICT(transcript_path) DO UPDATE SET
+                byte_offset = excluded.byte_offset, updated_at = excluded.updated_at",
+            [&survivor.key, &member.key],
+        )?;
+    }
+
+    tx.execute(
+        "UPDATE session_meta SET
+            session_id = coalesce(session_meta.session_id, m.session_id),
+            transcript_path = m.transcript_path,
+            continues_from = coalesce(session_meta.continues_from, m.continues_from),
+            first_turn_at = coalesce(session_meta.first_turn_at, m.first_turn_at),
+            last_turn_at = coalesce(session_meta.last_turn_at, m.last_turn_at),
+            project = coalesce(session_meta.project, m.project),
+            cwd = coalesce(session_meta.cwd, m.cwd),
+            branch = coalesce(session_meta.branch, m.branch),
+            is_final = coalesce(session_meta.is_final, m.is_final),
+            is_evicted = coalesce(session_meta.is_evicted, m.is_evicted),
+            parent_session_key = coalesce(session_meta.parent_session_key, m.parent_session_key),
+            agent_meta = coalesce(session_meta.agent_meta, m.agent_meta),
+            transcript_diverged = coalesce(session_meta.transcript_diverged, m.transcript_diverged),
+            project_pre_worktree = coalesce(
+                session_meta.project_pre_worktree, m.project_pre_worktree),
+            capture_mode = coalesce(session_meta.capture_mode, m.capture_mode)
+           FROM (SELECT * FROM session_meta WHERE session_key = ?2) AS m
+          WHERE session_meta.session_key = ?1",
+        [&survivor.key, &member.key],
+    )?;
+
+    // A store from before derived schema 5 still has this table, whose rows
+    // reference `turns(id)`. The rebuild after recovery retires it.
+    let old_boundaries: bool = tx.query_row(
+        "SELECT count(*) > 0 FROM sqlite_master
+          WHERE type = 'table' AND name = 'compaction_boundaries'",
+        [],
+        |r| r.get(0),
+    )?;
+    if old_boundaries {
+        tx.execute(
+            "DELETE FROM compaction_boundaries
+              WHERE turn_id IN (SELECT id FROM turns WHERE session_key = ?1)",
+            [&member.key],
+        )?;
+    }
+    crate::retention::apply::delete_session(tx, &member.key)?;
+    Ok(Ok(()))
 }
 
 /// Move one session's key in every table that holds it. Block rows, turn ids and
