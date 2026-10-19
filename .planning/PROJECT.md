@@ -16,7 +16,11 @@ The verbatim transcript is the record: every session archived losslessly and per
 
 ### Active
 
-No cycle open.
+**traders, opened 2026-10-19.**
+
+The fixes and docs that go out with 1.0.0, all filed as issues. The signer refuses every version the installer refuses (#86). `status` and `verify` open the store read-only (#77). The excluded-project rule lives in one place (#80). A steady-state ingest pass stops reading archive state for unchanged transcripts (#85). A brief that drops its quoted turns says so (#46). The README and the docs describe 1.0.0 and the versioning rule (#87, #88).
+
+1.0.0 is the next release. From it on, each release bumps the middle number, a fix-only release bumps the last, and the first moves only for a large change.
 
 **Shipped: hardin, closed 2026-10-19.**
 

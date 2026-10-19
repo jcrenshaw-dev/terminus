@@ -7,8 +7,9 @@ Scope comes from `DESIGN-BRIEF.md`, where every decision is settled unless marke
 
 ## Active
 
-No cycle open. hardin's nine requirements are under `## Shipped`, labelled
-hardin. `/cad-phase add` opens the next cycle.
+traders delivers against GitHub issues rather than requirement rows: #86, #77,
+#80, #85, #46, #87 and #88, one phase each in ROADMAP.md. hardin's nine
+requirements are under `## Shipped`.
 
 ## Shipped
 
