@@ -1279,6 +1279,252 @@ fn injected_total(replayed: &Replayed) -> (usize, usize) {
     (hit_old + fp_old, hit_new + fp_new)
 }
 
+/// One session of hand-written records, `type` and `parentUuid` included, at
+/// the timestamps the test chose.
+///
+/// [`archive_at`] writes assistant records only, and a tool result is a `user`
+/// record answering one of them. Each entry carries what is particular to its
+/// record; this fills in the envelope the session shares.
+fn archive_records_at(
+    bench: &Bench,
+    name: &str,
+    project: &str,
+    session: &str,
+    records: &[(&str, serde_json::Value)],
+) {
+    let cwd = bench.root.join(project);
+    let mut body = String::new();
+    for (n, (at, particular)) in records.iter().enumerate() {
+        let mut record = serde_json::json!({
+            "parentUuid": null,
+            "isSidechain": false,
+            "cwd": cwd.to_string_lossy(),
+            "sessionId": session,
+            "uuid": format!("{session}-{n}"),
+            "timestamp": at,
+        });
+        for (key, value) in particular.as_object().expect("a record is an object") {
+            record[key] = value.clone();
+        }
+        body.push_str(&record.to_string());
+        body.push('\n');
+    }
+    let path = bench.work.join(name);
+    std::fs::write(&path, body).unwrap();
+    match ingest::run(&bench.data_dir, &path).unwrap() {
+        ingest::Outcome::Committed(_) => {}
+        other => panic!("{name}: {other:?}"),
+    }
+}
+
+/// D-01, D-04 (AC2): replay credits a decision with the turns the live hook
+/// would inject, and a Read result is not one of them.
+///
+/// The session's only turns naming the file are a Read and the result
+/// answering it, written in the shape Claude Code writes a Read result, so the
+/// injected total is 1 with the exclusion and 2 without it. Then the same store
+/// with `turns.is_typed` dropped: nothing there can say a turn was a tool
+/// result, so the replay still runs and counts both.
+#[test]
+fn replay_never_credits_a_tool_result_the_hook_refuses() {
+    let bench = bench();
+    let session = "99999999-9999-4999-8999-999999999999";
+    let project = "project-epsilon";
+    let file = "/code/epsilon/src/ledger.rs";
+    let cwd = bench.root.join(project).to_string_lossy().into_owned();
+
+    archive_records_at(
+        &bench,
+        "epsilon.jsonl",
+        project,
+        session,
+        &[
+            (
+                "2026-08-14T10:00:00.000Z",
+                serde_json::json!({
+                    "type": "assistant",
+                    "requestId": "req_read",
+                    "message": {
+                        "role": "assistant",
+                        "model": "claude-opus-5",
+                        "content": [read_call(file)],
+                    },
+                }),
+            ),
+            (
+                "2026-08-14T10:00:30.000Z",
+                serde_json::json!({
+                    "type": "user",
+                    "parentUuid": format!("{session}-0"),
+                    "message": {"role": "user", "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_read",
+                        "content": "     1\tpub struct Ledger;\n",
+                    }]},
+                    "toolUseResult": {
+                        "type": "text",
+                        "file": {
+                            "content": "pub struct Ledger;\n",
+                            "filePath": file,
+                            "numLines": 1,
+                            "startLine": 1,
+                            "totalLines": 1,
+                        },
+                    },
+                }),
+            ),
+        ],
+    );
+    let closed = bench.pass();
+    assert_eq!(closed.outcomes.finalized, 2, "{closed:?}");
+
+    let result: i64 = bench
+        .conn()
+        .query_row(
+            "SELECT id FROM turns WHERE uuid = ?1 AND record_type = 'user' AND is_typed = 0",
+            [format!("{session}-1")],
+            |r| r.get(0),
+        )
+        .unwrap();
+
+    // The premise: the result turn ranks inside the top three with an entity
+    // match, through the request shape the injector builds.
+    let raw = format!("what happened in {file}");
+    let (_, candidates) = prompt::candidates(&raw, Some(&cwd), prompt::MAX_CANDIDATES);
+    let request = Request::new(
+        prompt::query_of(&raw, Some(&cwd)),
+        Scope::Directory(bench.root.join(project)),
+    )
+    .candidates(candidates)
+    .excerpts(false)
+    .limit(prompt::RANKED);
+    let hits = search::run(&bench.conn(), &Config::default(), &request)
+        .unwrap()
+        .hits;
+    let rank = hits
+        .iter()
+        .position(|hit| hit.turn_id == result)
+        .unwrap_or_else(|| panic!("the result turn is not ranked: {hits:?}"));
+    assert!(rank < prompt::ENTITY_RANK, "ranked {rank}: {hits:?}");
+    assert!(hits[rank].entity_match.is_some(), "{hits:?}");
+
+    decide(
+        &bench,
+        session,
+        "2026-08-14T11:00:00.000Z",
+        &cwd,
+        &raw,
+        bench.watermark(),
+        &[],
+        0,
+        &[],
+    );
+    bench.pass();
+
+    let live = prompt::select(
+        &bench.data_dir,
+        &Config::default(),
+        &Payload {
+            session_id: Some("99999999-0000-4000-8000-000000000001"),
+            transcript_path: None,
+            cwd: Some(&cwd),
+            prompt: Some(&raw),
+            source: None,
+        },
+    );
+    let diff = replayed(&bench, &Thresholds::default());
+    assert_eq!(diff.decisions, 1, "{diff:?}");
+    assert_eq!(injected_total(&diff).1, 1, "{diff:?}");
+    assert_eq!(injected_total(&diff).1, live.hits.len(), "{live:?}");
+
+    // A store from before `is_typed`: replay still runs and counts both.
+    bench
+        .conn()
+        .execute_batch("ALTER TABLE turns DROP COLUMN is_typed")
+        .unwrap();
+    let store = Store::open_read_only(&bench.data_dir).unwrap();
+    let aged = replay::replay(&store, &Config::default(), &Thresholds::default())
+        .expect("a store without is_typed still replays");
+    assert_eq!(injected_total(&aged).1, 2, "{aged:?}");
+}
+
+/// D-06: under a `prompt_chars` too small for the frame the live hook hands
+/// over nothing, and replay credits nothing either.
+///
+/// One Read naming the file, replayed at the default budget and at 200, with
+/// the budget loaded from `terminus.toml` the way the binary loads it. Each
+/// replay matches what `prompt::select` gives under the same config.
+#[test]
+fn replay_credits_nothing_when_the_budget_cannot_hold_the_frame() {
+    let bench = bench();
+    let session = "99999999-9999-4999-8999-999999999998";
+    let project = "project-zeta";
+    let file = "/code/zeta/src/ledger.rs";
+    let cwd = bench.root.join(project).to_string_lossy().into_owned();
+
+    archive_records_at(
+        &bench,
+        "zeta.jsonl",
+        project,
+        session,
+        &[(
+            "2026-08-14T10:00:00.000Z",
+            serde_json::json!({
+                "type": "assistant",
+                "requestId": "req_read",
+                "message": {
+                    "role": "assistant",
+                    "model": "claude-opus-5",
+                    "content": [read_call(file)],
+                },
+            }),
+        )],
+    );
+    bench.pass();
+
+    let raw = format!("what happened in {file}");
+    decide(
+        &bench,
+        session,
+        "2026-08-14T11:00:00.000Z",
+        &cwd,
+        &raw,
+        bench.watermark(),
+        &[],
+        0,
+        &[],
+    );
+    bench.pass();
+
+    let small = bench.work.join("config-200");
+    std::fs::create_dir_all(&small).unwrap();
+    std::fs::write(
+        small.join("terminus.toml"),
+        "[injection]\nprompt_chars = 200\n",
+    )
+    .unwrap();
+    let small = Config::load_from(&small).unwrap();
+
+    let store = Store::open_read_only(&bench.data_dir).unwrap();
+    for (config, expected) in [(Config::default(), 1), (small, 0)] {
+        let live = prompt::select(
+            &bench.data_dir,
+            &config,
+            &Payload {
+                session_id: Some("99999999-0000-4000-8000-000000000002"),
+                transcript_path: None,
+                cwd: Some(&cwd),
+                prompt: Some(&raw),
+                source: None,
+            },
+        );
+        let diff = replay::replay(&store, &config, &Thresholds::default()).unwrap();
+        assert_eq!(diff.decisions, 1, "{diff:?}");
+        assert_eq!(injected_total(&diff).1, expected, "{diff:?}");
+        assert_eq!(injected_total(&diff).1, live.hits.len(), "{live:?}");
+    }
+}
+
 /// #40, D-13: a decision made under the compacted pool replays through the
 /// compacted window and its own dropped set, so `compacted_ranked` moves it,
 /// and decisions recorded as ordinary or of unknown kind replay as they always

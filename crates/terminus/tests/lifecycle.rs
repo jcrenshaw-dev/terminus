@@ -30,6 +30,11 @@ const SESSIONS: u8 = 8;
 /// at zstd level 3.
 const INCOMPRESSIBLE_CHARS: usize = 32 * 1024;
 
+/// The key a transcript is archived under: its path below the project folder.
+fn key_of(path: &Path) -> String {
+    terminus_core::ingest::path_key(path).unwrap()
+}
+
 /// The same isolation `cli.rs`, `status.rs` and `retention.rs` use, and for the
 /// same reason: a spawn that set only `TERMINUS_DATA_DIR` would resolve the
 /// developer's real config and walk the live `~/.claude` tree.
@@ -127,10 +132,7 @@ impl Bench {
     fn evict(&self, keys: &[&Path]) {
         let mut store = Store::open(&self.data_dir).unwrap();
         let selection = Selection {
-            evict: keys
-                .iter()
-                .map(|k| k.to_string_lossy().into_owned())
-                .collect(),
+            evict: keys.iter().map(|k| key_of(k)).collect(),
             ..Selection::default()
         };
         let applied = retention::apply(&mut store, &selection);
@@ -144,10 +146,7 @@ impl Bench {
     fn delete(&self, keys: &[&Path]) {
         let mut store = Store::open(&self.data_dir).unwrap();
         let selection = Selection {
-            delete: keys
-                .iter()
-                .map(|k| k.to_string_lossy().into_owned())
-                .collect(),
+            delete: keys.iter().map(|k| key_of(k)).collect(),
             ..Selection::default()
         };
         let applied = retention::apply(&mut store, &selection);
@@ -410,12 +409,12 @@ fn both_archive_tables_and_the_footprint_each_reconcile_to_their_own_total() {
         let conn = bench.conn();
         conn.execute(
             "UPDATE session_meta SET project = NULL WHERE session_key = ?1",
-            [keys[0].to_string_lossy()],
+            [key_of(&keys[0])],
         )
         .unwrap();
         conn.execute(
             "UPDATE session_meta SET first_turn_at = NULL WHERE session_key = ?1",
-            [keys[1].to_string_lossy()],
+            [key_of(&keys[1])],
         )
         .unwrap();
     }
@@ -519,7 +518,7 @@ fn an_excluded_project_is_in_neither_archive_total() {
         .conn()
         .execute(
             "UPDATE session_meta SET project = ?2 WHERE session_key = ?1",
-            rusqlite::params![keys[0].to_string_lossy(), HIDDEN],
+            rusqlite::params![key_of(&keys[0]), HIDDEN],
         )
         .unwrap();
     let everything = archived_bytes(&bench);
@@ -623,12 +622,12 @@ fn an_export_is_the_archived_streams_byte_for_byte_with_a_manifest_over_them() {
     // Every session's file holds exactly what the archive holds.
     let conn = bench.conn();
     for key in &keys {
-        let expected = testkit::stream(&conn, &key.to_string_lossy()).unwrap();
+        let expected = testkit::stream(&conn, &key_of(key)).unwrap();
         let named = manifest(&dest)["files"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|f| f["session_key"] == key.to_string_lossy().as_ref())
+            .find(|f| f["session_key"] == key_of(key).as_str())
             .unwrap_or_else(|| panic!("{} is not in the manifest", key.display()))
             .clone();
         let written = std::fs::read(dest.join(named["file"].as_str().unwrap())).unwrap();
@@ -643,9 +642,9 @@ fn an_export_is_the_archived_streams_byte_for_byte_with_a_manifest_over_them() {
         let (mode, watermark): (Option<String>, i64) = conn
             .query_row(
                 "SELECT m.capture_mode, w.byte_offset
-                   FROM session_meta m JOIN watermarks w USING (transcript_path)
+                   FROM session_meta m JOIN watermarks w ON w.transcript_path = m.session_key
                   WHERE m.session_key = ?1",
-                [key.to_string_lossy()],
+                [key_of(key)],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
@@ -710,7 +709,7 @@ fn an_evicted_session_is_exported_as_an_empty_file_the_manifest_explains() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|f| f["session_key"] == keys[0].to_string_lossy().as_ref())
+        .find(|f| f["session_key"] == key_of(&keys[0]).as_str())
         .expect("the evicted session is still in the manifest")
         .clone();
     assert_eq!(named["evicted"], true, "{named}");
@@ -736,7 +735,7 @@ fn an_excluded_project_is_in_neither_the_manifest_nor_the_directory() {
         .conn()
         .execute(
             "UPDATE session_meta SET project = ?2 WHERE session_key = ?1",
-            rusqlite::params![keys[0].to_string_lossy(), HIDDEN],
+            rusqlite::params![key_of(&keys[0]), HIDDEN],
         )
         .unwrap();
     bench.config(&format!("exclude = [\"{HIDDEN}\"]\n"));
@@ -753,7 +752,7 @@ fn an_excluded_project_is_in_neither_the_manifest_nor_the_directory() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|f| f["session_key"] == keys[0].to_string_lossy().as_ref()),
+            .any(|f| f["session_key"] == key_of(&keys[0]).as_str()),
         "the excluded session is in the manifest: {doc}"
     );
     assert!(

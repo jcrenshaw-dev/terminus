@@ -16,6 +16,16 @@
 //! [`Redaction::apply_json_line`] decodes each of its strings before the rules
 //! see it.
 //!
+//! Every other surface is cut from a projection of the record, and the
+//! projection drops every key, so a value stored under `api_token` in a tool's
+//! input, in a `toolUseResult` or in an attachment arrives with no name beside
+//! it and rules 3 to 6 never see it (#62). [`Redaction::apply_record`] runs
+//! first, on the parsed record and only with the knob on: it walks those three
+//! subtrees as deep as the projection reads them and replaces each string held
+//! directly under a [`SECRET_NAMES`] key with [`REDACTED`], which is rule 4's
+//! test, so an excerpt loses what a `recall_get` body loses. The index is built
+//! from the same projection without this step, so search still finds the turn.
+//!
 //! # The rules, and why each one is here
 //!
 //! In the order they run, each with the marker it leaves. All of
@@ -48,6 +58,17 @@
 //!    no in-repo source of truth and it will go stale: a prefix GitHub invents
 //!    after that date is missed until someone edits the array.
 //!    Marker: [`REDACTED_GITHUB_TOKEN`].
+//! 9. **Bare `sk-` keys** - a run opening with `sk-` and carrying at least 20
+//!    key characters after it. OpenAI, Anthropic,
+//!    OpenRouter and DeepSeek keys all open that way and are pasted nameless
+//!    like rules 7 and 8's. It keys on the generic prefix rather than a list of
+//!    providers, because a list misses OpenAI's plain `sk-` keys and every
+//!    provider not on it. After rules 3 to 6, so `Authorization: Bearer sk-...`
+//!    keeps rule 3's marker. Marker: [`REDACTED_SK_KEY`].
+//!
+//! Before any of them, on every surface but `recall_get`, the keyed-value step
+//! above replaces a string under a secret-named key in a tool's input, a
+//! `toolUseResult` or an attachment. Marker: [`REDACTED`].
 //!
 //! Every one of them leaves a marker naming what went. A projection that came
 //! back silently shorter would leave a reader unable to tell filtering from a
@@ -68,6 +89,17 @@
 //! sized to a real token would. What that costs is measured rather than
 //! guessed: over the 60 most recent real transcripts, 21 MB, runs carrying a
 //! GitHub prefix occurred 0 times and bare `eyJ`-prefixed runs 4 times.
+//!
+//! Rule 9's floor runs the other way. It is sized against real keys and against
+//! the placeholders the archive actually holds, measured over the whole corpus
+//! on 2026-10-18: bare `sk-` 889 times, `sk-abc` 156, `sk-ant-` 128,
+//! `sk-live-` 120, `sk-fake` 118, `sk-svcac` 89, `sk-not-a-quoted-string` 64
+//! and `sk-notification` 22. Twenty key characters clears every one of them; a
+//! floor of 6, rule 8's, would take `sk-notification` out of ordinary prose.
+//! What it leaves out: an `sk-` run with fewer than 20 key characters after
+//! the prefix goes out whole, and so does Stripe's `sk_live_`, whose underscore
+//! puts it outside the rule. The floor assumes every real `sk-` key runs past
+//! 20 characters, which comes from known key formats rather than provider docs.
 //!
 //! Over-matching is the direction to be wrong in; it is NOT a licence for a
 //! rule to hand a shape off to another rule that does not take it. Rule 3 did
@@ -129,6 +161,11 @@ pub const REDACTED_JWT: &str = "[redacted:a-json-web-token]";
 /// [`REDACTED_JWT`]'s reason.
 pub const REDACTED_GITHUB_TOKEN: &str = "[redacted:a-github-token]";
 
+/// What replaces a bare `sk-` key. One whitespace-free token, for
+/// [`REDACTED_JWT`]'s reason, and no run in it opens with `sk-`, so a second
+/// scrub does not read the marker as a key.
+pub const REDACTED_SK_KEY: &str = "[redacted:an-sk-key]";
+
 /// What replaces the userinfo a connection URL carries before its `@`. One
 /// whitespace-free token, for [`REDACTED_JWT`]'s reason.
 pub const REDACTED_URL_USERINFO: &str = "[redacted:connection-url-userinfo]";
@@ -162,6 +199,14 @@ const MIN_GITHUB_TOKEN_BODY: usize = 6;
 /// Sized against sentinels for [`MIN_GITHUB_TOKEN_BODY`]'s reason. Measured
 /// cost over the same sample: 4 bare `eyJ`-prefixed runs.
 const MIN_JWT_CHARS: usize = 12;
+
+/// How many bytes a run needs after `sk-` to be taken as a key.
+///
+/// Sized the other way from [`MIN_GITHUB_TOKEN_BODY`]: against real keys, which
+/// all run well past it, and against the placeholders the archive holds, which
+/// all fall short of it (measured 2026-10-18; the module doc lists them). A
+/// floor of 6 would redact `sk-notification`.
+const MIN_SK_KEY_BODY: usize = 20;
 
 /// Filter a derived projection on its way into the model's context (PRIV-03).
 ///
@@ -245,6 +290,72 @@ impl Redaction {
             Cow::Borrowed(line)
         }
     }
+
+    /// One parsed record with its keyed secrets replaced, ready to be projected.
+    ///
+    /// The projection drops every key, so a value stored under `api_token` in a
+    /// tool's input reaches the rules with no name beside it and none of them
+    /// can see it (#62). This runs first, over the three subtrees whose keys
+    /// the projection drops: each `tool_use` block's `input`, `toolUseResult`
+    /// and `attachment`. A string directly under a key [`is_secret_name`]
+    /// accepts becomes [`REDACTED`], which is rule 4's test, so an excerpt
+    /// loses exactly what a `recall_get` body loses. Anything else under such a
+    /// key is walked into rather than replaced.
+    ///
+    /// Borrowed when the knob is off. When it is on and nothing matched, the
+    /// copy equals the record it was made from.
+    pub fn apply_record<'r>(&self, record: &'r serde_json::Value) -> Cow<'r, serde_json::Value> {
+        if !self.on {
+            return Cow::Borrowed(record);
+        }
+        let mut record = record.clone();
+        if let Some(blocks) = record
+            .pointer_mut("/message/content")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            for block in blocks {
+                if block.get("type").and_then(serde_json::Value::as_str) == Some("tool_use") {
+                    if let Some(input) = block.get_mut("input") {
+                        redact_keyed_values(input, 0);
+                    }
+                }
+            }
+        }
+        for subtree in ["toolUseResult", "attachment"] {
+            if let Some(value) = record.get_mut(subtree) {
+                redact_keyed_values(value, 0);
+            }
+        }
+        Cow::Owned(record)
+    }
+}
+
+/// Replace every string held directly under a secret-named key in `value`.
+///
+/// Depth is counted the way the projection counts it and stops where it stops,
+/// at [`MAX_DEPTH`](crate::index::text::MAX_DEPTH), so hostile nesting cannot
+/// recurse without limit.
+fn redact_keyed_values(value: &mut serde_json::Value, depth: usize) {
+    if depth >= crate::index::text::MAX_DEPTH {
+        return;
+    }
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, item) in map {
+                if item.is_string() && is_secret_name(key) {
+                    *item = serde_json::Value::String(REDACTED.to_owned());
+                } else {
+                    redact_keyed_values(item, depth + 1);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                redact_keyed_values(item, depth + 1);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// The one rule set.
@@ -260,7 +371,8 @@ fn redact(text: &str) -> String {
     let text = redact_assignments(&text);
     let text = redact_flag_values(&text);
     let text = redact_jwts(&text);
-    redact_github_tokens(&text)
+    let text = redact_github_tokens(&text);
+    redact_sk_keys(&text)
 }
 
 /// Every string in a JSON line, decoded, filtered and written back.
@@ -602,6 +714,14 @@ fn quoted_end(bytes: &[u8], open: usize) -> Option<usize> {
 /// The value runs to the closing quote when it is quoted and to the next
 /// whitespace when it is not - which is how a shell export, a `.env` line and a
 /// process command line all spell it.
+///
+/// The name is read back from the `=` a byte at a time, over ASCII bytes only,
+/// the way rule 3 reads a header name. It used to be found with `rfind` over
+/// characters plus one, and one byte past the start of a multi-byte character
+/// is inside it: `café=1` panicked on the slice that followed, and took the MCP
+/// request and the hook down with it (#61). No name byte is ever part of a
+/// multi-byte character, so the run starts on a character boundary whatever
+/// stands in front of it.
 fn redact_assignments(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut out = String::with_capacity(text.len());
@@ -612,10 +732,10 @@ fn redact_assignments(text: &str) -> String {
             at += 1;
             continue;
         }
-        let name_start = text[copied..at]
-            .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.'))
-            .map(|i| copied + i + 1)
-            .unwrap_or(copied);
+        let mut name_start = at;
+        while name_start > copied && is_flag_name_byte(bytes[name_start - 1]) {
+            name_start -= 1;
+        }
         if name_start == at || !is_secret_name(&text[name_start..at]) {
             at += 1;
             continue;
@@ -789,6 +909,18 @@ fn is_github_token(run: &str) -> bool {
     GITHUB_TOKEN_PREFIXES
         .iter()
         .any(|prefix| run.starts_with(prefix) && run.len() >= prefix.len() + MIN_GITHUB_TOKEN_BODY)
+}
+
+/// Rule 9: a bare `sk-` key, keyed on the prefix and [`MIN_SK_KEY_BODY`].
+///
+/// A whole credential run only, so `task-notification` is never one.
+fn redact_sk_keys(text: &str) -> String {
+    redact_runs(text, is_credential_byte, is_sk_key, REDACTED_SK_KEY)
+}
+
+fn is_sk_key(run: &str) -> bool {
+    run.strip_prefix("sk-")
+        .is_some_and(|key| key.len() >= MIN_SK_KEY_BODY)
 }
 
 /// Replace every maximal run of `in_run` bytes that `is_secret` accepts.
@@ -1238,5 +1370,132 @@ mod tests {
         ] {
             assert_eq!(for_model_context(plain), plain, "changed: {plain}");
         }
+    }
+
+    /// A multi-byte character in front of an `=` used to put rule 5's name
+    /// slice inside it, and the slice panicked (#61).
+    #[test]
+    fn a_multi_byte_name_before_an_equals_sign_comes_back_unchanged() {
+        for plain in [
+            "café=1",
+            "Größe=10",
+            "the menu said café=1 and the form said Größe=10, nothing else",
+        ] {
+            assert_eq!(for_model_context(plain), plain, "changed: {plain}");
+        }
+    }
+
+    /// Curly quotes are content, not delimiters, so the closing one goes with
+    /// the value run.
+    #[test]
+    fn a_curly_quoted_assignment_loses_its_value_and_its_closing_quote() {
+        assert_eq!(for_model_context("“token=abc”"), "“token=[redacted]");
+    }
+
+    /// The name run starts after the whole character, so the assignment is
+    /// still read rather than skipped.
+    #[test]
+    fn a_secret_name_right_after_a_multi_byte_character_still_loses_its_value() {
+        let scrubbed = for_model_context("éAPI_KEY=PLANTED-61 then the rest");
+
+        assert_eq!(scrubbed, "éAPI_KEY=[redacted] then the rest");
+    }
+
+    /// The `redaction` fuzz target's saved crash, bytes `CA 32 3D 0A`, built
+    /// the way the target builds it: the lone `CA` decodes to U+FFFD.
+    #[test]
+    fn the_fuzz_crash_input_returns_normally_through_every_entry_point() {
+        let text = String::from_utf8_lossy(&[0xCA, 0x32, 0x3D, 0x0A]);
+        let redaction = Redaction { on: true };
+
+        assert_eq!(for_model_context(&text), text);
+        assert_eq!(redaction.apply(&text), text);
+        assert_eq!(redaction.apply_json_line(&text), text);
+    }
+
+    #[test]
+    fn a_json_line_holding_a_multi_byte_assignment_comes_back_unchanged() {
+        let line = "{\"type\":\"user\",\"message\":{\"content\":\"the café=1 line\"}}";
+
+        assert_eq!(Redaction { on: true }.apply_json_line(line), line);
+    }
+
+    /// Nothing near the token names it: no `:`, no `=`, no flag, no quoted
+    /// pair, so rule 9 is the only thing that can catch it.
+    #[test]
+    fn a_bare_sk_key_in_prose_goes_under_its_own_marker() {
+        let prose = "the run printed sk-planted-bare-key-for-a-test-5c and moved on";
+
+        let scrubbed = for_model_context(prose);
+
+        assert_eq!(
+            scrubbed,
+            "the run printed [redacted:an-sk-key] and moved on"
+        );
+        assert!(scrubbed.contains(REDACTED_SK_KEY));
+        assert_eq!(for_model_context(&scrubbed), scrubbed);
+    }
+
+    #[test]
+    fn an_sk_run_is_a_key_from_twenty_characters_after_the_prefix() {
+        let twenty = "sk-planted-floor-twenty";
+        let nineteen = "sk-planted-under-floor";
+        assert_eq!(twenty.len() - "sk-".len(), 20);
+        assert_eq!(nineteen.len() - "sk-".len(), 19);
+
+        assert_eq!(
+            for_model_context(&format!("it said {twenty} once")),
+            format!("it said {REDACTED_SK_KEY} once")
+        );
+        let short = format!("it said {nineteen} once");
+        assert_eq!(for_model_context(&short), short);
+    }
+
+    /// The placeholders the archive actually holds stay as they were.
+    #[test]
+    fn sk_placeholders_and_a_hyphenated_word_come_back_unchanged() {
+        let prose = "the hook sent a task-notification, sk-notification is the \
+                     placeholder, and sk-not-a-quoted-string is another";
+
+        assert_eq!(for_model_context(prose), prose);
+    }
+
+    /// Rules 3 and 5 run first, so a named `sk-` value keeps their marker and
+    /// rule 9 never sees it.
+    #[test]
+    fn a_named_sk_value_keeps_the_header_and_assignment_marker() {
+        let header = for_model_context(
+            "curl sent Authorization: Bearer sk-planted-header-key-for-a-test-7d and got 200",
+        );
+        assert!(
+            header.contains("Authorization: [redacted]"),
+            "the header rule did not take it: {header}"
+        );
+        assert!(
+            !header.contains(REDACTED_SK_KEY),
+            "rule 9 took it: {header}"
+        );
+        assert!(
+            !header.contains("planted-header-key"),
+            "the key survived: {header}"
+        );
+        assert_eq!(for_model_context(&header), header);
+
+        let assignment = for_model_context(
+            "export OPENAI_API_KEY=sk-planted-assign-key-for-a-test-2e then ran it",
+        );
+        assert!(
+            assignment.contains("OPENAI_API_KEY=[redacted]"),
+            "the assignment rule did not take it: {assignment}"
+        );
+        assert!(
+            !assignment.contains(REDACTED_SK_KEY),
+            "rule 9 took it: {assignment}"
+        );
+        assert!(
+            !assignment.contains("planted-assign-key"),
+            "the key survived: {assignment}"
+        );
+        assert_eq!(for_model_context(&assignment), assignment);
     }
 }

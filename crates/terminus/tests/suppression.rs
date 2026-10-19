@@ -488,7 +488,7 @@ fn the_same_prompt_twice_in_one_session_is_answered_once() {
     let injected_ids = ids(&state, "injected");
     assert_eq!(injected_ids.len(), 1, "{state}");
     assert!(
-        first.contains(&format!("turn {}", injected_ids[0])),
+        framed_line(&first, injected_ids[0]),
         "the state file names a turn the injection did not: {first}"
     );
     assert_eq!(
@@ -540,7 +540,7 @@ fn a_turn_of_the_session_on_screen_is_never_injected() {
         "UserPromptSubmit",
     );
     assert!(
-        control.contains(&format!("turn {}", refused[0].0)),
+        framed_line(&control, refused[0].0),
         "the suppressed turn is not the one the same prompt otherwise gets: {control}"
     );
 }
@@ -671,6 +671,24 @@ fn the_brief_records_the_typed_turn_it_quoted_and_not_the_tool_result_after_it()
          the next prompt would refuse to inject a turn the model never saw: \
          {quoted:?} contains {harness}"
     );
+}
+
+/// Is this turn's line between the frame's tags, with the closing tag once and
+/// last?
+///
+/// Looked for as a line inside the block rather than as a substring, since
+/// header prose of the frame's own would otherwise satisfy a bare `contains`.
+fn framed_line(text: &str, turn_id: i64) -> bool {
+    use terminus_core::inject::{CLOSE_TAG, OPEN_TAG};
+    if text.matches(CLOSE_TAG).count() != 1 || !text.ends_with(&format!("\n{CLOSE_TAG}")) {
+        return false;
+    }
+    let Some(open) = text.find(OPEN_TAG) else {
+        return false;
+    };
+    text[open + OPEN_TAG.len()..text.len() - CLOSE_TAG.len()]
+        .lines()
+        .any(|line| line.starts_with(&format!("- turn {turn_id} (")))
 }
 
 /// Does the injection name this turn?

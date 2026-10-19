@@ -397,6 +397,253 @@ fn a_destination_that_already_holds_files_is_refused() {
     assert!(!bench.pointer().exists(), "the pointer was written anyway");
 }
 
+/// A destination given with a trailing slash is recorded without it (D-08).
+///
+/// The slash is what lets `symlink_metadata` follow a link, so the path the
+/// checks run on and the path the pointer records have to be the same
+/// normalized one.
+#[test]
+fn a_trailing_slash_is_dropped_before_the_pointer_is_written() {
+    let bench = bench();
+    bench.ingest();
+    let destination = bench.root.join("elsewhere").join("terminus");
+    let given = format!("{}/", destination.display());
+
+    let out = bench.run(&["data", "move", &given, "--yes"]);
+    assert!(out.status.success(), "the move failed: {}", text(&out));
+
+    let pointer = std::fs::read_to_string(bench.pointer()).unwrap();
+    assert_eq!(pointer.trim(), destination.to_string_lossy());
+    assert_eq!(
+        bench.status()["data"]["store"].as_str().unwrap(),
+        destination.join(DB_FILE_NAME).to_string_lossy()
+    );
+}
+
+/// An empty directory at `path`, set to `mode` whatever the umask.
+fn directory(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(path).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+}
+
+/// A refusal before the question (D-07): exit 1, no `move it?` line, the store
+/// where it was and no pointer.
+fn assert_refused_before_asking(bench: &Bench, out: &Output) {
+    assert_eq!(out.status.code(), Some(1), "{}", text(out));
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("move it?"),
+        "the question was asked: {}",
+        text(out)
+    );
+    assert!(
+        bench.data_dir().join(DB_FILE_NAME).is_file(),
+        "the store moved anyway"
+    );
+    assert!(!bench.pointer().exists(), "the pointer was written anyway");
+}
+
+/// A symlink is refused whether or not the path ends in a slash, which is the
+/// form `symlink_metadata` would otherwise follow (D-07, D-08).
+#[test]
+fn a_symlink_destination_is_refused_with_or_without_a_trailing_slash() {
+    let bench = bench();
+    bench.ingest();
+    let real = bench.root.join("real");
+    directory(&real, 0o700);
+    let link = bench.root.join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+
+    for given in [link.display().to_string(), format!("{}/", link.display())] {
+        let out = bench.run(&["data", "move", &given, "--yes"]);
+        assert_refused_before_asking(&bench, &out);
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("is a symlink"),
+            "{given}: {}",
+            text(&out)
+        );
+        assert!(listed(&real).is_empty(), "{given}: {:?}", listed(&real));
+    }
+}
+
+/// A directory open to other accounts is refused, never narrowed, and the
+/// refusal carries the command that fixes it (D-10).
+#[test]
+fn a_destination_open_to_other_accounts_is_refused_with_the_chmod() {
+    let bench = bench();
+    bench.ingest();
+    let destination = bench.root.join("wide");
+    directory(&destination, 0o777);
+
+    let out = bench.run(&["data", "move", destination.to_str().unwrap(), "--yes"]);
+    assert_refused_before_asking(&bench, &out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&format!("chmod 700 '{}'", destination.display())),
+        "{stderr}"
+    );
+    assert!(listed(&destination).is_empty());
+}
+
+/// A directory that cannot be listed is refused, never read as empty.
+#[test]
+fn a_destination_that_cannot_be_listed_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let bench = bench();
+    bench.ingest();
+    let destination = bench.root.join("unlistable");
+    directory(&destination, 0o300);
+    let restore =
+        || std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    if std::fs::read_dir(&destination).is_ok() {
+        restore();
+        println!("skipped: this process can list a 0300 directory, as root can");
+        return;
+    }
+
+    let out = bench.run(&["data", "move", destination.to_str().unwrap(), "--yes"]);
+    restore();
+    assert_refused_before_asking(&bench, &out);
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("could not be listed"),
+        "{}",
+        text(&out)
+    );
+    assert!(listed(&destination).is_empty());
+}
+
+/// What the rule must still accept: an empty 0700 directory this account
+/// owns. Without it, a uid probe that refused every existing destination would
+/// pass every refusal test above.
+#[test]
+fn an_empty_owner_only_directory_is_accepted() {
+    let bench = bench();
+    bench.ingest();
+    let destination = bench.root.join("ready");
+    directory(&destination, 0o700);
+
+    let out = bench.run(&["data", "move", destination.to_str().unwrap(), "--yes"]);
+    assert!(out.status.success(), "the move failed: {}", text(&out));
+    let pointer = std::fs::read_to_string(bench.pointer()).unwrap();
+    assert_eq!(pointer.trim(), destination.to_string_lossy());
+    assert!(
+        destination.join(DB_FILE_NAME).is_file(),
+        "{:?}",
+        listed(&destination)
+    );
+}
+
+/// `data move <destination>` without `--yes`, with `meanwhile` run once the
+/// question is on stdout and `y` answered after it.
+///
+/// No sleep: the read ends when the `move it?` line arrives, and a stdout that
+/// closes first fails the test, since then the question was never asked.
+fn move_answering_yes_after(bench: &Bench, destination: &Path, meanwhile: impl FnOnce()) -> Output {
+    use std::io::{BufRead, BufReader, Read};
+
+    let mut child = bench
+        .command(&["data", "move", destination.to_str().unwrap()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn data move");
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut seen = String::new();
+    loop {
+        let mut line = String::new();
+        let read = stdout.read_line(&mut line).unwrap();
+        seen.push_str(&line);
+        if read == 0 {
+            let out = child.wait_with_output().unwrap();
+            panic!(
+                "stdout closed before the question: {seen}\nstderr: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        if line.contains("move it? [y/N]") {
+            break;
+        }
+    }
+
+    meanwhile();
+
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(stdin, "y").unwrap();
+    drop(stdin);
+    stdout.read_to_string(&mut seen).unwrap();
+    let mut out = child.wait_with_output().unwrap();
+    out.stdout = seen.into_bytes();
+    out
+}
+
+/// What a refusal at the second check leaves: exit 1, the store where it was,
+/// no pointer, and nothing written at the destination.
+fn assert_refused_after_the_answer(bench: &Bench, out: &Output, destination: &Path) {
+    assert_eq!(out.status.code(), Some(1), "{}", text(out));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("changed while the question waited"),
+        "{}",
+        text(out)
+    );
+    assert!(listed(destination).is_empty(), "{:?}", listed(destination));
+    assert!(
+        bench.data_dir().join(DB_FILE_NAME).is_file(),
+        "the store moved anyway"
+    );
+    assert!(!bench.pointer().exists(), "the pointer was written anyway");
+}
+
+/// #59 itself: the destination is made while the question waits. An empty 0700
+/// directory passes the rule, so only the absent-then-present comparison
+/// stops it (D-11).
+#[test]
+fn a_destination_created_while_the_question_waits_is_refused() {
+    let bench = bench();
+    bench.ingest();
+    let destination = bench.root.join("late");
+
+    let out = move_answering_yes_after(&bench, &destination, || directory(&destination, 0o700));
+    assert_refused_after_the_answer(&bench, &out, &destination);
+}
+
+/// The checked directory is renamed away and a new one put in its place. Both
+/// pass the rule, so only the device-and-inode comparison can tell them apart.
+#[test]
+fn a_destination_replaced_while_the_question_waits_is_refused() {
+    let bench = bench();
+    bench.ingest();
+    let destination = bench.root.join("swapped");
+    let aside = bench.root.join("swapped-aside");
+    directory(&destination, 0o700);
+
+    let out = move_answering_yes_after(&bench, &destination, || {
+        std::fs::rename(&destination, &aside).unwrap();
+        directory(&destination, 0o700);
+    });
+    assert_refused_after_the_answer(&bench, &out, &destination);
+    assert!(listed(&aside).is_empty(), "{:?}", listed(&aside));
+}
+
+/// The checked directory keeps its inode and is opened to everyone, so only
+/// the rule's second run can refuse it.
+#[test]
+fn a_destination_widened_while_the_question_waits_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let bench = bench();
+    bench.ingest();
+    let destination = bench.root.join("widened");
+    directory(&destination, 0o700);
+
+    let out = move_answering_yes_after(&bench, &destination, || {
+        std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o777)).unwrap()
+    });
+    assert_refused_after_the_answer(&bench, &out, &destination);
+}
+
 /// The two-word form, held to the `observations regenerate` rule: the verb comes
 /// first or not at all, and a second word that is not the verb is misuse (exit
 /// 2) rather than a move of something the user did not name.

@@ -4,10 +4,11 @@
 //!
 //! `session_meta.continues_from` holds a **session id** - the value Claude Code
 //! writes in a record's `sessionId` / `session_id` fields - while `sessions` is
-//! keyed on **file identity**, the canonical transcript path (D-01). The two
-//! namespaces are deliberately not the same thing, because 818 real sidecar
-//! files report their parent's `sessionId` and keying the archive on that would
-//! overwrite a parent session's blob with a 3 KB agent transcript.
+//! keyed on **file identity**, the transcript's path below its project folder
+//! (D-01).
+//! The two namespaces are deliberately not the same thing, because 818 real
+//! sidecar files report their parent's `sessionId` and keying the archive on
+//! that would overwrite a parent session's blob with a 3 KB agent transcript.
 //!
 //! So a resolver crossing from `continues_from` to a `session_key` must expect
 //! **zero, one or many** rows:
@@ -88,10 +89,11 @@ pub const SIDECAR_DIR: &str = "subagents";
 /// record-level id distinguishes nothing, and keying on it links a sidecar to
 /// itself or to whichever session happens to share the id.
 ///
-/// The returned value is a **session key** (a transcript path), not a session
-/// id, and it is returned whether or not that transcript has been ingested -
-/// for the same reason `continues_from` carries no foreign key (D-19). A
-/// top-level transcript has no `subagents` ancestor and gets `None`.
+/// The returned value is the parent's transcript **path**, not a session id and
+/// not yet a key: `ingest::path_key` turns it into the key the parent is
+/// archived under. It is returned whether or not that transcript has been
+/// ingested, for the same reason `continues_from` carries no foreign key
+/// (D-19). A top-level transcript has no `subagents` ancestor and gets `None`.
 pub fn sidecar_parent(transcript: &std::path::Path) -> Option<std::path::PathBuf> {
     let parts: Vec<std::ffi::OsString> = transcript
         .components()

@@ -89,6 +89,10 @@ const CLAUDE_JSON: &str = r#"{
   }
 }"#;
 
+/// The program `tests/owner_only.rs` runs every spawn through: set the umask,
+/// then become the binary.
+const UMASK_022: &str = "umask 022; exec \"$0\" \"$@\"";
+
 struct Fixture {
     _dir: tempfile::TempDir,
     root: PathBuf,
@@ -165,8 +169,28 @@ impl Fixture {
     /// a logged value can only have come from terminus.
     fn command_at(&self, exe: &Path, args: &[&str]) -> Command {
         let mut command = Command::new(exe);
+        command.args(args);
+        self.isolate(&mut command);
         command
-            .args(args)
+    }
+
+    /// This build under an explicit `umask 022`, so a mode that comes from the
+    /// umask shows up whatever the developer's own umask is. The binary and its
+    /// arguments are positional parameters, never shell text. The shell is
+    /// named by its absolute path because `PATH` holds only the fake `claude`.
+    fn command_under_umask_022(&self, args: &[&str]) -> Command {
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg(UMASK_022)
+            .arg(env!("CARGO_BIN_EXE_terminus"))
+            .args(args);
+        self.isolate(&mut command);
+        command
+    }
+
+    fn isolate(&self, command: &mut Command) {
+        command
             .env("PATH", &self.path_dir)
             .env_remove(NONESSENTIAL_TRAFFIC)
             .env("TERMINUS_BIN_DIR", &self.bin_dir)
@@ -174,7 +198,6 @@ impl Fixture {
             .env("TERMINUS_DATA_DIR", self.root.join("data"))
             .env("TERMINUS_CONFIG_DIR", self.root.join("config"))
             .env("HOME", &self.root);
-        command
     }
 
     /// Put a fake `claude` on the fixture's `PATH` that prints `stderr` and
@@ -447,6 +470,59 @@ fn install_places_this_build_at_the_stable_path() {
         "a second install over our own copy failed: {}",
         text(&second)
     );
+}
+
+fn mode(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+/// Under umask 022, a `settings.json` install creates is 0600 and the stored
+/// version file is still 0755 (#64).
+#[test]
+fn a_settings_file_install_creates_is_owner_only() {
+    let fixture = fixture();
+    std::fs::write(fixture.claude_json(), CLAUDE_JSON).unwrap();
+
+    let output = fixture
+        .command_under_umask_022(&["install"])
+        .stdin(Stdio::null())
+        .output()
+        .expect("the binary runs");
+    assert!(output.status.success(), "{}", text(&output));
+
+    let settings = read(&fixture.settings());
+    assert_eq!(our_entries(&settings, &fixture.stable()).len(), 4);
+    let settings_mode = mode(&fixture.settings());
+    assert_eq!(settings_mode, 0o600, "settings.json is {settings_mode:o}");
+    let version_mode = mode(&fixture.version_file());
+    assert_eq!(version_mode, 0o755, "the version file is {version_mode:o}");
+}
+
+/// Under umask 022, a `settings.json` the user made 0644 is still 0644 after
+/// install rewrites it, and its backup is 0600 (#64).
+#[test]
+fn a_settings_file_keeps_its_own_mode_through_install() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = fixture();
+    fixture.seed();
+    // Set, not left to this process's umask.
+    std::fs::set_permissions(fixture.settings(), std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    let output = fixture
+        .command_under_umask_022(&["install"])
+        .stdin(Stdio::null())
+        .output()
+        .expect("the binary runs");
+    assert!(output.status.success(), "{}", text(&output));
+
+    let settings = read(&fixture.settings());
+    assert_eq!(our_entries(&settings, &fixture.stable()).len(), 4);
+    let settings_mode = mode(&fixture.settings());
+    assert_eq!(settings_mode, 0o644, "settings.json is {settings_mode:o}");
+    let backup_mode = mode(&fixture.claude_dir.join("settings.json.terminus-backup"));
+    assert_eq!(backup_mode, 0o600, "the backup is {backup_mode:o}");
 }
 
 /// A plain file carrying the marker, which is what an install from before the

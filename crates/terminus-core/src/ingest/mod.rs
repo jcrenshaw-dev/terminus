@@ -42,7 +42,10 @@ pub enum Outcome {
     /// (ING-02).
     LockHeld,
     /// The transcript has no complete record past the stored watermark. No row
-    /// is added anywhere, not even to `runs`.
+    /// is added anywhere, not even to `runs`. The one write it can make is to
+    /// the archived session's `session_meta.transcript_path`, and only when
+    /// the file was read from somewhere else than the path stored there, so a
+    /// moved file's row names where it is now.
     UpToDate,
     /// The transcript is inside a project the config excludes, named with the
     /// directory that excluded it. Nothing was opened and nothing was written.
@@ -57,7 +60,8 @@ pub enum Outcome {
 /// What a committed pass moved.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Pass {
-    /// The canonical transcript path, which is also the session's key (D-01).
+    /// The session's key: the transcript's path below its project folder,
+    /// `<uuid>.jsonl` or a sidecar's `<sessionId>/subagents/...` path.
     pub session_key: String,
     pub bytes_read: u64,
     pub turns_added: usize,
@@ -117,6 +121,11 @@ pub fn run_with(
     // (STOR-05), so a pass never appends turn rows in one shape beside rows
     // written in another.
     let (mut store, _recovered) = crate::recover::recover(data_dir)?;
+
+    // Which file holds this key in the store is asked in `Existing::read`, the
+    // one place the walk, backfill and this path all go through.
+    let session_key = path_key(&canonical)?;
+
     // One resolver for one invocation: a single file has one `cwd`, so the memo
     // buys nothing here and costs nothing either, and `ingest_locked` takes the
     // same shape whether its caller named one file or walked two thousand.
@@ -124,11 +133,97 @@ pub fn run_with(
     ingest_locked(
         &mut store,
         &canonical,
+        session_key,
         started,
         RunRow::PerFile,
         &mut projects,
         config.capture_mode(),
     )
+}
+
+/// A file named like an archived session whose file is gone, and whose first
+/// bytes are not the ones archived. Not a divergence: the session's own file
+/// may come back, and it must not find its session flagged.
+fn not_the_holder(path: &Path, holder: &Path) -> Error {
+    Error::io(
+        path,
+        std::io::Error::other(format!(
+            "its session key is held by {}, which is gone, and this file does not \
+             begin with the bytes archived from it, so it was not appended",
+            holder.display()
+        )),
+    )
+}
+
+/// A second file whose key another file already holds. It is never opened.
+pub(crate) fn key_held(path: &Path, holder: &Path) -> Error {
+    Error::io(
+        path,
+        std::io::Error::other(format!(
+            "its session key is already held by {}, so it was not read",
+            holder.display()
+        )),
+    )
+}
+
+/// What a walk does with one discovered path.
+pub(crate) enum Claim {
+    /// The first path to yield this key: ingest `file`, the link's target or
+    /// the path itself.
+    Ingest { file: PathBuf, session_key: String },
+    /// Another path to a file this walk already took.
+    Same,
+    /// A different file whose key an earlier one in this walk took.
+    Held(Error),
+}
+
+/// Resolve a discovered path once and decide whether this walk ingests it.
+///
+/// Two paths can share a key: a sidecar link and the file it points at (D-03),
+/// or two project folders, in one root or two, holding the same session file
+/// below the project folder. The first
+/// path a walk meets takes the key, and a later one naming a different file is
+/// refused without being opened, because ingest appends from the watermark and
+/// would mix two files into one stream with nothing to detect it.
+///
+/// The store is asked before the walk is: a file the archived session was not
+/// read from, while that one is still there, never takes the key, so the
+/// session's own file can, whichever of the two sorts first.
+pub(crate) fn claim(
+    conn: &Connection,
+    taken: &mut std::collections::HashMap<String, PathBuf>,
+    path: &Path,
+) -> Result<Claim> {
+    let file = link_target(path).unwrap_or_else(|| path.to_path_buf());
+    let session_key = path_key(&file)?;
+    Ok(match taken.get(&session_key) {
+        None => {
+            if let Holder::Other(holder) = stored_holder(conn, &session_key, &file)? {
+                return Ok(Claim::Held(key_held(&file, &holder)));
+            }
+            taken.insert(session_key.clone(), file.clone());
+            Claim::Ingest { file, session_key }
+        }
+        Some(holder) if *holder == file => Claim::Same,
+        Some(holder) => Claim::Held(key_held(&file, holder)),
+    })
+}
+
+/// [`Holder::of`] for one key, read straight off the store.
+fn stored_holder(conn: &Connection, session_key: &str, path: &Path) -> Result<Holder> {
+    let stored: Option<Option<String>> = conn
+        .query_row(
+            "SELECT m.transcript_path FROM sessions s JOIN session_meta m USING (session_key)
+             WHERE s.session_key = ?1",
+            [session_key],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(Holder::of(
+        stored.as_ref().and_then(|s| s.as_deref()),
+        stored.is_some(),
+        path,
+    ))
 }
 
 /// Who owns the `runs` row for this file's transaction.
@@ -149,20 +244,23 @@ pub(crate) enum RunRow {
 }
 
 /// The pass itself, with the lock already held and the store already open.
+///
+/// `path` is the file to read, never a link, and `session_key` is what
+/// [`path_key`] made of it. The session is keyed on the transcript's path below
+/// its project folder, never on the record's session id (D-01, D-02): 812 real
+/// sidecar files report their parent's sessionId, and keying on that writes a
+/// 3 KB agent transcript over a parent session's archive. The watermark is
+/// keyed on the same value.
 pub(crate) fn ingest_locked(
     store: &mut Store,
     path: &Path,
+    session_key: String,
     started: Instant,
     run_row: RunRow,
     projects: &mut Resolver,
     mode: CaptureMode,
 ) -> Result<Outcome> {
-    // The session is keyed on the transcript FILE identity, never on the
-    // record's session id (D-01): 812 real sidecar files report their parent's
-    // sessionId, and keying on that writes a 3 KB agent transcript over a
-    // parent session's archive. The watermark is keyed on the same value.
-    let session_key = path_key(path)?;
-    let existing = Existing::read(store.conn(), &session_key)?;
+    let existing = Existing::read(store.conn(), &session_key, path)?;
     let prepared = prepare(path, session_key, &existing, mode)?;
     apply(store, prepared, started, run_row, projects)
 }
@@ -183,6 +281,10 @@ pub(crate) struct Prepared {
     /// happens whether or not there are new bytes - a flagged session with
     /// nothing new must still stop being flagged.
     clear_divergence: bool,
+    /// The session is archived and `session_meta.transcript_path` names some
+    /// other path than this one. Only read when there is no `work`, because
+    /// the meta write that comes with `work` stores the path anyway.
+    moved: bool,
     /// `None` when there is no complete record past the watermark.
     work: Option<Work>,
 }
@@ -236,6 +338,14 @@ pub(crate) fn prepare(
     existing: &Existing,
     mode: CaptureMode,
 ) -> Result<Prepared> {
+    // Before anything else, evicted or not. Two project folders, in one root or
+    // two, can hold files with one key, and the tail read below checks a file
+    // against the watermark by length alone, so a different file would be
+    // appended onto the archived session.
+    if let Holder::Other(holder) = &existing.holder {
+        return Err(key_held(path, holder));
+    }
+
     // Before the file is even opened, and the only safe answer for a session
     // retention emptied (RET-02, phase 8 D-03). An append checks the stored
     // hashes and tail, and an evicted session has no block rows left, so left
@@ -254,6 +364,7 @@ pub(crate) fn prepare(
             session_key,
             path: path.to_path_buf(),
             clear_divergence: false,
+            moved: existing.moved(path),
             work: None,
         });
     }
@@ -272,8 +383,20 @@ pub(crate) fn prepare(
     // block row and a read of the whole file, and it is paid only by a session
     // that is actually flagged - the steady state reads the flag, finds it
     // clear, and fetches at most the tail row (D-13).
+    //
+    // A file standing in for one that is gone gets the same comparison: a moved
+    // transcript begins with the archived bytes, and any other file named like
+    // it does not. Its refusal flags nothing, because the archive still matches
+    // the file it was read from.
     let tail = if existing.diverged {
         read_flagged(path, existing)?
+    } else if let Holder::Gone(holder) = &existing.holder {
+        read_flagged(path, existing).map_err(|e| match e {
+            Error::TranscriptDiverged { .. } | Error::TranscriptRewritten { .. } => {
+                not_the_holder(path, holder)
+            }
+            e => e,
+        })?
     } else {
         read_tail(path, existing.watermark)?
     };
@@ -294,6 +417,7 @@ pub(crate) fn prepare(
             session_key,
             path: path.to_path_buf(),
             clear_divergence,
+            moved: existing.moved(path),
             work: None,
         });
     }
@@ -359,11 +483,9 @@ pub(crate) fn prepare(
 
     // D-03: a sidecar's parent comes from its path and never from its records,
     // which all report the parent's `sessionId` and so distinguish nothing. The
-    // path is already the canonical one the walk built, so the derived value is
-    // exactly the key the parent's own ingest wrote - whether or not the parent
-    // has been ingested yet.
-    let parent_session_key =
-        lineage::sidecar_parent(path).map(|p| p.to_string_lossy().into_owned());
+    // parent's path goes through the same key function the parent's own ingest
+    // uses, so the two agree whether or not the parent has been ingested yet.
+    let parent_session_key = lineage::sidecar_parent(path).and_then(|p| path_key(&p).ok());
 
     // Read once per session, not once per pass: the bytes never change, and a
     // steady-state pass over 818 real sidecars would otherwise reopen 818 meta
@@ -391,6 +513,7 @@ pub(crate) fn prepare(
     Ok(Prepared {
         path: path.to_path_buf(),
         clear_divergence,
+        moved: false,
         work: Some(Work {
             stream_base,
             existing_session_no: existing.session.as_ref().map(|s| s.session_no),
@@ -426,6 +549,7 @@ pub(crate) fn apply(
         session_key,
         path,
         clear_divergence,
+        moved,
         work,
     } = prepared;
 
@@ -436,6 +560,15 @@ pub(crate) fn apply(
     }
 
     let Some(work) = work else {
+        // Nothing new, but the file may have moved, as when `.claude` moves
+        // with no link left behind. Retention asks whether the stored path is
+        // gone, so it has to name the file that is still on disk.
+        if moved {
+            store.conn().execute(
+                "UPDATE session_meta SET transcript_path = ?2 WHERE session_key = ?1",
+                rusqlite::params![session_key, path.to_string_lossy()],
+            )?;
+        }
         return Ok(Outcome::UpToDate);
     };
     let Work {
@@ -836,7 +969,39 @@ pub(crate) struct Existing {
     /// `session_meta.block_size` as stored. Checked where it is used, so a bad
     /// value fails only a pass that has something to append.
     block_size: Option<i64>,
+    /// `session_meta.transcript_path` as stored: where the file was last read
+    /// from. Off the same row as the flags, so knowing whether it moved costs
+    /// no extra query.
+    transcript_path: Option<String>,
+    /// Whether that file is the one this pass reads.
+    holder: Holder,
     session: Option<ExistingSession>,
+}
+
+/// The file an archived session was read from, against the file a pass is
+/// about to read under the same key.
+enum Holder {
+    /// The same file, or no archived session to disagree with.
+    This,
+    /// The stored file no longer exists. The file read now may be it, moved.
+    Gone(PathBuf),
+    /// Another file, still there, or one that cannot be told apart from
+    /// another.
+    Other(PathBuf),
+}
+
+impl Holder {
+    fn of(stored: Option<&str>, archived: bool, path: &Path) -> Holder {
+        let Some(stored) = stored.filter(|s| archived && *s != &*path.to_string_lossy()) else {
+            return Holder::This;
+        };
+        let held = PathBuf::from(stored);
+        match (held.canonicalize(), path.canonicalize()) {
+            (Ok(a), Ok(b)) if a == b => Holder::This,
+            (Err(e), _) if e.kind() == std::io::ErrorKind::NotFound => Holder::Gone(held),
+            _ => Holder::Other(held),
+        }
+    }
 }
 
 struct ExistingSession {
@@ -848,7 +1013,8 @@ struct ExistingSession {
 }
 
 impl Existing {
-    pub(crate) fn read(conn: &Connection, session_key: &str) -> Result<Existing> {
+    /// `path` is the file the pass will read under `session_key`.
+    pub(crate) fn read(conn: &Connection, session_key: &str, path: &Path) -> Result<Existing> {
         let watermark: Option<i64> = conn
             .query_row(
                 "SELECT byte_offset FROM watermarks WHERE transcript_path = ?1",
@@ -859,7 +1025,15 @@ impl Existing {
         // All three flags off the one `session_meta` row rather than three
         // round trips: a pass reads this for every one of two thousand
         // transcripts.
-        type MetaFlags = (bool, bool, bool, i64, Option<String>, Option<i64>);
+        type MetaFlags = (
+            bool,
+            bool,
+            bool,
+            i64,
+            Option<String>,
+            Option<i64>,
+            Option<String>,
+        );
         let (
             agent_meta_stored,
             diverged,
@@ -867,11 +1041,12 @@ impl Existing {
             uncompressed_len,
             stored_capture_mode,
             block_size,
+            transcript_path,
         ): MetaFlags = conn
             .query_row(
                 "SELECT agent_meta IS NOT NULL, coalesce(transcript_diverged, 0) <> 0,
                         coalesce(is_evicted, 0) <> 0, uncompressed_len, capture_mode,
-                        block_size
+                        block_size, transcript_path
                  FROM session_meta WHERE session_key = ?1",
                 [session_key],
                 |r| {
@@ -882,11 +1057,12 @@ impl Existing {
                         r.get(3)?,
                         r.get(4)?,
                         r.get(5)?,
+                        r.get(6)?,
                     ))
                 },
             )
             .optional()?
-            .unwrap_or((false, false, false, 0, None, None));
+            .unwrap_or((false, false, false, 0, None, None, None));
         let uncompressed_len = uncompressed_len.max(0) as u64;
         let turn_count: i64 = conn.query_row(
             "SELECT count(*) FROM turns WHERE session_key = ?1",
@@ -933,6 +1109,11 @@ impl Existing {
             None => None,
         };
 
+        let holder = Holder::of(transcript_path.as_deref(), session.is_some(), path);
+        // A file standing in for a gone one is compared against every archived
+        // byte, the way a flagged one is.
+        let whole = diverged || matches!(holder, Holder::Gone(_));
+
         let session = match session {
             Some((session_no, checksum)) => {
                 let checksum =
@@ -948,7 +1129,7 @@ impl Existing {
                 let archive = if evicted {
                     archive::AppendState::empty()
                 } else {
-                    archive::append_state(conn, session_no, block_size, uncompressed_len, diverged)?
+                    archive::append_state(conn, session_no, block_size, uncompressed_len, whole)?
                 };
                 Some(ExistingSession {
                     session_no,
@@ -968,14 +1149,38 @@ impl Existing {
             uncompressed_len,
             stored_capture_mode,
             block_size,
+            transcript_path,
+            holder,
             session,
         })
     }
+
+    /// Is this an archived session whose stored path is not `path`? Compared
+    /// the way `write_session_meta` writes the path.
+    fn moved(&self, path: &Path) -> bool {
+        self.session.is_some() && self.transcript_path.as_deref() != Some(&*path.to_string_lossy())
+    }
 }
 
-/// The session key: the canonical path, as text.
-pub(crate) fn path_key(path: &Path) -> Result<String> {
-    path.to_str().map(str::to_owned).ok_or_else(|| {
+/// The session key for a transcript path: the path below its project folder,
+/// so moving `.claude`, reaching it through a symlink or moving the project
+/// folder keeps the key.
+///
+/// `<uuid>.jsonl` for a session, and
+/// `<sessionId>/subagents/[workflows/wf_*/]agent-*.jsonl` for a sidecar. The
+/// shape is read from the end of the path, which must sit in a project folder
+/// inside a `projects` folder, never by stripping a configured root, so a
+/// stored key from a root or project folder that no longer exists reduces the
+/// same way. Any other path keys on its own text, which every caller hands
+/// in canonical.
+///
+/// A path whose last component is a link keys on the file it points at (D-03),
+/// found from link metadata alone. No byte of the file is read (D-02), and a
+/// path that does not exist gets the shape test and is not an error.
+pub fn path_key(path: &Path) -> Result<String> {
+    let target = link_target(path);
+    let path = target.as_deref().unwrap_or(path);
+    let text = path.to_str().ok_or_else(|| {
         Error::io(
             path,
             std::io::Error::new(
@@ -983,7 +1188,62 @@ pub(crate) fn path_key(path: &Path) -> Result<String> {
                 "transcript path is not valid UTF-8, so it cannot key a session",
             ),
         )
-    })
+    })?;
+    Ok(below_project_folder(path).unwrap_or_else(|| text.to_owned()))
+}
+
+/// The file a link points at, when the path's last component is a link.
+///
+/// Only an absolute path is looked at, so a key that is already relative never
+/// resolves against the working directory. A link that will not resolve is
+/// keyed as itself.
+pub(crate) fn link_target(path: &Path) -> Option<PathBuf> {
+    if !path.is_absolute() {
+        return None;
+    }
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    if !meta.file_type().is_symlink() {
+        return None;
+    }
+    path.canonicalize().ok()
+}
+
+/// The part of a UTF-8 path below its project folder, when the path has one of
+/// the two transcript shapes discovery yields and the project folder sits in a
+/// `projects` folder. The project folder's name is left out of the key.
+fn below_project_folder(path: &Path) -> Option<String> {
+    use std::path::Component;
+    let parts: Vec<&str> = path
+        .components()
+        .rev()
+        .map_while(|c| match c {
+            Component::Normal(name) => name.to_str(),
+            _ => None,
+        })
+        .collect();
+    // `parts` runs from the file name upwards and stops at the first component
+    // that is not a plain name, such as the root or a `..`.
+    let file = *parts.first()?;
+    // `depth` counts the components up to and including the project folder,
+    // which must sit in a folder named `projects`. The key keeps all of them
+    // but the project folder.
+    let depth = if crate::discover::is_uuid_transcript(file) {
+        2
+    } else if crate::discover::is_agent_transcript(file) {
+        match parts.get(1..4)? {
+            [crate::lineage::SIDECAR_DIR, _, _] => 4,
+            [wf, "workflows", crate::lineage::SIDECAR_DIR] if wf.starts_with("wf_") => 6,
+            _ => return None,
+        }
+    } else {
+        return None;
+    };
+    if *parts.get(depth)? != "projects" {
+        return None;
+    }
+    let mut key: Vec<&str> = parts[..depth - 1].to_vec();
+    key.reverse();
+    Some(key.join("/"))
 }
 
 /// A flagged session's tail, read only once its prefix proves the file is the

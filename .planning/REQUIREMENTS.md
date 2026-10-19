@@ -7,29 +7,36 @@ Scope comes from `DESIGN-BRIEF.md`, where every decision is settled unless marke
 
 ## Active
 
-Committed scope for v0.2.0. Each maps to exactly one roadmap phase, added with
-`/cad-phase add`. All five come from the second outside review of 2026-10-12,
-recorded under Seeds in `CAPTURE.md`, which holds the detail behind each line.
-
-### Archive (STOR)
-
-- **STOR-11**: Evicting a session re-blobs it under minimal capture in place of emptying its blob, so an evicted session stays rebuildable and partly readable, and `terminus reindex` rebuilds every session, evicted or not, through one path.
-
-### Ingest (ING)
-
-- **ING-12**: The `UserPromptSubmit`, `SessionEnd` and `PostCompact` hooks pass the ingest the one transcript named in their payload, and only `SessionStart` runs the full tree walk, so a hook holds the ingest lock for its own file alone.
+Committed scope for hardin. Each maps to exactly one roadmap phase. All of it
+comes from the sentinel audit of 2026-10-18, filed as the GitHub issue each line
+names, which holds the detail and the code references behind it.
 
 ### Injection (INJ)
 
-- **INJ-08**: The injection gate counts only matches that carry information: a `tool` entity alone never makes a prompt eligible, a match whose IDF is below a query-time floor does not count, a path match is not counted a second time through the prompt's prose, and a bare `tool_use` turn is offered only when neither its result turn nor the call-and-result pair is available. The thresholds are tuned with `terminus replay` over the real decision log.
+- **INJ-09**: Text the `UserPromptSubmit` hook and the `SessionStart` brief inject never hands archived tool output to the model as the user's own history: tool_result and `toolUseResult` turns are either left out of injected excerpts or labelled with their record type and tool, and the quoted block sits inside a delimiter the excerpt cannot close, under a header that says it is quoted history, not instructions. (#60)
 
-### Feedback (FEED)
+### Privacy (PRIV)
 
-- **FEED-05**: Changing the labelling rules never leaves `terminus stats` averaging labels made under old and new rules: either each label row carries the version of the rules that produced it, or `terminus reindex` recomputes every label under the current rules.
+- **PRIV-06**: With `[privacy] redact_recall` on, a secret stored as a string value under a secret-named key in a `tool_use` input, a `toolUseResult` or an attachment is redacted in `recall_search` excerpts, `recall_context` text and injected text, as `recall_get` already redacts it. (#62)
+- **PRIV-07**: With `[privacy] redact_recall` on, a bare `sk-` provider token in prose is redacted. (#5)
+- **PRIV-08**: Redaction never panics on a multi-byte character directly before a `NAME=` run, and recall, the hooks and the read commands return normally on a turn that holds one. (#61)
+- **PRIV-09**: The egress test proves each planted shape is replaced by its own rule's marker, in the turn that holds it. (#4)
 
-### Docs (DOC)
+### Install (INST)
 
-- **DOC-05**: Comments in `crates/` state invariants and their reasons at module level, short and plain, and the phase-local `D-NN` history behind them moves into one decisions file with globally unique ids, so no comment cites a `.planning/phases/` path or a phase-local decision number.
+- **INST-15**: Install and uninstall never hold `settings.json`'s contents in a file wider than owner-only: every temporary, the rewrite and the backup alike, is created 0600, and a `settings.json` Terminus creates is 0600. (#64)
+
+### Archive (STOR)
+
+- **STOR-12**: `terminus data move` refuses a destination that is a symlink, is owned by another uid, has group or world bits, or cannot be listed, and checks the destination again after the confirmation. Whether `Store::open` also refuses a store another uid owns, which reverses the open's deliberate skip of a failed chmod, is settled at context. (#59)
+
+### Ingest (ING)
+
+- **ING-13**: A session's key does not change when its `.claude` directory moves or is reached through a symlink, so a transcript is not archived a second time, and an archive that already holds sessions under both an old and a new path is repaired without losing a session that exists only in the archive. (#57)
+
+### Recall (RCL)
+
+- **RCL-12**: Human-mode output of `terminus search`, `terminus show` and `terminus observations` replaces C0 control characters other than tab and newline, DEL, and C1 controls in archived text with a visible escape, except the archived record `terminus show <id>` prints, which stays byte for byte. `--json` output is unchanged. (#63, #65, #66)
 
 ## Shipped
 
@@ -165,8 +172,17 @@ Explicit exclusions. The reason prevents scope creep later.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
+| INJ-09 | Phase 1 | Complete |
+| PRIV-08 | Phase 2 | Complete |
+| PRIV-07 | Phase 2 | Complete |
+| PRIV-06 | Phase 2 | Complete |
+| PRIV-09 | Phase 2 | Complete |
+| INST-15 | Phase 3 | Complete |
+| STOR-12 | Phase 3 | Complete |
+| ING-13 | Phase 4 | Complete |
+| RCL-12 | Phase 5 | Pending |
 
 Bare headers — `/cad-plan` seeds a row per requirement when its phase is planned.
 
 ---
-*Last updated: 2026-10-17 at the v0.0.1 close, seeding v0.2.0*
+*Last updated: 2026-10-18, opening hardin*

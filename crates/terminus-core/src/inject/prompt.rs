@@ -42,6 +42,23 @@
 //! only once a boundary row was actually there to read, so a prompt that beat
 //! the ingest to it carries the debt forward rather than losing it.
 //!
+//! **Tool results are never injected (D-01).** A tool result is text Claude
+//! read - a file, a web page, a command's output - and quoting it on a later
+//! prompt hands it to the model as this project's own history, planted
+//! instructions included. So the hits the threshold admits lose every `user`
+//! turn the harness wrote (`turns.is_typed` = 0) before the suppressions and the
+//! cap see them, and the step is [`quotable`], which `terminus replay` runs too.
+//! The trade is accepted: error entities exist only on result turns, so a prompt
+//! that pastes an error line no longer fires, and `recall_search` stays the way
+//! back to those turns. A named file still fires, because a Read matches on its
+//! tool-call turn as well as on its result.
+//!
+//! **What it hands over is framed (D-02, D-06).** A header line saying the block
+//! is quoted history and not instructions, the turn lines between the
+//! `inject` module's fixed tags, and the closing tag last. Every archived string
+//! in the lines, the excerpt and the day, has any closing tag neutralized, and a
+//! budget too small for the frame is an injection that does not happen.
+//!
 //! **Nothing decompresses a session until something has fired.** One excerpt
 //! materializes a whole compressed session - p90 1.03 MB, max 10.1 MB over the
 //! real corpus - so the search runs with excerpts off (D-13) and the at most
@@ -224,6 +241,13 @@ fn budget(config: &Config) -> usize {
     config.prompt_chars().min(MAX_PROMPT_CHARS)
 }
 
+/// Whether this arm's budget can hold the frame at all (D-06). The live arm and
+/// `terminus replay` both ask here, so a budget too small for the frame injects
+/// nothing in either.
+pub(crate) fn frame_fits(config: &Config) -> bool {
+    super::frame_fits(DESCRIPTION, budget(config))
+}
+
 /// The ceiling on one injection, whatever `terminus.toml` configures.
 ///
 /// Bundle 2.1.237 persists a hook stdout longer than 10,000 characters to disk
@@ -251,19 +275,27 @@ fn render(hits: &[Hit], budget: usize, decision: &mut Decision) -> Option<String
         return None;
     }
 
-    // What the lines cost with no text in them: the ids, the dates and the
-    // head. Measured rather than estimated, so the share below is what is
-    // actually left.
+    // The frame is a fixed cost and comes off first (D-06). Then what the lines
+    // cost with no text in them: the ids and the dates. Both measured rather
+    // than estimated, so the share below is what is actually left.
+    let room = budget.saturating_sub(super::frame_cost(DESCRIPTION));
     let empty: Vec<String> = hits.iter().map(|_| String::new()).collect();
     let bare = super::chars(&assemble(hits, &empty));
-    let share = budget.saturating_sub(bare) / hits.len();
+    let share = room.saturating_sub(bare) / hits.len();
 
     let texts: Vec<String> = hits
         .iter()
         .map(|hit| super::clip(hit.excerpt.trim(), share))
         .collect();
+
+    // The backstop clip inside `frame` cuts the lines and never the frame: it
+    // fires when the ids and dates alone are over what the frame left, which
+    // no cut to the quoted turns can fix. No frame, no injection, and nothing
+    // recorded as given.
+    let text = super::frame(DESCRIPTION, &assemble(hits, &texts), budget)?;
+
     // Per turn, the text that turn contributed - not its share of the total.
-    // The head line and the ids are the injection's and belong to no turn.
+    // The frame and the ids are the injection's and belong to no turn.
     decision.injected = hits
         .iter()
         .zip(&texts)
@@ -272,35 +304,35 @@ fn render(hits: &[Hit], budget: usize, decision: &mut Decision) -> Option<String
             chars: super::chars(text),
         })
         .collect();
-
-    // The final clip is the backstop and only that: it fires when the ids and
-    // dates alone are over budget, which no cut to the quoted turns can fix.
-    let text = super::clip(&assemble(hits, &texts), budget);
-    // The whole emitted string, after that backstop: what the model was
-    // actually given, which the per-turn shares do not sum to.
+    // The whole emitted string, frame included: what the model was actually
+    // given, which the per-turn shares do not sum to.
     decision.chars_injected = super::chars(&text);
     Some(text)
 }
 
-/// The head line and one line per turn.
+/// What this arm says the block holds, ahead of [`super::QUOTED_HISTORY`] on
+/// the header line.
+const DESCRIPTION: &str =
+    "Terminus recall - past turns from this project that match what was just asked.";
+
+/// One line per turn, which is what goes between the tags.
 ///
 /// The turn id is first on each line and unmissable, because it is the argument
 /// `recall_get` and `terminus show` take: the model that wants the whole turn
-/// rather than the sentence has to be able to ask for it.
+/// rather than the sentence has to be able to ask for it. The day is archived
+/// text like the excerpt and is neutralized like it (D-05).
 fn assemble(hits: &[Hit], texts: &[String]) -> String {
-    let mut out = String::from(
-        "Terminus recall - past turns from this project that match what was just asked:",
-    );
+    let mut lines: Vec<String> = Vec::new();
     for (hit, text) in hits.iter().zip(texts) {
-        out.push_str("\n- turn ");
-        out.push_str(&hit.turn_id.to_string());
+        let mut line = format!("- turn {}", hit.turn_id);
         if let Some(day) = hit.ts.as_deref().map(day) {
-            out.push_str(&format!(" ({day})"));
+            line.push_str(&format!(" ({})", super::neutralize(day)));
         }
-        out.push_str(": ");
-        out.push_str(text);
+        line.push_str(": ");
+        line.push_str(text);
+        lines.push(line);
     }
-    out
+    lines.join("\n")
 }
 
 /// The day of a stored timestamp, at day resolution.
@@ -409,7 +441,12 @@ fn selected(
     decision.candidates = response.iter().map(scored).collect();
 
     let threshold = eligible(response, thresholds);
-    let pooled = within(threshold, dropped.as_ref());
+    // D-01, after the threshold so no rank is renumbered and before the cap so
+    // a tool result never spends a slot. A failed lookup injects nothing rather
+    // than the unfiltered hits, and is not a `?` for the reason the search
+    // above is not.
+    let quoted = quotable(conn, threshold).unwrap_or_default();
+    let pooled = within(quoted, dropped.as_ref());
     let mut hits = surviving(
         &mut state,
         pooled,
@@ -421,8 +458,11 @@ fn selected(
 
     // Now, and only now, is a session worth decompressing - and only for the
     // turns that survived both the threshold and the suppressions, since a
-    // suppressed turn is not injected and its blob is not read.
-    let fired = if hits.is_empty() {
+    // suppressed turn is not injected and its blob is not read. Nor is one
+    // when the budget cannot hold the frame (D-06): [`render`] would emit
+    // nothing, and a turn the model was never shown must not be remembered as
+    // injected, the rule `brief::quoted` follows too.
+    let fired = if hits.is_empty() || !frame_fits(config) {
         None
     } else {
         // The knob governs this surface too. The per-prompt injection is the
@@ -441,7 +481,15 @@ fn selected(
         // attaches for either of them and this call is the only one that can.
         // With the knob off `Redaction::of` is `Redaction::none`, so the
         // default path is byte-identical to what it was and still borrows.
-        match excerpt::attach(conn, &request.query, &mut hits, &Redaction::of(config)) {
+        // The closing-tag neutralizer rides in redaction's position (D-02),
+        // and only on this call: search, context and get render unchanged.
+        match excerpt::attach_scrubbed(
+            conn,
+            &request.query,
+            &mut hits,
+            &Redaction::of(config),
+            super::neutralize,
+        ) {
             Ok(reads) => {
                 for hit in &hits {
                     state.record_injected(hit.turn_id);
@@ -518,6 +566,40 @@ pub fn eligible(hits: Vec<Hit>, thresholds: &Thresholds) -> Vec<Hit> {
         })
         .map(|(_, hit)| hit)
         .collect()
+}
+
+/// `hits` without the tool results, in the ranked order (D-01).
+///
+/// A tool result is a `user` row with `turns.is_typed` = 0. Not keyed on
+/// [`Hit::record_type`], which is `user` for a typed prompt too, nor on the
+/// `toolUseResult` key, which some result records do not carry (D-03). A null
+/// `is_typed` is left alone: nothing derived it, so nothing can say it was a
+/// tool result.
+///
+/// Read here by turn id rather than carried on [`Hit`], because `search::run`'s
+/// projection also feeds `terminus search` and `recall_search`, which still read
+/// stores that predate the column. The caller must hold a store that has it.
+///
+/// Public for the reason [`eligible`] is: `terminus replay` must drop exactly
+/// the turns the hook drops.
+pub fn quotable(conn: &Connection, hits: Vec<Hit>) -> rusqlite::Result<Vec<Hit>> {
+    if hits.is_empty() {
+        return Ok(hits);
+    }
+    let ids: Vec<String> = hits.iter().map(|hit| hit.turn_id.to_string()).collect();
+    let ids = format!("[{}]", ids.join(","));
+    let mut statement = conn.prepare(
+        "SELECT id FROM turns \
+         WHERE id IN (SELECT value FROM json_each(?1)) \
+           AND record_type = 'user' AND is_typed = 0",
+    )?;
+    let results = statement
+        .query_map([ids], |row| row.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<BTreeSet<i64>>>()?;
+    Ok(hits
+        .into_iter()
+        .filter(|hit| !results.contains(&hit.turn_id))
+        .collect())
 }
 
 /// The eligible turns that are actually injected, once `refused` is taken out
@@ -650,10 +732,10 @@ fn refusal(
 
 /// The `session_key` of the session the user is looking at, or nothing (D-15).
 ///
-/// The archive's own key for the payload's `transcript_path`, canonicalized the
-/// way ingest keys a session so that the two spellings are comparable at all:
-/// `~/.claude` is a symlink chain on the development machine, and a raw string
-/// comparison would call one session two and suppress nothing.
+/// The archive's own key for the payload's `transcript_path`: canonicalized,
+/// then through `ingest::path_key`, the one function ingest keys a session
+/// with. Keyed any other way, the compaction lookup finds no boundary and the
+/// live session's own turns are injected back into it (D-05).
 ///
 /// `None` for a payload with no `transcript_path`, and for a path that will not
 /// canonicalize - a session whose file Claude Code has not created yet, or one

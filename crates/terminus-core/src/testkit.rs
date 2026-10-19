@@ -28,6 +28,7 @@ pub const TRANSCRIPT_FIXTURES: &[&str] = &[
     "session-edits.jsonl",
     "session-envelope.jsonl",
     "session-secrets.jsonl",
+    "session-redaction.jsonl",
 ];
 
 /// The token the rooted fixtures carry where a real transcript carries an
@@ -44,7 +45,7 @@ pub const FIXTURE_ROOT_TOKEN: &str = "{{ROOT}}";
 /// The fixtures carrying [`FIXTURE_ROOT_TOKEN`], and the project directory each
 /// one's `cwd` names beneath the substituted root.
 ///
-/// Four distinct projects across them, which is what lets a scoped search have
+/// Five distinct projects across them, which is what lets a scoped search have
 /// something to be both true and false about.
 ///
 /// `project-gamma` has exactly one member and that is deliberate.
@@ -62,6 +63,15 @@ pub const FIXTURE_ROOT_TOKEN: &str = "{{ROOT}}";
 /// vocabulary shares none of the corpus's counted tokens, so no existing
 /// assertion moves when it joins the set.
 ///
+/// `project-epsilon` has exactly one member for that same reason.
+/// `session-redaction.jsonl` is the hardin phase 2 one: a PEM private key, a
+/// bare `sk-` key in prose, a secret-named key in a `tool_use` input, in a
+/// `toolUseResult` and in an attachment, and one `tool_use` turn holding
+/// `café=1`, `Größe=10` and `“token=abc”`. Each shape sits in a turn of its own
+/// with nothing else a rule could catch, so a test can say which rule took it.
+/// It is last in [`TRANSCRIPT_FIXTURES`] because turn ids follow ingest order,
+/// and anywhere earlier would move the ids the recall golden pins.
+///
 /// `session-edits.jsonl` is the phase 5 one, and it needs the root for a second
 /// reason the others do not: the path its `Edit` call stores is ABSOLUTE
 /// beneath that same root, which is how the real corpus spells a path (1,029
@@ -77,6 +87,7 @@ pub const ROOTED_FIXTURES: &[(&str, &str)] = &[
     ("session-edits.jsonl", "project-alpha"),
     ("session-envelope.jsonl", "project-gamma"),
     ("session-secrets.jsonl", "project-delta"),
+    ("session-redaction.jsonl", "project-epsilon"),
 ];
 
 /// The project directory one rooted fixture's `cwd` names beneath `root`.
@@ -755,6 +766,64 @@ pub fn plant_session(
         )
         .unwrap_or_else(|e| panic!("plant a block for {session_key}: {e}"));
     }
+}
+
+/// Move one session to `to`, the way a build before phase 4 keyed it: on an
+/// absolute path, with `transcript_path` the same text.
+///
+/// Every table holding the key moves in one transaction with foreign keys
+/// deferred, so the store stays consistent.
+pub fn plant_old_key(conn: &mut rusqlite::Connection, from: &str, to: &str) {
+    let tx = conn.transaction().expect("begin");
+    tx.execute_batch("PRAGMA defer_foreign_keys = ON")
+        .expect("defer foreign keys");
+    for table in [
+        "sessions",
+        "session_meta",
+        "turns",
+        "compactions",
+        "observations",
+    ] {
+        tx.execute(
+            &format!("UPDATE {table} SET session_key = ?2 WHERE session_key = ?1"),
+            [from, to],
+        )
+        .unwrap_or_else(|e| panic!("move {from} in {table}: {e}"));
+    }
+    tx.execute(
+        "UPDATE watermarks SET transcript_path = ?2 WHERE transcript_path = ?1",
+        [from, to],
+    )
+    .unwrap_or_else(|e| panic!("move the watermark of {from}: {e}"));
+    tx.execute(
+        "UPDATE session_meta SET transcript_path = ?1 WHERE session_key = ?1",
+        [to],
+    )
+    .unwrap_or_else(|e| panic!("set the transcript path of {to}: {e}"));
+    tx.commit()
+        .unwrap_or_else(|e| panic!("move {from} to {to}: {e}"));
+}
+
+/// Cut one session's stream again at `block_size`, recording the new size and
+/// checksum. The bytes, and so every turn's offset, stay the same.
+pub fn recut(conn: &rusqlite::Connection, session_key: &str, block_size: u32) {
+    let bytes = stream(conn, session_key).unwrap_or_else(|e| panic!("read {session_key}: {e}"));
+    conn.execute(
+        "UPDATE session_meta SET block_size = ?2 WHERE session_key = ?1",
+        rusqlite::params![session_key, block_size],
+    )
+    .unwrap_or_else(|e| panic!("record the block size of {session_key}: {e}"));
+    rewrite_stream(conn, session_key, &bytes);
+    let hashes: Vec<[u8; 32]> = block_rows(conn, session_key)
+        .into_iter()
+        .map(|(_, _, hash)| hash.try_into().expect("a 32-byte hash"))
+        .collect();
+    let checksum = crate::blob::block::checksum(&hashes);
+    conn.execute(
+        "UPDATE session_meta SET checksum = ?2 WHERE session_key = ?1",
+        rusqlite::params![session_key, checksum.as_slice()],
+    )
+    .unwrap_or_else(|e| panic!("record the checksum of {session_key}: {e}"));
 }
 
 fn clear_blocks(conn: &rusqlite::Connection, session_no: i64) {

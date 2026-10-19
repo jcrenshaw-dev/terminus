@@ -71,7 +71,7 @@ impl Tree {
         self.conn()
             .query_row(
                 "SELECT continues_from FROM session_meta WHERE session_key = ?1",
-                [path.to_str().unwrap()],
+                [key(path)],
                 |r| r.get(0),
             )
             .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
@@ -80,6 +80,11 @@ impl Tree {
 
 fn uuid(n: u8) -> String {
     format!("{n:08x}-1111-4111-8111-111111111111")
+}
+
+/// The key a transcript is archived under: its path below the project folder.
+fn key(path: &Path) -> String {
+    terminus_core::ingest::path_key(path).unwrap()
 }
 
 fn session(n: u8) -> String {
@@ -272,7 +277,7 @@ impl Tree {
         self.conn()
             .query_row(
                 "SELECT parent_session_key FROM session_meta WHERE session_key = ?1",
-                [path.to_str().unwrap()],
+                [key(path)],
                 |r| r.get(0),
             )
             .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
@@ -282,7 +287,7 @@ impl Tree {
         self.conn()
             .query_row(
                 "SELECT session_id FROM session_meta WHERE session_key = ?1",
-                [path.to_str().unwrap()],
+                [key(path)],
                 |r| r.get(0),
             )
             .unwrap()
@@ -308,7 +313,7 @@ fn both_sidecar_depths_carry_their_parents_session_key() {
 
     assert_eq!(tree.pass().files_committed, 3);
 
-    let expected = parent.to_str().unwrap().to_owned();
+    let expected = key(&parent);
     assert_eq!(tree.parent_of(&shallow).as_deref(), Some(&*expected));
     assert_eq!(tree.parent_of(&deep).as_deref(), Some(&*expected));
     assert_eq!(
@@ -333,15 +338,12 @@ fn a_sidecar_ingested_before_its_parent_records_the_same_key() {
 
     // Pass one: only the sidecar exists.
     assert_eq!(tree.pass().files_committed, 1);
-    let expected = tree
+    let expected = key(&tree
         .projects()
         .join(PROJECT)
         .canonicalize()
         .unwrap()
-        .join(format!("{}.jsonl", uuid(1)))
-        .to_str()
-        .unwrap()
-        .to_owned();
+        .join(format!("{}.jsonl", uuid(1))));
     assert_eq!(tree.parent_of(&orphan).as_deref(), Some(&*expected));
 
     let sessions: i64 = tree
@@ -353,7 +355,7 @@ fn a_sidecar_ingested_before_its_parent_records_the_same_key() {
     // Pass two: the parent appears, and it is the key that was already stored.
     let parent = tree.transcript(1, &own, None);
     assert_eq!(tree.pass().files_committed, 1);
-    assert_eq!(parent.to_str(), Some(&*expected));
+    assert_eq!(key(&parent), expected);
     assert_eq!(tree.parent_of(&orphan).as_deref(), Some(&*expected));
 }
 
@@ -374,14 +376,14 @@ impl Tree {
         self.conn()
             .query_row(
                 "SELECT agent_meta FROM session_meta WHERE session_key = ?1",
-                [path.to_str().unwrap()],
+                [key(path)],
                 |r| r.get(0),
             )
             .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
     }
 
     fn blob_of(&self, path: &Path) -> Vec<u8> {
-        terminus_core::testkit::stream(&self.conn(), path.to_str().unwrap()).unwrap()
+        terminus_core::testkit::stream(&self.conn(), &key(path)).unwrap()
     }
 }
 

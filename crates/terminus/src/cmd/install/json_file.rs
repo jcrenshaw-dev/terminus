@@ -691,19 +691,25 @@ fn fill(
         Failure::Operational(format!("{} could not be flushed: {e}", temporary.display()))
     })?;
     drop(file);
-    // `settings.json` is 0600 on this machine. A fresh temporary file is 0644,
-    // and renaming it into place would quietly widen the user's permissions.
+    // The temporary is 0600 from the open. A file that is already there keeps
+    // its own mode, so a 0644 one stays 0644, and the copy is made only when
+    // the modes differ, so a 0600 one is never wider at any moment. A file
+    // that is not there yet ends up 0600.
     if let Ok(meta) = std::fs::metadata(target) {
-        let _ = std::fs::set_permissions(temporary, meta.permissions());
+        use std::os::unix::fs::PermissionsExt;
+        if meta.permissions().mode() & 0o7777 != terminus_core::owner_only::FILE_MODE {
+            let _ = std::fs::set_permissions(temporary, meta.permissions());
+        }
     }
     Ok(())
 }
 
-/// The whole of `source` into an already-open temporary, permissions and all.
+/// The whole of `source` into an already-open temporary, and not its mode.
 ///
-/// The permissions matter: `settings.json` is 0600 on this machine and can hold
-/// an `env` block of credentials, and a fresh temporary file is 0644. A backup
-/// that widened them would be its own small leak.
+/// The backup is terminus's own file, so it keeps the 0600 its temporary was
+/// opened with whatever the source's mode. `settings.json` can hold an `env`
+/// block of credentials. Uninstall puts back the backup's bytes and not its
+/// mode: `overwrite` goes through `fill`, which takes the live file's.
 fn copy_through(source: &Path, file: &mut std::fs::File, temporary: &Path) -> Result<(), Failure> {
     let mut reading = std::fs::File::open(source).map_err(|e| {
         Failure::Operational(format!("{} could not be read: {e}", source.display()))
@@ -715,9 +721,6 @@ fn copy_through(source: &Path, file: &mut std::fs::File, temporary: &Path) -> Re
             temporary.display()
         ))
     })?;
-    if let Ok(meta) = std::fs::metadata(source) {
-        let _ = file.set_permissions(meta.permissions());
-    }
     file.sync_all().map_err(|e| {
         Failure::Operational(format!("{} could not be flushed: {e}", temporary.display()))
     })?;
@@ -1186,24 +1189,19 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&first).unwrap(), FIXTURE);
     }
 
-    /// The backup is the file, with the file's permissions, and the temporary
-    /// it was written through is gone.
-    ///
-    /// 0600 is what `settings.json` is on this machine, and a fresh temporary
-    /// file is 0644: a backup that widened them would be its own small leak.
+    /// The backup holds the file's bytes, is 0600 even when the file is 0644,
+    /// and the temporary it was written through is gone.
     #[test]
-    fn the_backup_carries_the_bytes_and_the_permissions() {
+    fn the_backup_carries_the_bytes_and_is_owner_only() {
         use std::os::unix::fs::PermissionsExt;
 
         let (dir, path) = seeded(FIXTURE);
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
 
         let backup = Document::read(&path).unwrap().backup().unwrap().unwrap();
         assert_eq!(std::fs::read_to_string(&backup).unwrap(), FIXTURE);
-        assert_eq!(
-            std::fs::metadata(&backup).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
+        let mode = std::fs::metadata(&backup).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "the backup is {mode:o}");
 
         let mut left: Vec<String> = std::fs::read_dir(dir.path())
             .unwrap()
@@ -1215,6 +1213,26 @@ mod tests {
             ["settings.json", "settings.json.terminus-backup"],
             "the temporary the backup was written through is still there"
         );
+    }
+
+    /// Putting a backup's bytes back over a 0644 file leaves the bytes and
+    /// keeps the 0644: the restore takes the live file's mode, not the
+    /// backup's 0600.
+    #[test]
+    fn a_restored_backup_keeps_the_live_file_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_dir, path) = seeded(FIXTURE);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let backup = Document::read(&path).unwrap().backup().unwrap().unwrap();
+        std::fs::write(&path, r#"{"changed": true}"#).unwrap();
+
+        let bytes = std::fs::read_to_string(&backup).unwrap();
+        Document::read(&path).unwrap().overwrite(&bytes).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), FIXTURE);
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o644, "the restored file is {mode:o}");
     }
 
     /// Nothing to back up when there is no file yet.

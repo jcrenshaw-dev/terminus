@@ -54,12 +54,18 @@ const KEEP_CLEANUP_DAYS: i64 = 3650;
 ///
 /// A collision is answered with a different name, never with a reuse: whatever
 /// is at the first one, it is not ours.
+///
+/// The file is 0600 from the open, through `owner_only`. What goes into it is
+/// the whole of `settings.json`, which can hold an `env` block of credentials,
+/// and a mode set after the write would leave those bytes on disk at the
+/// umask's mode until then. A caller that needs another final mode sets it
+/// before the rename, the way `binary::copy_into` sets 0755.
 pub(super) fn create_temporary(
     dir: &Path,
     prefix: &str,
 ) -> Result<(std::path::PathBuf, std::fs::File), Failure> {
     temporary(dir, prefix, |path| {
-        std::fs::OpenOptions::new()
+        terminus_core::owner_only::options()
             .write(true)
             .create_new(true)
             .open(path)
@@ -527,5 +533,31 @@ mod tests {
         let shown = resolved_display(Ok(link));
 
         assert_eq!(shown, file.canonicalize().unwrap().display().to_string());
+    }
+
+    /// A temporary is 0600 before a byte is in it, whatever the umask.
+    #[test]
+    fn a_temporary_is_owner_only_from_the_open() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let probe = dir.path().join("probe");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&probe)
+            .unwrap();
+        let umask_mode = std::fs::metadata(&probe).unwrap().permissions().mode() & 0o777;
+        if umask_mode & 0o077 == 0 {
+            // A umask of 077 makes every new file owner-only, so the check
+            // below would pass without the fix.
+            println!("skipped: this process's umask already gives new files {umask_mode:o}");
+            return;
+        }
+
+        let (_path, file) = create_temporary(dir.path(), ".temporary.").unwrap();
+
+        let mode = file.metadata().unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "the temporary was opened at {mode:o}");
     }
 }

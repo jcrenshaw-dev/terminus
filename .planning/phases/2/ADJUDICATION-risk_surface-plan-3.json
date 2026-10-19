@@ -1,0 +1,39 @@
+{
+  "phase": "2",
+  "trigger": "risk_surface",
+  "discriminator": "plan-3",
+  "round": 1,
+  "base": "3484ddc",
+  "head": "034ece3",
+  "base_id": "3484ddcfe0e2871d45fbff0a5b862b55b7dc8013",
+  "head_id": "034ece3edd71ec32017a17fbcb45637d53e3469b",
+  "voices": [
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol"
+    }
+  ],
+  "citations": {
+    "checked": true
+  },
+  "entries": [
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol",
+      "file": "crates/terminus/tests/mcp.rs",
+      "line": 2040,
+      "severity": "medium",
+      "claim": "The regression coverage never exercises the documented multibyte boundary immediately before an ASCII assignment name; every process-boundary test asserts only `café=1` and `Größe=10`, while the changelog separately claims the curly-quoted assignment is fixed.",
+      "failure_scenario": "Revert or break only the fix for backward scanning when a multibyte opening quote directly precedes an ASCII secret name, such as the changelog's `“<redacted>` case. Scanning names that themselves contain `é` or `ß` can remain safe, so the MCP, brief, prompt, search, and show tests all pass, yet enabling `redact_recall` still panics on the documented curly-quoted secret assignment. The fixture is described as containing that case, but none of the new assertions requires it to be processed or redacted.",
+      "ruling": "refuted",
+      "convergent": false,
+      "counter_evidence": {
+        "file": "crates/terminus-core/src/observe/egress.rs",
+        "line": 1392,
+        "note": "The curly-quoted case is pinned directly by the unit test at egress.rs:1392, which asserts for_model_context turns “token=abc” into “token=[redacted], so a partial revert that broke only that case fails there. The process-boundary tests also run the same fixture turn, which holds “token=abc” beside café=1 and Größe=10, and Bench::call fails on any panic on stderr. All three strings broke through the one rfind-plus-one slice the fix replaced; there is no separate fix for the curly case to revert alone."
+      },
+      "base_id": "3484ddcfe0e2871d45fbff0a5b862b55b7dc8013",
+      "head_id": "034ece3edd71ec32017a17fbcb45637d53e3469b"
+    }
+  ]
+}

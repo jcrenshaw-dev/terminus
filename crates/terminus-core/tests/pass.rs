@@ -116,10 +116,15 @@ fn uuid(n: u8) -> String {
     format!("{n:08x}-1111-4111-8111-111111111111")
 }
 
+/// The key a transcript is archived under: its path below the project folder.
+fn key_of(path: &Path) -> String {
+    terminus_core::ingest::path_key(path).unwrap()
+}
+
 fn key(conn: &Connection, path: &Path) -> Option<String> {
     conn.query_row(
         "SELECT session_key FROM sessions WHERE session_key = ?1",
-        [path.to_str().unwrap()],
+        [key_of(path)],
         |r| r.get(0),
     )
     .ok()
@@ -128,7 +133,7 @@ fn key(conn: &Connection, path: &Path) -> Option<String> {
 fn turns_for(conn: &Connection, path: &Path) -> i64 {
     conn.query_row(
         "SELECT count(*) FROM turns WHERE session_key = ?1",
-        [path.to_str().unwrap()],
+        [key_of(path)],
         |r| r.get(0),
     )
     .unwrap()
@@ -170,7 +175,7 @@ fn one_damaged_transcript_does_not_stop_the_rest_of_the_tree() {
         .conn()
         .execute(
             "DELETE FROM session_meta WHERE session_key = ?1",
-            [orphaned.to_str().unwrap()],
+            [key_of(&orphaned)],
         )
         .unwrap();
     // Damage the other: shorter on disk than its stored watermark. `read_tail`
@@ -223,7 +228,7 @@ fn one_damaged_transcript_does_not_stop_the_rest_of_the_tree() {
 
     let conn = bench.conn();
     for path in &healthy {
-        assert_eq!(key(&conn, path).as_deref(), path.to_str());
+        assert_eq!(key(&conn, path), Some(key_of(path)));
         assert!(
             turns_for(&conn, path) > 0,
             "{} archived no turns",
@@ -302,7 +307,7 @@ fn an_excluded_project_is_never_opened_and_adds_no_row() {
 
     let conn = bench.conn();
     for path in &excluded {
-        let key = path.to_str().unwrap();
+        let key = key_of(path);
         for (table, column) in [
             ("sessions", "session_key"),
             ("session_meta", "session_key"),
@@ -312,7 +317,7 @@ fn an_excluded_project_is_never_opened_and_adds_no_row() {
             let rows: i64 = conn
                 .query_row(
                     &format!("SELECT count(*) FROM {table} WHERE {column} = ?1"),
-                    [key],
+                    [&key],
                     |r| r.get(0),
                 )
                 .unwrap();
@@ -329,7 +334,7 @@ fn an_excluded_project_is_never_opened_and_adds_no_row() {
     );
 
     // The sibling is there in full, and was opened.
-    assert_eq!(key(&conn, &kept).as_deref(), kept.to_str());
+    assert_eq!(key(&conn, &kept), Some(key_of(&kept)));
     assert!(turns_for(&conn, &kept) > 0);
     assert!(!discover::opened::under(&kept).is_empty());
 }
@@ -828,4 +833,293 @@ fn the_bounded_step_leaves_the_rest_for_the_next_pass_and_says_how_many() {
     assert!(evicted
         .iter()
         .all(|(len, flag)| *len == 0 && *flag == Some(1)));
+}
+
+/// D-14's first regression test (AC1, AC2, ING-13). Moving `.claude` and
+/// leaving a symlink at the old path changes every absolute path in the tree,
+/// and the second pass must still find every session it archived rather than
+/// archive each one again under a second key.
+///
+/// The tree carries a sidecar link spelled through the root's own path, the
+/// way Claude Code writes its resume links through `~/.claude`, so the session
+/// count is the number of distinct transcript files and not the number of
+/// paths discovery yields.
+#[test]
+fn a_moved_claude_dir_behind_a_symlink_archives_nothing_twice() {
+    let bench = bench();
+    let parent = "44444444-4444-4444-8444-444444444444";
+    let resumed = "55555555-5555-4555-8555-555555555555";
+    bench.place(PROJECT, &format!("{parent}.jsonl"), "session-basic.jsonl");
+    bench.place(
+        PROJECT,
+        &format!("{parent}/subagents/agent-a.jsonl"),
+        "subagents/agent-alpha.jsonl",
+    );
+    let link_dir = bench
+        .projects()
+        .join(PROJECT)
+        .join(resumed)
+        .join("subagents");
+    std::fs::create_dir_all(&link_dir).unwrap();
+    std::os::unix::fs::symlink(
+        bench
+            .projects()
+            .join(PROJECT)
+            .join(parent)
+            .join("subagents/agent-a.jsonl"),
+        link_dir.join("agent-a.jsonl"),
+    )
+    .unwrap();
+
+    let config = Config::from_parts(vec![bench.claude_dir.clone()], Vec::new());
+    let run = || match pass::run_with(&bench.data_dir, &config).unwrap() {
+        PassOutcome::Ran(summary) => summary,
+        PassOutcome::LockHeld => panic!("nothing else holds the lock"),
+    };
+    let observe = || {
+        let conn = Connection::open(bench.data_dir.join(DB_FILE_NAME)).unwrap();
+        let counted = terminus_core::config::visible::counts(&conn, &config)
+            .unwrap()
+            .sessions;
+        let mut keys: Vec<String> = conn
+            .prepare("SELECT session_key FROM sessions")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        keys.sort();
+        (counted, keys)
+    };
+
+    let first = run();
+    assert!(first.failures.is_empty(), "{:?}", first.failures);
+    let (count_before, keys_before) = observe();
+
+    let moved = bench.claude_dir.with_file_name("claude-moved");
+    std::fs::rename(&bench.claude_dir, &moved).unwrap();
+    std::os::unix::fs::symlink(&moved, &bench.claude_dir).unwrap();
+
+    let second = run();
+    let (count_after, keys_after) = observe();
+    assert_eq!(
+        count_after, count_before,
+        "the session count moved from {count_before} to {count_after} when .claude moved"
+    );
+    assert!(second.failures.is_empty(), "{:?}", second.failures);
+    assert_eq!(
+        second.files_committed, 0,
+        "the second pass committed a file"
+    );
+    assert_eq!(second.turns_added, 0, "the second pass added turns");
+    assert_eq!(keys_after, keys_before);
+    assert_eq!(
+        count_before, 2,
+        "one session per transcript file, not one per path: {keys_before:?}"
+    );
+}
+
+/// Moving a project folder inside `projects`, with no symlink left behind,
+/// changes no session key, because the key is the path below the project
+/// folder. The second pass finds every session it archived and archives
+/// nothing again.
+#[test]
+fn a_moved_project_folder_archives_nothing_twice() {
+    let bench = bench();
+    let session = "66666666-6666-4666-8666-666666666666";
+    let from = "-code-cadence";
+    let to = "-code-cadence-v3-9-1";
+    bench.place(from, &format!("{session}.jsonl"), "session-basic.jsonl");
+    bench.place(
+        from,
+        &format!("{session}/subagents/agent-a.jsonl"),
+        "subagents/agent-alpha.jsonl",
+    );
+
+    let config = Config::from_parts(vec![bench.claude_dir.clone()], Vec::new());
+    let run = || match pass::run_with(&bench.data_dir, &config).unwrap() {
+        PassOutcome::Ran(summary) => summary,
+        PassOutcome::LockHeld => panic!("nothing else holds the lock"),
+    };
+    let observe = || {
+        let conn = Connection::open(bench.data_dir.join(DB_FILE_NAME)).unwrap();
+        let counted = terminus_core::config::visible::counts(&conn, &config)
+            .unwrap()
+            .sessions;
+        let mut keys: Vec<String> = conn
+            .prepare("SELECT session_key FROM sessions")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        keys.sort();
+        (counted, keys)
+    };
+
+    let first = run();
+    assert!(first.failures.is_empty(), "{:?}", first.failures);
+    let (count_before, keys_before) = observe();
+    assert_eq!(count_before, 2, "{keys_before:?}");
+
+    std::fs::rename(bench.projects().join(from), bench.projects().join(to)).unwrap();
+
+    let second = run();
+    let (count_after, keys_after) = observe();
+    assert_eq!(
+        count_after, count_before,
+        "the session count moved from {count_before} to {count_after} when the project \
+         folder moved"
+    );
+    assert_eq!(keys_after, keys_before);
+    assert!(second.failures.is_empty(), "{:?}", second.failures);
+    assert_eq!(
+        second.files_committed, 0,
+        "the second pass committed a file"
+    );
+    assert_eq!(second.turns_added, 0, "the second pass added turns");
+}
+
+/// The stored stream, the per-file failures and the divergence flag a pass
+/// leaves for one session, read the same way before and after.
+fn stream_of(conn: &Connection, key: &str) -> Vec<u8> {
+    testkit::stream(conn, key).unwrap()
+}
+
+fn diverged(conn: &Connection, key: &str) -> Option<i64> {
+    conn.query_row(
+        "SELECT transcript_diverged FROM session_meta WHERE session_key = ?1",
+        [key],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+/// The fixture's last line, which a test appends to make a transcript grow by
+/// one complete record.
+fn last_line(fixture: &str) -> Vec<u8> {
+    let bytes = testkit::fixture_bytes(fixture);
+    let body = &bytes[..bytes.len() - 1];
+    let start = body.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
+    bytes[start..].to_vec()
+}
+
+fn append(path: &Path, bytes: &[u8]) {
+    use std::io::Write;
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(path)
+        .unwrap()
+        .write_all(bytes)
+        .unwrap();
+}
+
+/// #69. Two project folders holding files with one name share a session key.
+/// The store already holds the session from `-code-zzz`, and `-code-aaa` sorts
+/// first, so a walk that only remembers its own paths gave the key to the
+/// wrong file: it appended that file's bytes onto the archived session and
+/// refused the real one on every pass after.
+#[test]
+fn a_second_file_with_an_archived_name_is_refused_while_its_holder_is_there() {
+    let bench = bench();
+    let name = format!("{}.jsonl", uuid(9));
+    let real = bench.place("-code-zzz", &name, "session-basic.jsonl");
+    let first = bench.pass(&[]);
+    assert!(first.failures.is_empty(), "{:?}", first.failures);
+    let key = key_of(&real);
+    let archived = stream_of(&bench.conn(), &key);
+
+    let other = bench.place("-code-aaa", &name, "session-capture.jsonl");
+    let grown = last_line("session-basic.jsonl");
+    append(&real, &grown);
+
+    let second = bench.pass(&[]);
+    let failed: Vec<&PathBuf> = second.failures.iter().map(|(p, _)| p).collect();
+    assert_eq!(failed, vec![&other], "{:?}", second.failures);
+    assert!(
+        second.failures[0].1.contains("already held"),
+        "{:?}",
+        second.failures
+    );
+    let mut expected = archived;
+    expected.extend_from_slice(&grown);
+    assert_eq!(
+        stream_of(&bench.conn(), &key),
+        expected,
+        "the session holds something other than its own file's bytes"
+    );
+    assert_eq!(diverged(&bench.conn(), &key), None);
+}
+
+/// #69. When the file a session was read from is gone, a file with its name is
+/// appended only if it begins with the archived bytes. A moved transcript does,
+/// so a moved project folder still carries on; a different file does not, and
+/// is refused without flagging the session.
+#[test]
+fn a_file_named_like_a_gone_session_is_appended_only_if_it_begins_with_the_archive() {
+    let bench = bench();
+    let name = format!("{}.jsonl", uuid(10));
+    let real = bench.place("-code-zzz", &name, "session-basic.jsonl");
+    let first = bench.pass(&[]);
+    assert!(first.failures.is_empty(), "{:?}", first.failures);
+    let key = key_of(&real);
+    let archived = stream_of(&bench.conn(), &key);
+    std::fs::remove_dir_all(bench.projects().join("-code-zzz")).unwrap();
+
+    let other = bench.place("-code-aaa", &name, "session-capture.jsonl");
+    let second = bench.pass(&[]);
+    let failed: Vec<&PathBuf> = second.failures.iter().map(|(p, _)| p).collect();
+    assert_eq!(failed, vec![&other], "{:?}", second.failures);
+    assert!(
+        second.failures[0].1.contains("which is gone"),
+        "{:?}",
+        second.failures
+    );
+    assert_eq!(stream_of(&bench.conn(), &key), archived);
+    assert_eq!(
+        diverged(&bench.conn(), &key),
+        None,
+        "the session was flagged"
+    );
+
+    std::fs::copy(testkit::fixture_path("session-basic.jsonl"), &other).unwrap();
+    let grown = last_line("session-basic.jsonl");
+    append(&other, &grown);
+    let third = bench.pass(&[]);
+    assert!(third.failures.is_empty(), "{:?}", third.failures);
+    let mut expected = archived;
+    expected.extend_from_slice(&grown);
+    assert_eq!(stream_of(&bench.conn(), &key), expected);
+}
+
+/// #69, on the other two ways in: backfill walks with its own claim, and a
+/// named file has only the store to ask. Neither appends a file the archived
+/// session was not read from, whether that session's file is there or gone.
+#[test]
+fn backfill_and_a_named_file_refuse_a_file_the_session_was_not_read_from() {
+    let bench = bench();
+    let name = format!("{}.jsonl", uuid(11));
+    let real = bench.place("-code-zzz", &name, "session-basic.jsonl");
+    let first = bench.pass(&[]);
+    assert!(first.failures.is_empty(), "{:?}", first.failures);
+    let key = key_of(&real);
+    let archived = stream_of(&bench.conn(), &key);
+    let other = bench.place("-code-aaa", &name, "session-capture.jsonl");
+
+    let report = ingest::backfill::run_with(&bench.data_dir, &bench.config(&[]), 2).unwrap();
+    let PassOutcome::Ran(summary) = &report.outcome else {
+        panic!("nothing else holds the lock");
+    };
+    let failed: Vec<&PathBuf> = summary.failures.iter().map(|(p, _)| p).collect();
+    assert_eq!(failed, vec![&other], "{:?}", summary.failures);
+    assert_eq!(stream_of(&bench.conn(), &key), archived);
+
+    let held = ingest::run_with(&bench.data_dir, &other, &bench.config(&[])).unwrap_err();
+    assert!(held.to_string().contains("already held"), "{held}");
+
+    std::fs::remove_dir_all(bench.projects().join("-code-zzz")).unwrap();
+    let gone = ingest::run_with(&bench.data_dir, &other, &bench.config(&[])).unwrap_err();
+    assert!(gone.to_string().contains("which is gone"), "{gone}");
+    assert_eq!(stream_of(&bench.conn(), &key), archived);
+    assert_eq!(diverged(&bench.conn(), &key), None);
 }

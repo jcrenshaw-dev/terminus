@@ -315,15 +315,23 @@ fn retire_old_boundaries(tx: &rusqlite::Connection, preserving: bool) -> Result<
 /// The store is reopened after the rebuild rather than reused, so the returned
 /// handle reports the versions the store now actually carries.
 pub fn open_up_to_date(data_dir: &Path) -> Result<Store> {
-    let mut store = Store::open(data_dir)?;
+    up_to_date(Store::open(data_dir)?)
+}
+
+/// The second half of [`open_up_to_date`], for a store already open.
+///
+/// Recovery opens the store, re-keys it, and only then brings the derived
+/// tables forward, so a twin the re-key deletes is never rebuilt (phase 4 D-09).
+pub(crate) fn up_to_date(mut store: Store) -> Result<Store> {
     if store.rebuild_required().is_none() {
         return Ok(store);
     }
 
     reindex(&mut store)?;
+    let data_dir = store.data_dir().to_path_buf();
     drop(store);
 
-    let reopened = Store::open(data_dir)?;
+    let reopened = Store::open(&data_dir)?;
     debug_assert!(reopened.rebuild_required().is_none());
     Ok(reopened)
 }

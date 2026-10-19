@@ -269,9 +269,9 @@ fn a_tree_with_more_files_than_workers_leaves_none_unprocessed() {
     // reads: a file the pipeline dropped on the floor has none.
     let marks = snapshot(&data_dir).watermarks;
     for path in &transcripts {
-        let key = path.to_str().unwrap();
+        let key = terminus_core::ingest::path_key(path).unwrap();
         assert!(
-            marks.contains_key(key),
+            marks.contains_key(&key),
             "no watermark for {key}: the pipeline never processed it"
         );
     }

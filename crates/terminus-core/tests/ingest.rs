@@ -309,15 +309,20 @@ fn resuming_from_a_mid_line_watermark_converges_on_a_single_pass() {
 }
 
 /// The same transcript reached through a symlink is one session, not two
-/// (`DESIGN-BRIEF.md:406`; CONTEXT's third flagged assumption, resolved as
-/// "canonicalize").
+/// (`DESIGN-BRIEF.md:406`), and its key is the path below the project folder,
+/// `<uuid>.jsonl`, rather than either absolute spelling.
 #[test]
 fn two_paths_to_one_transcript_produce_one_session() {
     let bench = bench();
-    let path = bench.copy("session-basic.jsonl");
+    let claude = bench.work.join("claude");
+    let project = claude.join("projects").join("-tmp-p");
+    std::fs::create_dir_all(&project).unwrap();
+    let name = "11111111-1111-4111-8111-111111111111.jsonl";
+    let path = project.join(name);
+    std::fs::copy(testkit::fixture_path("session-basic.jsonl"), &path).unwrap();
     let link_dir = bench.work.join("link");
-    std::os::unix::fs::symlink(&bench.work, &link_dir).unwrap();
-    let through_link = link_dir.join("session-basic.jsonl");
+    std::os::unix::fs::symlink(&claude, &link_dir).unwrap();
+    let through_link = link_dir.join("projects").join("-tmp-p").join(name);
 
     let first = committed(bench.ingest(&path));
     assert_eq!(bench.ingest(&through_link), Outcome::UpToDate);
@@ -327,10 +332,7 @@ fn two_paths_to_one_transcript_produce_one_session() {
         .query_row("SELECT count(*) FROM sessions", [], |r| r.get(0))
         .unwrap();
     assert_eq!(sessions, 1, "the symlinked path opened a second session");
-    assert_eq!(
-        first.session_key,
-        path.canonicalize().unwrap().to_str().unwrap()
-    );
+    assert_eq!(first.session_key, name);
 }
 
 /// D-11. `continues_from` comes from the record's foreign `session_id`, which
@@ -570,4 +572,74 @@ fn a_session_that_lost_its_metadata_row_is_refused_rather_than_re_ingested() {
         watermark_before,
         "the refused pass moved the watermark past the committed blob"
     );
+}
+
+/// Two roots holding different files at one path below the project folder
+/// share a key. Named one file, ingest asks the store which file holds the key and
+/// refuses a different one before reading a byte of it, so the second file is
+/// never appended onto the first one's session. Once the first root has moved
+/// away, the file at its new location is the same transcript and appends.
+#[test]
+fn a_second_roots_file_never_appends_onto_the_first_roots_session() {
+    let bench = bench();
+    let config = terminus_core::Config::from_parts(Vec::new(), Vec::new());
+    let name = "11111111-1111-4111-8111-111111111111.jsonl";
+    let place = |root: &str, bytes: &[u8]| {
+        let dir = bench.work.join(root).join("projects").join("-tmp-p");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        path.canonicalize().unwrap()
+    };
+    let basic = testkit::fixture_bytes("session-basic.jsonl");
+    let continuation = testkit::fixture_bytes("session-continuation.jsonl");
+
+    let first = place("a", &basic);
+    let pass = match ingest::run_with(&bench.data_dir, &first, &config).unwrap() {
+        Outcome::Committed(pass) => pass,
+        other => panic!("{other:?}"),
+    };
+    let key = pass.session_key;
+    assert_eq!(key, name);
+
+    let conn = bench.conn();
+    let state = |conn: &Connection| {
+        let meta: (Vec<u8>, i64) = conn
+            .query_row(
+                "SELECT checksum, uncompressed_len FROM session_meta WHERE session_key = ?1",
+                [&key],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        (meta, testkit::stored(conn, &key), watermark(conn, &key))
+    };
+    let before = state(&conn);
+
+    // A longer, different file at the same path below the project folder.
+    let mut other = continuation.clone();
+    other.extend_from_slice(&basic);
+    let second = place("b", &other);
+    let error = ingest::run_with(&bench.data_dir, &second, &config)
+        .expect_err("a second root's file must be refused")
+        .to_string();
+    assert!(error.contains(second.to_str().unwrap()), "{error}");
+    assert!(error.contains(first.to_str().unwrap()), "{error}");
+    assert_eq!(state(&conn), before, "the refused file changed the session");
+
+    // The first root moves away. A longer copy of the original at the new
+    // location is the same transcript, and appends to the same session.
+    std::fs::rename(bench.work.join("a"), bench.work.join("moved")).unwrap();
+    let moved = bench.work.join("moved/projects/-tmp-p").join(name);
+    let mut grown = basic.clone();
+    grown.extend_from_slice(&continuation);
+    std::fs::write(&moved, &grown).unwrap();
+    match ingest::run_with(&bench.data_dir, &moved, &config).unwrap() {
+        Outcome::Committed(pass) => assert_eq!(pass.session_key, key),
+        other => panic!("{other:?}"),
+    }
+    let sessions: i64 = conn
+        .query_row("SELECT count(*) FROM sessions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(sessions, 1);
+    assert_eq!(stream(&conn, &key), grown, "the moved file did not append");
 }

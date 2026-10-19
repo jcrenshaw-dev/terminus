@@ -225,7 +225,7 @@ impl Tree {
         self.conn()
             .query_row(
                 "SELECT project, project_pre_worktree FROM session_meta WHERE session_key = ?1",
-                [path.to_str().unwrap()],
+                [terminus_core::ingest::path_key(path).unwrap()],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap_or_else(|e| panic!("{}: {e}", path.display()))

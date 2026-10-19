@@ -1290,6 +1290,51 @@ fn the_knob_filters_the_search_excerpt_and_raw_reaches_past_it() {
     );
 }
 
+/// The turn of `session-redaction.jsonl` whose `Write` carries `café=1` and
+/// `Größe=10`, found by its record `uuid` for the reason `authz_turn` gives.
+fn multi_byte_turn(bench: &Bench) -> String {
+    let id: i64 = bench
+        .conn()
+        .query_row(
+            "SELECT id FROM turns WHERE uuid = 'ffffffff-0000-4000-8000-000000001206'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("the fixture's multi-byte turn is archived");
+    id.to_string()
+}
+
+/// `search` and `show` print the multi-byte turn with the knob on (#61).
+///
+/// Rule 5 used to slice inside `é` and `ß`, which panicked the command and
+/// printed nothing of the turn.
+#[test]
+fn the_knob_on_search_and_show_print_a_multi_byte_turn() {
+    let bench = bench();
+    bench.ingest_fixtures();
+    let project = bench.project("session-redaction.jsonl");
+    let id = multi_byte_turn(&bench);
+    bench.config(KNOB_ON);
+
+    for args in [["search", "saffron"], ["show", id.as_str()]] {
+        let out = bench.run_in(&project, &args);
+        let command = args[0];
+        assert_eq!(out.status.code(), Some(0), "{command}: {}", stderr(&out));
+        assert!(
+            !stderr(&out).contains("panicked"),
+            "{command} panicked: {}",
+            stderr(&out)
+        );
+        let text = stdout(&out);
+        for assignment in ["café=1", "Größe=10"] {
+            assert!(
+                text.contains(assignment),
+                "{command} lost {assignment}:\n{text}"
+            );
+        }
+    }
+}
+
 /// Every archived session blob, by key, straight out of SQLite.
 ///
 /// The bytes themselves and not a rendering of them: this is the one assertion
@@ -1370,4 +1415,213 @@ fn turning_the_knob_on_leaves_the_archive_byte_for_byte_where_it_was() {
         verified_before["data"]["checked"].as_i64().unwrap_or(0) > 0,
         "verify checked nothing: {verified_before}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Control characters in the terminal output (#63, #65, #66)
+// ---------------------------------------------------------------------------
+
+/// The word only the planted tool result holds.
+const PLANTED_TOKEN: &str = "quixotrel";
+
+/// A tool result carrying an OSC 52 clipboard write around the token, the shape
+/// a program's coloured or terminal-aware output arrives in.
+fn planted_output() -> String {
+    format!("\u{1b}]52;c;aGVsbG8=\u{07} {PLANTED_TOKEN} written")
+}
+
+/// A control inside the first ten characters, which search's day column
+/// prints, and one after them, which only show's header prints.
+const PLANTED_TS: &str = "2026-10\u{1b}19T12:00:00.000\u{07}Z";
+
+/// Archive a transcript with a control planted in every field the human output
+/// of `search` and `show` prints, and return the tool result's line as written.
+///
+/// Written through serde_json from strings holding the real characters, so the
+/// file carries `\u001b` and `\u0007` the way Claude Code writes them. A raw ESC
+/// byte is not JSON, and a line holding one is archived with no projection.
+///
+/// The record type is the one field left clean: a record becomes a turn only
+/// when its `type` is `user`, `assistant`, `attachment` or `system`, so a type
+/// carrying a control is kept in the blob and never reaches the window.
+fn ingest_planted(bench: &Bench) -> String {
+    let cwd = bench.root.join("planted\u{1b}project");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let cwd = cwd.to_string_lossy().into_owned();
+    let record = |n: usize, kind: &str, ts: &str, content: Value| {
+        serde_json::json!({
+            "parentUuid": null,
+            "isSidechain": false,
+            "cwd": cwd,
+            "sessionId": "planted-session",
+            "type": kind,
+            "uuid": format!("planted-{n}"),
+            "timestamp": ts,
+            "message": {"role": if kind == "user" { "user" } else { "assistant" },
+                        "content": content},
+        })
+    };
+
+    let mut first = record(
+        0,
+        "user",
+        "2026-10-19T11:59:00.000Z",
+        serde_json::json!([{"type": "text", "text": "copy the greeting"}]),
+    );
+    // What `show` prints as the session this one continues from.
+    first["session_id"] = Value::from("prior\u{1b}session");
+    let tool_use = record(
+        1,
+        "assistant",
+        "2026-10-19T11:59:30.000Z",
+        serde_json::json!([{"type": "tool_use", "id": "toolu_1", "name": "Ba\u{1b}sh",
+                            "input": {"command": "printf greeting"}}]),
+    );
+    let mut result = record(
+        2,
+        "user",
+        PLANTED_TS,
+        serde_json::json!([{"tool_use_id": "toolu_1", "type": "tool_result",
+                            "content": planted_output(), "is_error": true}]),
+    );
+    result["toolUseResult"] = serde_json::json!({"stdout": "", "stderr": planted_output()});
+    let after = record(
+        3,
+        "assistant",
+        "2026-10-19T12:01:00.000Z",
+        serde_json::json!([{"type": "text", "text": "the greeting is on the clipboard"}]),
+    );
+
+    let lines: Vec<String> = [first, tool_use, result, after]
+        .iter()
+        .map(Value::to_string)
+        .collect();
+    let path = bench.work.join("planted\u{1b}file.jsonl");
+    std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+    let out = bench.run(&["ingest", path.to_str().unwrap()]);
+    assert!(out.status.success(), "ingest: {}", stderr(&out));
+    lines[2].clone()
+}
+
+/// The first line of `text` that starts with `prefix`.
+fn line_starting<'a>(text: &'a str, prefix: &str) -> &'a str {
+    text.lines()
+        .find(|line| line.starts_with(prefix))
+        .unwrap_or_else(|| panic!("no line starts with {prefix:?}:\n{text}"))
+}
+
+/// A control archived in a tool result, a time, a tool name, a file name, a
+/// project and a predecessor id prints as `\u00XX` in the human output of
+/// `search` and `show`, with or without `--raw`. The `show` body and every
+/// `--json` value still carry the archived characters.
+///
+/// The visible escapes are asserted line by line and never on stdout as a
+/// whole: the body is the archived JSON line, which already spells ESC
+/// `\u001b`, so a whole-stdout check would pass with nothing escaped.
+#[test]
+fn archived_control_characters_print_escaped_in_search_and_show() {
+    let bench = bench();
+    let written = ingest_planted(&bench);
+
+    // `--json` still decodes to the raw characters (D-06).
+    let found = document(&bench.run(&["search", "--project", "*", "--json", PLANTED_TOKEN]));
+    let hit = &found["data"]["hits"][0];
+    let excerpt = hit["excerpt"].as_str().unwrap();
+    assert!(
+        excerpt.contains('\u{1b}') && excerpt.contains('\u{07}'),
+        "{found}"
+    );
+    assert_eq!(hit["ts"], PLANTED_TS, "{found}");
+    let id = hit["turn_id"].as_i64().unwrap().to_string();
+
+    let window = ["--before", "1", "--after", "1"];
+    let mut show_json = vec!["show", "--project", "*", "--json"];
+    show_json.extend(window);
+    show_json.push(&id);
+    let shown = document(&bench.run(&show_json));
+    let record = &shown["data"]["records"][0];
+    assert_eq!(record["ts"], PLANTED_TS, "{shown}");
+    let turns = record["context"]["turns"].as_array().unwrap();
+    let anchor = turns.iter().find(|t| t["is_anchor"] == true).unwrap();
+    let text = anchor["text"].as_str().unwrap();
+    assert!(
+        text.contains('\u{1b}') && text.contains('\u{07}'),
+        "{shown}"
+    );
+    assert!(
+        turns.iter().any(|t| t["tool_name"] == "Ba\u{1b}sh"),
+        "{shown}"
+    );
+
+    for raw in [false, true] {
+        let flag: &[&str] = if raw { &["--raw"] } else { &[] };
+
+        let mut args = vec!["show", "--project", "*"];
+        args.extend(flag);
+        args.extend(window);
+        args.push(&id);
+        let out = bench.run(&args);
+        assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+        // The body is the archived line, byte for byte (D-01).
+        let body = format!("\n{written}\n");
+        assert!(
+            out.stdout.windows(body.len()).any(|w| w == body.as_bytes()),
+            "show --raw={raw} lost the archived line:\n{}",
+            stdout(&out)
+        );
+        assert!(
+            !out.stdout.iter().any(|b| *b == 0x1b || *b == 0x07),
+            "show --raw={raw} wrote ESC or BEL to the terminal:\n{:?}",
+            stdout(&out)
+        );
+        let printed = stdout(&out);
+        let header = line_starting(&printed, &format!("{id}  "));
+        for escaped in [
+            "2026-10\\u001b19T12:00:00.000\\u0007Z",
+            "planted\\u001bfile.jsonl",
+            "planted\\u001bproject",
+        ] {
+            assert!(header.contains(escaped), "header lacks {escaped}: {header}");
+        }
+        let anchor = line_starting(&printed, "  > ");
+        assert!(
+            anchor.contains("\\u001b]52;c;aGVsbG8=\\u0007 quixotrel"),
+            "{anchor}"
+        );
+        assert!(
+            printed
+                .lines()
+                .any(|line| line.starts_with("    ") && line.contains("assistant/Ba\\u001bsh")),
+            "the tool name is not escaped:\n{printed}"
+        );
+        assert!(
+            printed.contains("  (this session continues from prior\\u001bsession)\n"),
+            "{printed}"
+        );
+
+        let mut args = vec!["search", "--project", "*"];
+        args.extend(flag);
+        args.push(PLANTED_TOKEN);
+        let out = bench.run(&args);
+        assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+        assert!(
+            !out.stdout.iter().any(|b| *b == 0x1b || *b == 0x07),
+            "search --raw={raw} wrote ESC or BEL to the terminal:\n{:?}",
+            stdout(&out)
+        );
+        let printed = stdout(&out);
+        let hit = line_starting(&printed, &format!("{id}  "));
+        for escaped in [
+            "  2026-10\\u001b19  ",
+            "  planted\\u001bfile.jsonl  ",
+            "planted\\u001bproject",
+        ] {
+            assert!(hit.contains(escaped), "hit line lacks {escaped}: {hit}");
+        }
+        let excerpt = line_starting(&printed, "    ");
+        assert!(
+            excerpt.contains("\\u001b]52;c;aGVsbG8=\\u0007 quixotrel"),
+            "{excerpt}"
+        );
+    }
 }

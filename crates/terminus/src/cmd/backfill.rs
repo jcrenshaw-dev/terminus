@@ -120,9 +120,9 @@ pub fn estimate(data_dir: &Path, config: &Config) -> Result<Estimate, Failure> {
         // this call contributes nothing rather than failing an estimate - it is
         // a number, and the pass itself will report what it cannot read.
         let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-        let done = path
-            .to_str()
-            .and_then(|key| archived.get(key).copied())
+        let done = terminus_core::ingest::path_key(path)
+            .ok()
+            .and_then(|key| archived.get(&key).copied())
             .unwrap_or(0);
         unread_bytes += len.saturating_sub(done);
     }
@@ -136,9 +136,10 @@ pub fn estimate(data_dir: &Path, config: &Config) -> Result<Estimate, Failure> {
 
 /// Every stored watermark, as one query.
 ///
-/// The session key is the canonical transcript path as text, which is exactly
-/// what discovery's walk builds (D-01, D-17), so the join is a string lookup
-/// and needs no path resolution here.
+/// Keyed on the session key, the transcript's path below its project folder
+/// (D-01).
+/// [`estimate`] turns each discovered path into that key with the same function
+/// ingest uses, so the join is a string lookup.
 fn watermarks(data_dir: &Path, config: Config) -> Result<HashMap<String, u64>, Failure> {
     let opened = read::open_in(data_dir, config)?;
     let Opened::Ready(reader) = opened else {

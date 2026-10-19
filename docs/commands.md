@@ -58,7 +58,7 @@ An excluded project is never shown, with `*` too, including sessions archived be
 
 Finds past turns by text, a path, an error line or an identifier. Every word after `search` that is not an option is part of the query, so the words need no quotes, and a turn must match all of them. Only the first 32 terms are used, and stderr says so when a query is cut.
 
-Each hit is two lines: the turn id, the day, the transcript's file name, the project, and `(subagent)` for a subagent's turn, then an excerpt around the match. The count of hits goes to stderr. The turn id is what `terminus show` takes.
+Each hit is two lines: the turn id, the day, the transcript's file name, the project, and `(subagent)` for a subagent's turn, then an excerpt around the match. The count of hits goes to stderr. The turn id is what `terminus show` takes. Control characters in archived text, other than tab and newline, print as `\u00XX` escapes, such as `\u001b` for ESC, with or without `--raw`.
 
 - `--project <path>`: which project to search, as [above](#which-project-a-read-command-sees).
 - `--tool <name>`: only turns that called this tool, such as `Bash` or `Read`.
@@ -71,7 +71,7 @@ Each hit is two lines: the turn id, the day, the transcript's file name, the pro
 
 ### `terminus show <id>...`
 
-Prints the archived record behind each turn id, byte for byte as it was archived. It takes one or more ids, and a word that is not a number exits 2. Each record has a header line with the id, the time, the transcript's file name, the project, and `(body evicted)` when retention has evicted the session's text. An id that is not in the project is named on stderr.
+Prints the archived record behind each turn id, byte for byte as it was archived. It takes one or more ids, and a word that is not a number exits 2. Each record has a header line with the id, the time, the transcript's file name, the project, and `(body evicted)` when retention has evicted the session's text. An id that is not in the project is named on stderr. The header and the `--before`/`--after` turns print control characters in archived text, other than tab and newline, as `\u00XX` escapes, such as `\u001b` for ESC, with or without `--raw`. The record itself is still printed byte for byte.
 
 - `--project <path>`: which project the ids are looked up in, as [above](#which-project-a-read-command-sees). An id from another project needs that project or `*`.
 - `--before <n>`, `--after <n>`: also prints up to this many turns before and after each record, from the same session, at most 25 each. A larger number is treated as 25. The window stops at the session's first and last turn and says which end it reached.
@@ -89,7 +89,7 @@ Lists every archived session in the project, one line each: the day of its first
 
 ### `terminus observations`
 
-Lists the facts recorded for each closed session in the project: the transcript's file name, branch, turns, duration and compactions, then the files modified and read, the tools, the commands, the errors and the commits. The facts come from the transcript's own records, and no model is involved. A session has an entry once a pass has closed it. A list that hit its cap is named under `truncated`.
+Lists the facts recorded for each closed session in the project: the transcript's file name, branch, turns, duration and compactions, then the files modified and read, the tools, the commands, the errors and the commits. The facts come from the transcript's own records, and no model is involved. A session has an entry once a pass has closed it. A list that hit its cap is named under `truncated`. Control characters in archived text, other than tab and newline, print as `\u00XX` escapes, such as `\u001b` for ESC.
 
 - `--project <path>`: which project to list, as [above](#which-project-a-read-command-sees).
 - `--json`
@@ -149,7 +149,7 @@ The export is not filtered. `[privacy] redact_recall` applies to text on its way
 
 Moves the whole data directory to `<path>` and records the new location in the config directory ([the data directory](configuration.md#the-data-directory)). It prints where the data is now, where it is going and its size, warns that the store is not safe on a network filesystem, and asks once. The default answer is no.
 
-It refuses a `<path>` that is the data directory itself, is inside it, or is a folder that already holds files. It copies under the ingest lock, and refuses while another process holds that lock, then records the new location, then deletes the old directory. A copy that fails deletes nothing, and the old location stays recorded. Nothing in Claude Code's settings changes, because the hook and MCP entries never name the data directory. `TERMINUS_DATA_DIR`, when set, still outranks the recorded location.
+Trailing slashes and `.` parts are dropped from `<path>` before it is checked, and the location is recorded without them. It refuses a `<path>` that is the data directory itself or is inside it. A `<path>` that does not exist is created 0700. One that exists has to be an empty directory owned by the user running the command, with no group or world permission bits. It refuses a symlink, with or without a trailing slash, a file, a directory another user owns, a directory with any group or world bit, a directory it cannot list, and a directory that already holds files. A directory made with `mkdir` under the usual umask 022 is 0755, so it is refused until `chmod 700 <path>` narrows it, and the refusal prints that command. Terminus does not change the mode of a directory it did not create. After the answer, and under the ingest lock, it checks `<path>` again and refuses if it was created, removed, replaced or changed while the question waited. It copies under the ingest lock, and refuses while another process holds that lock, then records the new location, then deletes the old directory. A copy that fails deletes nothing, and the old location stays recorded. Nothing in Claude Code's settings changes, because the hook and MCP entries never name the data directory. `TERMINUS_DATA_DIR`, when set, still outranks the recorded location.
 
 - `-y`, `--yes`: answers the question yes. Without it and with no answer to read, as when stdin is closed, nothing moves and the command exits 1.
 

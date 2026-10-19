@@ -42,6 +42,12 @@
 //! prefix cache, which nothing local can observe; the byte identity is the
 //! property actually built here and it stands on its own.
 //!
+//! **The whole brief is framed (D-02, D-08).** A header line saying the block
+//! is quoted history and not instructions, then everything below between the
+//! `inject` module's fixed tags, the closing tag last. No turn is excluded
+//! here: the brief quotes the last typed prompt and the last assistant turn,
+//! and neither is ever a tool result.
+//!
 //! **The one thing it writes is which turns it quoted.** A brief that rendered
 //! records its turn ids in the session's [`super::state`] file, so that the
 //! prompt arm does not spend a prompt re-injecting a turn already sitting on
@@ -194,7 +200,14 @@ struct Brief {
 /// catch, and the brief would be the one output where a long turn leaks.
 ///
 /// The head line, the branch and the index pointer are built here out of
-/// `session_meta` and counts, not out of archived text, and are not filtered.
+/// `session_meta` and counts and are not redacted. The day, the branch and the
+/// project label are archived strings all the same, so each has any closing tag
+/// neutralized where it is built (D-05).
+///
+/// **All of it goes inside the frame (D-02, D-06).** The header and both tags
+/// are a fixed cost that comes off first; a budget they do not fit renders no
+/// brief at all, so [`remember`] writes nothing. The pointer goes inside with
+/// the rest because it repeats the project label, which is archived text.
 fn render(
     conn: &Connection,
     scoped: &Scoped,
@@ -202,6 +215,11 @@ fn render(
     redaction: &Redaction,
 ) -> Option<Brief> {
     let budget = budget.min(MAX_BRIEF_CHARS);
+    if !super::frame_fits(DESCRIPTION, budget) {
+        return None;
+    }
+    let framed = budget;
+    let budget = budget - super::frame_cost(DESCRIPTION);
     let (continuity, reads) = last_session(conn, scoped, redaction);
     let pointer = index_pointer(conn, scoped);
     if continuity.is_none() && pointer.is_none() {
@@ -212,7 +230,7 @@ fn render(
     if chars(&full) <= budget {
         return Some(Brief {
             turns: quoted(continuity.as_ref()),
-            text: full,
+            text: super::frame(DESCRIPTION, &full, framed)?,
             reads,
         });
     }
@@ -227,14 +245,24 @@ fn render(
         pointer.as_deref(),
     ));
     let cut = continuity.map(|continuity| continuity.within(budget.saturating_sub(spent)));
-    // The backstop, and only that: it fires when the head line and the pointer
-    // alone are over budget, which no cut to the quoted turns can fix.
+    // The backstop inside `frame`, and only that: it fires when the head line
+    // and the pointer alone are over what the frame left, which no cut to the
+    // quoted turns can fix. It cuts inside the frame, never the closing tag.
     Some(Brief {
         turns: quoted(cut.as_ref()),
-        text: clip(&assemble(cut.as_ref(), pointer.as_deref()), budget),
+        text: super::frame(
+            DESCRIPTION,
+            &assemble(cut.as_ref(), pointer.as_deref()),
+            framed,
+        )?,
         reads,
     })
 }
+
+/// What this arm says the block holds, ahead of [`super::QUOTED_HISTORY`] on
+/// the header line.
+const DESCRIPTION: &str =
+    "Terminus resume brief - where the last session in this project left off.";
 
 /// The turns a rendered continuity block quotes.
 ///
@@ -391,10 +419,15 @@ fn last_session(
     let Some(row) = last_session_row(conn, scoped).ok().flatten() else {
         return (None, excerpt::Reads::default());
     };
-    let project = project_label(scoped);
-
-    let day = row.last_turn_at.as_deref().map(day);
-    let head = match (day, row.branch.as_deref()) {
+    // Archived strings, every one: the label is a `cwd` out of a transcript,
+    // the day is cut from a stored `ts` and the branch is `gitBranch` (D-05).
+    let project = super::neutralize(project_label(scoped));
+    let day = row
+        .last_turn_at
+        .as_deref()
+        .map(|ts| super::neutralize(day(ts)));
+    let branch = row.branch.as_deref().map(super::neutralize);
+    let head = match (day, branch) {
         (Some(day), Some(branch)) => {
             format!("The last session in {project} ended {day}, on branch {branch}.")
         }
@@ -539,7 +572,7 @@ fn last_exchange(
     let mut cut = |coordinates: Option<(i64, i64, i64)>| -> Option<Quote> {
         let (turn_id, _, _) = coordinates?;
         let bytes = bytes.next()?.ok()?;
-        let text = excerpt::of_record_with(&query, &bytes, redaction);
+        let text = excerpt::of_record_scrubbed(&query, &bytes, redaction, super::neutralize);
         (!text.trim().is_empty()).then_some(Quote { turn_id, text })
     };
     let [prompt, reply] = pair;
@@ -595,7 +628,7 @@ fn index_pointer(conn: &Connection, scoped: &Scoped) -> Option<String> {
     if sessions == 0 {
         return None;
     }
-    let project = project_label(scoped);
+    let project = super::neutralize(project_label(scoped));
     Some(format!(
         "Terminus has {} and {} archived for {project}, searchable at turn granularity.\n\
          Reach them with the recall_search, recall_context and recall_get tools \

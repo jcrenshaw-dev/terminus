@@ -19,6 +19,7 @@
 //! grouped by session, so a row that several hits share is fetched and
 //! decompressed once per search, and [`Reads`] counts both.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use rusqlite::Connection;
@@ -76,15 +77,31 @@ impl Reads {
 ///
 /// `redaction` is the CALLER's (phase 4 D-01). Nothing here reads a `Config`,
 /// so whether a surface filters stays a property of its own call site and is
-/// reviewable there: both of this function's callers - `search::run` and
-/// `inject::prompt` - resolve `Redaction::of` from the config they already
-/// hold, and each could be changed without the other moving. That is the point
+/// reviewable there: `search::run` here and `inject::prompt` through
+/// [`attach_scrubbed`] each resolve `Redaction::of` from the config they
+/// already hold, and each could be changed without the other moving. That is the point
 /// of the parameter, not an accident of them currently agreeing.
 pub fn attach(
     conn: &Connection,
     query: &Query,
     hits: &mut [Hit],
     redaction: &Redaction,
+) -> Result<Reads> {
+    attach_scrubbed(conn, query, hits, redaction, unchanged)
+}
+
+/// [`attach`], with the caller's `scrub` run over each projection right after
+/// redaction and before it is flattened and windowed.
+///
+/// `scrub` is the CALLER's, the way `redaction` is: the prompt arm passes the
+/// frame's closing-tag neutralizer, and nothing here knows what it removes.
+/// Every other caller goes through [`attach`] and renders as it always did.
+pub fn attach_scrubbed(
+    conn: &Connection,
+    query: &Query,
+    hits: &mut [Hit],
+    redaction: &Redaction,
+    scrub: fn(&str) -> Cow<'_, str>,
 ) -> Result<Reads> {
     let mut reads = Reads::default();
     if hits.is_empty() {
@@ -119,7 +136,7 @@ pub fn attach(
 
         for ((index, _), bytes) in located.into_iter().zip(read.bytes) {
             let Ok(bytes) = bytes else { continue };
-            hits[index].excerpt = of_record_with(query, &bytes, redaction);
+            hits[index].excerpt = of_record_scrubbed(query, &bytes, redaction, scrub);
         }
     }
 
@@ -176,6 +193,11 @@ pub fn of_record(query: &Query, record: &[u8]) -> String {
 /// would leave exactly the secrets whose labels were trimmed off, and would
 /// pass a test whose planted secret happened to land whole inside the window.
 ///
+/// For that same reason a keyed value is taken BEFORE the projection, by
+/// [`Redaction::apply_record`]: the projection drops every key, so a value
+/// stored under `api_token` in a tool's input reaches the rules with its name
+/// already gone.
+///
 /// Before [`flatten`] as well as before [`window`], and that ordering is also
 /// load-bearing: the projection is newline-joined by construction and the
 /// header rule is written per line, so collapsing it to one line first would
@@ -185,13 +207,30 @@ pub fn of_record(query: &Query, record: &[u8]) -> String {
 /// 2026-09-04, scrubbing the real projection of every turn of the 60 most
 /// recent sessions (5,412 records, 12.9 MB) changed 0.18% of projections.
 pub fn of_record_with(query: &Query, record: &[u8], redaction: &Redaction) -> String {
+    of_record_scrubbed(query, record, redaction, unchanged)
+}
+
+/// [`of_record_with`], with the caller's `scrub` run in the position the
+/// redaction holds: over the full projection, after the filter, before
+/// [`flatten`] and [`window`]. See [`attach_scrubbed`].
+pub fn of_record_scrubbed(
+    query: &Query,
+    record: &[u8],
+    redaction: &Redaction,
+    scrub: fn(&str) -> Cow<'_, str>,
+) -> String {
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(record) else {
         // A line that is not JSON is archived verbatim all the same (D-13), and
         // it has no projection. Nothing to excerpt is an empty excerpt.
         return String::new();
     };
-    let projected = text::project(&value);
-    window(query, &flatten(&redaction.apply(&projected)))
+    let projected = text::project(&redaction.apply_record(&value));
+    window(query, &flatten(&scrub(&redaction.apply(&projected))))
+}
+
+/// The scrub every caller that passes none gets.
+fn unchanged(text: &str) -> Cow<'_, str> {
+    Cow::Borrowed(text)
 }
 
 /// The projection as one line: runs of whitespace become single spaces.

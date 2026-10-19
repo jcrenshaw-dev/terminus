@@ -12,7 +12,7 @@ The archive does not decide what goes into it. The ingest pass in [0003: Ingest]
 
 | Term | Meaning |
 |---|---|
-| Session | One transcript file, keyed by `session_key`, its canonical path, and numbered by `session_no`, a stable integer assigned when it is first archived. |
+| Session | One transcript file, keyed by `session_key` and numbered by `session_no`, a stable integer assigned when it is first archived. The key is the transcript's path below its project folder: `<uuid>.jsonl`, or `<sessionId>/subagents/[workflows/wf_*/]agent-*.jsonl` for a sidecar. It is read off the shape of the path, which must sit in a project folder inside a `projects` folder, never by stripping a root, so a moved or symlinked `.claude` or a moved project folder does not change it. A transcript that is a symlink takes the key of the file it points at, and a path outside those two shapes, such as a file under no `projects` folder, keeps its canonical path as its key. The absolute path the file was last read from is `session_meta.transcript_path`. Recovery re-keys a session whose stored key is still an absolute path, and merges sessions that reduce to one key into the oldest of them when their streams are provably one, as [0003: Ingest](0003-ingest.md) describes. |
 | Session stream | The bytes the archive holds for one session: the transcript as it was read, byte for byte under `[capture] mode` `full`. Offsets in `turns` and `compactions` are offsets in this stream, never in a block. |
 | Block row | One row of `blocks`: block `block_no` of a session's stream, compressed with zstd, with the BLAKE3 hash of its uncompressed bytes. |
 | Block size | How many uncompressed bytes each block of a session holds, recorded per session in `session_meta.block_size`. New sessions are cut at `BLOCK_SIZE`, 65536. |
@@ -63,7 +63,7 @@ The truth. They are never dropped, never rebuilt and never converted.
 
 | Column | Type | What it holds |
 |---|---|---|
-| `session_key` | `TEXT` primary key | The transcript's canonical path. |
+| `session_key` | `TEXT` primary key | The transcript's path below its project folder, such as `<uuid>.jsonl`, or its canonical path when it has neither transcript shape in a project folder inside a `projects` folder. |
 | `session_no` | `INTEGER NOT NULL UNIQUE` | The session's number, the next unused one when it is first archived. Block rows and turn ids are keyed on it. |
 
 `blocks`, one row per block of a session's stream, primary key `(session_no, block_no)`:
@@ -93,7 +93,7 @@ The truth. They are never dropped, never rebuilt and never converted.
 | `branch` | `TEXT` | The git branch the records carry. |
 | `is_final` | `INTEGER` | 1 once the session has been idle for 6 hours. |
 | `is_evicted` | `INTEGER` | 1 once retention has deleted the session's block rows. |
-| `parent_session_key` | `TEXT` | For a sidecar, the session key of the transcript it belongs to, from its path. |
+| `parent_session_key` | `TEXT` | For a sidecar, the session key of the transcript it belongs to, in the same form, such as `<sessionId>.jsonl`, read from the sidecar's path. |
 | `agent_meta` | `BLOB` | A sidecar's `agent-*.meta.json`, stored as bytes and never parsed into columns. |
 | `transcript_diverged` | `INTEGER` | 1 when the transcript on disk is shorter than what was archived or does not match it. `terminus verify` reports it. |
 | `project_pre_worktree` | `TEXT` | The project key before a worktree was folded into its repository. |
@@ -198,7 +198,7 @@ They hold what happened at prompt time, or facts read from block rows that reten
 
 | Column | Type | What it holds |
 |---|---|---|
-| `transcript_path` | `TEXT` primary key | The session key. |
+| `transcript_path` | `TEXT` primary key | The session key, in the form `sessions.session_key` holds, not the path the file was read from. |
 | `byte_offset` | `INTEGER NOT NULL` | Where the next pass reads the file from. |
 | `updated_at` | `TEXT` | When it last moved. |
 
@@ -285,9 +285,9 @@ Options are in [commands.md](../commands.md#the-store), and the `--json` fields 
 
 ### `terminus data move <path>`
 
-- **Inputs:** a destination path that does not exist or is empty.
-- **Outputs:** it prints where the data directory is, where it is going and its size, warns that a network filesystem is not safe for the store, and asks once, with no as the default. Then it takes `LOCK`, copies every file and folder of the data directory to the destination with every folder `0700` and every file `0600`, `terminus.db`, its WAL sidecars, `snapshots/`, `injection/` and `decisions/` included, and creates a fresh empty `LOCK` there. It writes the destination's absolute path to the `data-location` pointer in the config directory, through a temporary file and a rename, releases `LOCK`, and deletes the old directory. It writes nothing to Claude Code's settings, because neither the hook entries nor the MCP entry names the data directory.
-- **Refusals:** the destination is the data directory itself, sits inside it, or already holds files. Another process holds `LOCK`. No answer to the question, as when stdin is closed and there is no `--yes`. A copy that fails deletes nothing and leaves the pointer as it was.
+- **Inputs:** a destination path, with trailing slashes and `.` parts dropped and any `..` kept as written. It does not exist, or it is an empty directory that is not a symlink, is owned by this process's uid and has `mode & 0o077 == 0`. The uid is the owner of a probe file, `.uid-probe-<pid>-<n>`, created `0600` with `create_new` in the config directory and removed, and it is learned only when an existing directory has to be compared.
+- **Outputs:** it prints where the data directory is, where it is going and its size, warns that a network filesystem is not safe for the store, and asks once, with no as the default. Then it takes `LOCK`, copies every file and folder of the data directory to the destination with every folder `0700` and every file `0600`, `terminus.db`, its WAL sidecars, `snapshots/`, `injection/` and `decisions/` included, and creates a fresh empty `LOCK` there. It writes the destination's normalized absolute path to the `data-location` pointer in the config directory, through a temporary file and a rename, releases `LOCK`, and deletes the old directory. It writes nothing to Claude Code's settings, because neither the hook entries nor the MCP entry names the data directory.
+- **Refusals:** the destination is the data directory itself or sits inside it, compared as paths. An existing destination that is a symlink (only the last part is checked, so a symlinked parent is followed), is not a directory, is owned by another uid, has any group or world bit, cannot be listed, or already holds files. Any error from `symlink_metadata` other than not-found, such as a file where a parent directory should be. A destination with group or world bits is refused with `chmod 700 '<path>'` in the message, and its mode is never changed. After the answer and `LOCK`, right before the copy, the same checks run again, and a destination that was absent and is now there, was there and is now gone, or is now a different directory by device and inode is refused with nothing copied. A destination both checks found absent is then created with an exclusive `mkdir` at 0700, and anything already at the path by then refuses the move with nothing copied. The parent's owner and mode are never checked. Another process holds `LOCK`. No answer to the question, as when stdin is closed and there is no `--yes`. A copy that fails deletes nothing and leaves the pointer as it was.
 
 ## 6. States and workflows
 
@@ -414,7 +414,7 @@ erDiagram
   sessions ||--o| observations : "session_key"
   sessions ||--o{ turns : "session_key"
   sessions ||--o{ compactions : "session_key"
-  sessions |o--o| watermarks : "session_key is transcript_path, not enforced"
+  sessions |o--o| watermarks : "transcript_path holds the session_key, not enforced"
   turns ||--o| turns_fts : "rowid is the turn id"
   turns ||--o{ entities : "turn_id"
   turns ||--o{ paths : "turn_id"

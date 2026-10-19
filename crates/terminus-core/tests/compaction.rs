@@ -601,7 +601,7 @@ impl Tree {
     }
 
     fn key(&self, path: &Path) -> String {
-        path.to_str().unwrap().to_owned()
+        terminus_core::ingest::path_key(path).unwrap()
     }
 
     /// Everything about a session that a refused pass must not have moved.

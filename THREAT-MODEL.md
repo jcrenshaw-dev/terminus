@@ -9,16 +9,16 @@ Last reviewed: 2026-10-15
 
 ## What this tool reads
 
-**Transcripts.** Terminus walks `<root>/projects/` under each root. The roots are the `roots` list in `terminus.toml` when it is set, otherwise `$CLAUDE_CONFIG_DIR`, otherwise `$HOME/.claude` (`core/config.rs`). `roots` entries are used as written, with no `~` expansion and no absolute-path check. Each root is canonicalized once (`core/discover.rs`).
+**Transcripts.** Terminus walks `<root>/projects/` under each root. The roots are the `roots` list in `terminus.toml` when it is set, otherwise `$CLAUDE_CONFIG_DIR`, otherwise `$HOME/.claude` (`core/config.rs`). `roots` entries are used as written, with no `~` expansion and no absolute-path check. Each root is canonicalized once (`core/discover.rs`). The session key does not depend on the root or the project folder. It is the transcript's path below its project folder, such as `<uuid>.jsonl`, read off the shape of the path (`path_key` in `core/ingest/mod.rs`), so a transcript reached through a moved root, a root behind a symlink or a moved project folder keeps its key.
 
 - A project is a directory directly under `projects/`. A symlinked project directory is skipped.
 - Inside a project the walk has no depth limit, enters dot-directories, and does not enter symlinked directories.
 - A transcript is chosen by file name only: `<uuid>.jsonl` directly in a project directory, or `agent-*.jsonl` at any depth.
-- A symlinked transcript file is followed to its target wherever that is. The only check on the target is the `exclude` list (`keep_transcript` in `core/discover.rs`). The session is keyed by the link's path.
+- A symlinked transcript file is followed to its target wherever that is. The only check on the target is the `exclude` list (`keep_transcript` in `core/discover.rs`). The session is keyed by the file the link points at, so a link and its target are one session.
 - For a sidecar transcript, the sibling `agent-<x>.meta.json` is read whole, through symlinks, with no size limit (`core/ingest/mod.rs`).
 - Each transcript is opened read-only with `File::open` (`open_transcript` in `core/discover.rs`) and read from the stored byte offset to end of file in one buffer (`read_tail` in `core/ingest/mod.rs`).
 
-**`terminus ingest <path>`.** Reads any file the user names. The path is canonicalized and checked against `exclude`, with no check on its name or location (`core/ingest/mod.rs`).
+**`terminus ingest <path>`.** Reads any file the user names. The path is canonicalized and checked against `exclude`, with no check on its name or location (`core/ingest/mod.rs`). Its session key is its path below its project folder, whichever root and project folder it sits under, as in a walk. When the store holds that key for a different file that still exists, the named file is refused unread.
 
 **Config directory.** `$TERMINUS_CONFIG_DIR`, otherwise `$XDG_CONFIG_HOME/terminus`, otherwise `$HOME/.config/terminus`, on Linux and macOS alike (`core/config.rs`).
 
@@ -64,7 +64,7 @@ Last reviewed: 2026-10-15
 
 ## What it writes
 
-**File modes.** Files in the data directory are created through `core/owner_only.rs`: directories 0700 and files 0600, passed in the creating syscall. Nothing calls `umask()`, so the result can be narrower but never wider. Parent directories are made with `create_dir_all` at the default mode, and only the leaf gets 0700. Every writable open of the store (`Store::open` in `core/store/open.rs`) tightens the data directory, `terminus.db`, `-wal`, `-shm`, `LOCK`, `snapshots/`, `injection/` and `decisions/` and the regular files one level inside them. It skips anything that is not the expected type and ignores failures. Read-only opens tighten nothing.
+**File modes.** Files in the data directory are created through `core/owner_only.rs`: directories 0700 and files 0600, passed in the creating syscall. Nothing calls `umask()`, so the result can be narrower but never wider. Parent directories are made with `create_dir_all` at the default mode, and only the leaf gets 0700. Every writable open of the store (`Store::open` in `core/store/open.rs`) tightens the data directory, `terminus.db`, `-wal`, `-shm`, `LOCK`, `snapshots/`, `injection/` and `decisions/` and the regular files one level inside them. It skips anything that is not the expected type and ignores failures. Read-only opens tighten nothing. `Store::open` checks no owner, so a store reached through `TERMINUS_DATA_DIR`, or through a pointer an older build wrote, that names another account's directory is opened as found.
 
 **Inside the data directory.**
 
@@ -88,12 +88,20 @@ Last reviewed: 2026-10-15
 - **`settings.json`** (`bin/cmd/install/json_file.rs`).
   - Install merges into the existing file, keeping key order and every scalar's source text. It refuses invalid JSON, a non-object root and duplicate keys.
   - The file is read again just before writing. A symlink is resolved and the write goes beside the real target, through `.settings.json.terminus-<pid>`, fsync and rename.
-  - The temporary file is created with default `OpenOptions`, so its mode is 0666 minus the umask. The existing file's permissions are copied onto it only after the contents are written. A `settings.json` that did not exist before keeps the umask mode.
-  - A one-time backup, `<resolved path>.terminus-backup`, is made with a hard link so an existing backup is never replaced. It has the same permission window.
+  - The temporary file is created 0600 through `owner_only`, before any byte is written (`bin/cmd/install/mod.rs`, `create_temporary`). When `settings.json` already exists and its mode is not 0600, that mode is copied onto the temporary after the contents are written, so a 0644 file stays 0644 and a 0600 file is never wider than 0600. A `settings.json` Terminus creates is 0600. A settings directory it creates gets the umask default, because it is Claude Code's directory. Uninstall's writes follow the same rules.
+  - A one-time backup, `<resolved path>.terminus-backup`, is made with a hard link so an existing backup is never replaced. It is created 0600 and stays 0600 whatever the source's mode. Uninstall restores the backup's bytes, not its mode, so the restored file keeps the live file's mode.
+  - Claude Code 2.1.302 keeps an existing `settings.json`'s mode when it rewrites the file. Its atomic writer reads the target's mode, opens the temporary with it (`w.O_WRONLY|w.O_CREAT|w.O_EXCL|u,f?oe(o):r.mode`) and applies it again before the rename (`Preserving file permissions: `, `Applied original permissions to temp file`). So a 0600 `settings.json` Terminus created stays 0600 when Claude Code writes it. The settings write passes no mode (`{encoding:"utf-8",allowSymlink:e==="userSettings"||U`), so a `settings.json` Claude Code creates gets the open's default, 0666 minus the umask. The bundle has a second settings write path, `S.write(Be.userSettings(),B,{publishDiscipline:"followAtomic"})`, which also passes no mode. The mode that path gives a file was not traced.
 - **`.claude.json`** is never written by Terminus. Install changes it by running `claude mcp add-json --scope user terminus <json>`, and install and uninstall run `claude mcp remove --scope user terminus`.
 - **The binary.** Install writes `$HOME/.local/lib/crenshawdev/terminus/versions/<version>/terminus` at mode 0755, through a temporary file, fsync and rename. The versions folder always comes from `HOME`, even when `TERMINUS_BIN_DIR` is set. The stable path is a symlink to it, made at a temporary name and renamed into place (`bin/cmd/install/binary.rs`). `install.sh` does the same with umask 022.
 - **`terminus export <dir>`** refuses a non-empty directory. It creates the leaf at 0700 and writes `NNNNNN-<sanitized name>.jsonl` files and `manifest.json` at 0600 with `create_new`. The output is the verbatim, unredacted transcripts (`bin/cmd/export.rs`).
-- **`terminus data move <path>`** copies the data directory with 0700 directories and 0600 files, following symlinked files. It writes the pointer, then removes the source with `remove_dir_all` (`bin/cmd/data.rs`).
+- **`terminus data move <path>`** (`bin/cmd/data.rs`).
+  - The path has its trailing slashes and `.` parts dropped, and that one path is checked, copied into and recorded. A `..` stays as written.
+  - Before asking, a path that does not exist is accepted and later created 0700. An existing path is accepted only when `symlink_metadata` shows a directory, not a symlink, owned by the user's uid, with `mode & 0o077 == 0`, that can be listed and is empty. Any other error refuses, including a directory that cannot be listed, which is never read as empty. A directory with group or world bits is refused with the `chmod 700 '<path>'` command that fixes it, and its mode is never changed.
+  - The uid is the owner of a probe file, `.uid-probe-<pid>-<n>`, created 0600 with `create_new` in the config directory and removed straight after. It is learned only when an existing directory has to be compared.
+  - After the answer and the lock, right before the copy, the same checks run again, and the move is refused unless the path is still absent or is the same directory by device and inode.
+  - Only the last part of the path is checked for a symlink, so a symlinked parent is followed. The parent's owner and mode are not checked, so an account that can write to the parent, when the parent has no sticky bit, can rename the checked directory away and put another directory or a symlink in its place at any point from the second check on, before, during or after the copy, and the store is written into whatever is at the path.
+  - A path both checks found absent is then created with one exclusive `mkdir` at 0700, so a directory or symlink another account puts there after the second check fails the `mkdir` and the move is refused with nothing copied. That covers the `mkdir` alone; past it, the parent gap above still applies.
+  - It copies the data directory into the checked or just-created directory, making each directory below it with one exclusive `mkdir` at 0700 and each file with `create_new` at 0600, following symlinked files. It writes the pointer, then removes the source with `remove_dir_all`.
 - **Never written:** shell rc files, `PATH`, systemd, launchd, cron, and anything under the Claude projects tree.
 
 **What it deletes.**
@@ -104,7 +112,7 @@ Last reviewed: 2026-10-15
 | `uninstall` | The `.mcpServers.terminus` entry, through `claude mcp remove`, whoever created it | The key name only |
 | `uninstall` | The stable path, if the file it resolves to contains the marker or it is a dangling link into the versions folder | A byte-substring match on the marker |
 | `uninstall --purge` | `remove_dir_all` on the data directory | Only that `<data>/terminus.db` exists, then a confirmation or `--yes`, then the lock. No check that the directory is where Terminus would put it |
-| `data move` | `remove_dir_all` on the source data directory after the copy | The lock and a confirmation. No `terminus.db` check. The destination checks (not the source, not inside it, empty) are lexical, so a symlinked alias is not caught |
+| `data move` | `remove_dir_all` on the source data directory after the copy | The lock and a confirmation. No `terminus.db` check. The destination must not be the source or inside it, and must be absent or an empty directory the user owns, not a symlink, with no group or world bit, checked before the question and again after the answer and the lock. The not-the-source and not-inside-it checks compare paths as text, so a destination that does not exist yet and is reached through a symlinked parent of the source passes them |
 | Retention | Database rows only, never files | `delete` acts only once Claude Code has deleted the transcript. It never deletes `decisions` or `labels` rows (`core/retention/`) |
 | Snapshot prune | `snapshots/terminus-*.db` beyond `keep` | Name prefix and suffix, regular files only |
 | Decisions drain | Every regular `*.json` in `decisions/`, unparseable ones included | Regular files only, deleted after the database commit |
@@ -113,10 +121,10 @@ Last reviewed: 2026-10-15
 
 **stdout and stderr.**
 
-- **Hooks.** `SessionStart` and `UserPromptSubmit` print one line, `{"hookSpecificOutput":{"hookEventName":"<event>","additionalContext":"<text>"}}`, built with serde_json, or nothing. Claude Code puts `additionalContext` into the model's context. Whether the user sees that text is up to Claude Code [VERIFY]. `SessionEnd` and `PostCompact` print nothing. stderr gets one fixed line naming the event and an OS error. Every known event exits 0.
+- **Hooks.** `SessionStart` and `UserPromptSubmit` print one line, `{"hookSpecificOutput":{"hookEventName":"<event>","additionalContext":"<text>"}}`, built with serde_json, or nothing. Claude Code 2.1.302 (`~/.local/share/claude/versions/2.1.302`, read 2026-10-18) hands that text to the model as a user-role message marked as meta, `return{type:"user",message:{role:"user",content:e||gu},isMeta:n`. It puts the hook's name and `hook additional context: ` in front of the text, so the model reads `SessionStart hook additional context: <text>` or `UserPromptSubmit hook additional context: <text>`, with the texts of several hooks on the same event joined by newlines, and wraps the whole of it in its own tag pair, `gF="<system-reminder>",RGe="</system-reminder>"`. Before wrapping it rewrites two things and nothing else. A `<` that opens a `system-reminder` or `/system-reminder` tag, in any case and with whitespace allowed, becomes `&lt;`, `replaceAll(/<(?=\s*(?:\/\s*)?system-reminder\b)/gi,"&lt;")`, and so does a `<` or `</` at the very end of the text, `replace(/<(?=\s*(?:\/\s*)?$)/,"&lt;")`. Whether the user sees the text is still open [VERIFY]: the bundle builds it as a meta message, and a search for where the interface renders a `hook_additional_context` attachment found nothing that settles it. `SessionEnd` and `PostCompact` print nothing. stderr gets one fixed line naming the event and an OS error. Every known event exits 0.
 - **The detached ingest** each hook starts has stdin, stdout and stderr all on `/dev/null`. Its errors go to the `runs.error` column.
 - **MCP server.** stdout carries JSON-RPC only, and tool results go into the model's context. A failed call's `reason` can contain absolute paths, raw SQLite error text, and a TOML parse excerpt (withheld only when it contains `api_key`).
-- **CLI.** Data goes to stdout and diagnostics to stderr. That reaches a terminal, or the model's context when Claude runs the command through Bash. `terminus show` writes raw archived bytes, and nothing filters control characters out of `show` or `search` output, so an escape sequence stored in a transcript may reach the terminal live [VERIFY].
+- **CLI.** Data goes to stdout and diagnostics to stderr. That reaches a terminal, or the model's context when Claude runs the command through Bash. The human output of `terminus search`, the header and `--before`/`--after` window of `terminus show`, and `terminus observations` print every C0 control other than tab and newline, DEL, and every C1 control in archived text as its lowercase `\u00XX` escape, such as `\u001b` for ESC, with or without `--raw` (`bin/escape.rs`). The record body `terminus show` prints is still the archived line byte for byte. JSON escapes every C0 control, so ESC and BEL cannot reach the terminal through the body, but DEL and C1 controls can, because JSON does not require escaping them. `--json` output from all three commands passes DEL and C1 through raw as well, because serde_json escapes only U+0000 to U+001F, the quote and the backslash. What a given terminal does with a UTF-8 C1 control, an OSC 52 clipboard write or an OSC 8 link depends on the terminal and has not been checked [VERIFY].
 
 ## What it executes
 
@@ -146,7 +154,7 @@ This is exec form with no timeout set. Each event fires on every occurrence beca
 
 - **SQL.** Every value is a bound parameter. Each `format!` that builds SQL inserts only constant table or column names or runs of `?` placeholders.
 - **FTS5.** Search text is split on every non-alphanumeric character, deduplicated, capped at 32 tokens, and each token is double-quoted and joined with `AND` (`match_expression` in `core/recall/query.rs`). The per-prompt injection joins at most 8 such expressions with `OR`. FTS5 operators, column filters, `*` and `^` cannot get through.
-- **Text for Claude's context.** The `SessionStart` brief names the project path and the branch, then gives "It last asked:" and "It last answered:" excerpts and a line pointing at the recall tools (`core/inject/brief.rs`). The `UserPromptSubmit` injection is a head line followed by `- turn <id> (<day>): <excerpt>` lines (`core/inject/prompt.rs`). Both are archived transcript text. Excerpts are flattened to one line. There are no delimiters and no label saying the text is data rather than instructions.
+- **Text for Claude's context.** The `SessionStart` brief names the project path and the branch, then gives "It last asked:" and "It last answered:" excerpts and a line pointing at the recall tools (`core/inject/brief.rs`). The `UserPromptSubmit` injection is `- turn <id> (<day>): <excerpt>` lines (`core/inject/prompt.rs`), and never a tool-result turn. Both are archived transcript text. Excerpts are flattened to one line. Each output opens with a header line saying the text between the `terminus-recall` tags is quoted from this project's Terminus archive and is history, not instructions, then the opening tag `<terminus-recall>` on its own line, the archived text, and the closing tag `</terminus-recall>` on its own line as the last characters (`core/inject/mod.rs`). The tags are the same bytes on every render, with no nonce. Every archived string inside, the excerpts, the day, the project label and the branch, has any span that reads as the closing tag replaced by `[closing tag removed]`: another case, whitespace, ASCII control characters or any non-ASCII character inside it, fullwidth forms, lookalike `<`, `/`, `>` and `-` from fixed tables, and non-ASCII letters in the name's letter positions all count. That runs after redaction and before the budget is spent, and a budget too small for the header and both tags hands over nothing. The header is a statement to the model and enforces nothing: whether it lowers how often a model follows planted text has not been measured [VERIFY].
 - **Shell commands printed for the user to run** are single-quote escaped by `shell_quote`. The `rm -f '<path>'` suggestion in `bin/cmd/doctor.rs` does not escape a `'` in the path.
 
 No command line is built from transcript content. Transcript content sets only the directory `git` runs in.
@@ -199,7 +207,7 @@ A same-user process that can already write `~/.claude/projects` or the data dire
 
 ## What the worst outcome looks like
 
-**The single worst outcome** is archived text acting as instructions in a later session. A web page, file or tool result Claude saw once is archived verbatim. It can come back into a new session three ways: automatically through the `UserPromptSubmit` injection (any record type qualifies, including tool results, so a file Claude read can come back when the user names that file), through the `SessionStart` brief, or through the `recall_*` tools when the model calls them. There it is read with that session's tool permissions. Because `recall_search` accepts `project: "*"`, text planted in one project can steer the model into pulling another project's archived secrets into the current session, where that session's tools can send them out.
+**The single worst outcome** is archived text acting as instructions in a later session. A web page, file or tool result Claude saw once is archived verbatim. It can come back into a new session three ways: automatically through the `UserPromptSubmit` injection, through the `SessionStart` brief, or through the `recall_*` tools when the model calls them. The injection never hands over a tool-result turn, a `user` turn with `is_typed` 0, so a file Claude read does not come back when the user names that file; it still quotes typed prompts and assistant turns, and an assistant turn's tool call can carry text copied from what Claude read. The brief quotes only the last typed prompt and the last assistant turn. Both hooks hand their text over framed as quoted history, not instructions. There it is read with that session's tool permissions. Because `recall_search` accepts `project: "*"`, text planted in one project can steer the model into pulling another project's archived secrets into the current session, where that session's tools can send them out.
 
 **What would hurt the most:**
 
@@ -209,12 +217,11 @@ A same-user process that can already write `~/.claude/projects` or the data dire
 
 **What the user would not notice:**
 
-- What the hooks put into `additionalContext` [VERIFY whether Claude Code shows it].
+- What the hooks put into `additionalContext`. Claude Code 2.1.302 sends it to the model as a meta message inside `<system-reminder>` tags, as stdout and stderr above records. Whether it also shows the text to the user was looked for in that bundle and not found [VERIFY whether Claude Code shows it].
 - The detached ingest after every hook, and `git` running in every directory a transcript names.
 - A symlinked file in the projects tree being archived.
 - An edited row in the database, until `terminus verify` runs.
 - Secrets piling up in snapshots and decision records.
-- The `settings.json` temporary file and backup sitting at the umask mode for a moment.
 
 ## Trust boundaries (where untrusted data enters)
 
@@ -230,7 +237,7 @@ A same-user process that can already write `~/.claude/projects` or the data dire
   - `parentUuid` sets the `continues_from` link, looked up with `LIMIT 1` and no `ORDER BY`.
   - `compactMetadata.preservedMessages` decides which turns count as dropped after a compaction, which makes them injectable.
   - Message content feeds the FTS index, the entity index and injection.
-- **Session identity.** The session key is the canonical file path, never the record's `sessionId`, so a forged id cannot overwrite another session.
+- **Session identity.** The session key is the transcript's path below its project folder: `<uuid>.jsonl`, or `<sessionId>/subagents/[workflows/wf_*/]agent-*.jsonl` for a sidecar. It is read off the shape of the path, which must sit in a project folder inside a `projects` folder, and never by stripping a root. It is computed from the path before any byte of the file is read, never from the record's `sessionId` or any other field, so a forged id cannot overwrite another session. A transcript that is a symlink takes the key of the file it points at. A path outside those two shapes, such as a file under no `projects` folder, keeps its canonical path as its key. Two different files that reduce to one key, such as the same session file in two project folders, or under two roots, are never appended to one session. A walk ingests the first and reports the other as a failed file without opening it.
 - **Who controls top-level fields.** Claude Code writes the top-level fields, and tool output appears only inside message content [VERIFY]. Anyone who can write a file under `~/.claude/projects` controls every field.
 
 **2. The shape of the projects tree.** A symlinked `<uuid>.jsonl` or `agent-*.jsonl` is followed to any target that is not excluded. `agent-*.meta.json` is read through symlinks with no size limit.
@@ -260,7 +267,7 @@ A same-user process that can already write `~/.claude/projects` or the data dire
 - **Scope.** `project` defaults to the server's working directory. `"*"` or any path widens or moves the scope to any project that is not excluded, with no confirmation. Excluded projects stay hidden under every scope. Turn ids are `session_no << 24 | turn_seq`, so they are easy to enumerate, and id lookups outside the scope answer `NoSuchTurn`.
 - **Leaks in error text.** Naming a path inside an excluded project returns a reason that includes the stored project key. Error reasons can also carry absolute paths and raw SQLite messages.
 
-**5. CLI arguments.** These come from the user. `ingest <path>`, `export <dir>` and `data move <path>` take any path. `data move` makes it absolute against the working directory and refuses a destination inside the source or not empty.
+**5. CLI arguments.** These come from the user. `ingest <path>`, `export <dir>` and `data move <path>` take any path. `data move` makes it absolute against the working directory, drops trailing slashes and `.` parts, and checks and records that same path. It refuses a destination inside the source or not empty, a symlink, a file, a directory owned by another uid, one with group or world bits, and one it cannot list. It checks again after the answer and refuses a destination that was created, removed, replaced or changed while the question waited.
 
 **6. Environment variables.** These are inherited from the user's shell, or from Claude Code for hooks and MCP. `TERMINUS_DATA_DIR` has no absolute-path check. `PATH` decides which `git` and `claude` run.
 
@@ -317,8 +324,12 @@ A same-user process that can already write `~/.claude/projects` or the data dire
   - `name: value` lines, JSON `"name": "value"` pairs, `NAME=value`, and `--name value` flags, where the name contains `token`, `password`, `passwd`, `secret`, `key`, `api`, `bearer`, `cookie` or `authorization`.
   - JWTs starting with `eyJ`.
   - GitHub tokens with the prefixes `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_` and `github_pat_`.
+  - Bare `sk-` keys: a run of ASCII letters, digits, `-` and `_` that opens with `sk-` and has 20 or more characters after it.
+  - A string stored directly under a key whose name contains one of the words above, in a tool's input, a tool's result or an attachment. It is replaced in every excerpt, context window, brief quotation and per-prompt injection, the same as in a `recall_get` body, even though the text those are cut from drops the key's name.
 - **What it misses.**
-  - A bare `sk-` token in prose (issue #5), AWS `AKIA` keys, Slack `xox` tokens, and any vendor key with no secret-looking name beside it. There is no entropy check.
+  - An `sk-` run with fewer than 20 characters after the prefix, and Stripe's `sk_live_` keys, whose underscore puts them outside the `sk-` rule.
+  - A value under a secret-named key that is not a string, such as a list of strings. The filter walks into it rather than replacing it, so its strings go out unless a key inside it is named like a secret or another rule matches them.
+  - AWS `AKIA` keys, Slack `xox` tokens, and any vendor key with no secret-looking name beside it and no prefix the filter knows. There is no entropy check.
   - It never touches the project path and branch in the brief, or the `session_key`, `project` and `tool_name` fields of MCP results.
 
 **Secrets Terminus itself holds:** none. It reads no API key and refuses a `[provider]` table. The release signing key, `~/.ssh/crenshawdev-release`, is mode 0600 on the maintainer's machine and is used only by `scripts/sign-release.sh`, never by the binary or by CI. Whether that key has a passphrase [VERIFY].

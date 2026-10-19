@@ -1,0 +1,157 @@
+{
+  "status": "gaps",
+  "score": "8/12",
+  "truths": [
+    {
+      "n": 1,
+      "truth": "The prompt hook never injects a tool-result turn (a user turn with is_typed 0): a planted Read result never reaches its output, and the Read tool-call turn still fires",
+      "status": "VERIFIED",
+      "uat_item": 1,
+      "evidence": "prompt.rs:578-596 quotable drops record_type='user' AND is_typed=0 by turn id; wired in selected at prompt.rs:441, after eligible (:436) and before within/surviving (:442-450), and a failed lookup injects nothing (unwrap_or_default). Hook path: hook.rs:254 -> prompt::user_prompt_submit (prompt.rs:216-232) -> selected -> render. Test a_read_result_is_never_injected_but_the_read_still_fires passes; its premise asserts both the call and the result rank in the top 3 with an entity match, so the result was eligible without the step. Binary probe on a scratch store with the real Read result shape: terminus search (no exclusion on that surface) shows the result's excerpt carrying PLANTED7f3a, while hook UserPromptSubmit for the same file prints only the Read tool-call line and no PLANTED7f3a. The fail-before half was not re-run by mutation here (that would edit the tree); it rests on that premise and the plan 1 report."
+    },
+    {
+      "n": 2,
+      "truth": "terminus replay applies the same exclusion, so it never credits a tool-result turn and matches what the live hook selects",
+      "status": "VERIFIED",
+      "uat_item": 2,
+      "evidence": "replay.rs:302-313 runs prompt::quotable after eligible and before within/capped, gated on Store::missing_columns not listing turns.is_typed (replay.rs:115-118). Test replay_never_credits_a_tool_result_the_hook_refuses passes: replayed injected total 1, equal to prompt::select's hit count for the same prompt, and 2 on the same store after ALTER TABLE turns DROP COLUMN is_typed through Store::open_read_only."
+    },
+    {
+      "n": 3,
+      "truth": "The SessionStart brief never quotes a tool-result turn",
+      "status": "VERIFIED",
+      "uat_item": null,
+      "evidence": "brief.rs:607 picks the quoted prompt with record_type = ?2 AND is_typed IS NOT 0; the reply is the last assistant record, which never carries tool_result (D-08). Test the_brief_records_the_typed_turn_it_quoted_and_not_the_tool_result_after_it (crates/terminus/tests/suppression.rs) passes."
+    },
+    {
+      "n": 4,
+      "truth": "Both hooks put every quoted string between one fixed <terminus-recall> pair under a quoted-history header, and a closer planted in an excerpt, day, project label or branch in another case, with whitespace or zero-width chars inside, fullwidth, lookalike punctuation or non-ASCII letters is neutralized, leaving the closing tag once, at the end",
+      "status": "VERIFIED",
+      "uat_item": 3,
+      "evidence": "inject/mod.rs:221-249 (OPEN_TAG, CLOSE_TAG, QUOTED_HISTORY, NEUTRALIZED), :281-454 (neutralize), :482-492 (frame). Prompt arm: excerpts are neutralized after redaction and before flatten/window via excerpt::attach_scrubbed (prompt.rs:479-485, excerpt.rs:211-224), the day at prompt.rs:322, and frame at :288. Brief: of_record_scrubbed at brief.rs:575, project/day/branch at :424-430, pointer label at :631, frame at :233/:253. Tests pass: a_closing_tag_planted_in_a_firing_turn_is_neutralized (9 variants plus a fullwidth closer across byte 10 of ts), a_closing_tag_planted_in_any_archived_string_is_neutralized (8 spans across prompt, reply, branch, cwd twice, day), and 31 lib inject:: unit tests. recall_golden passes and only the two == brief sections changed, so search/context/get did not move. Binary probe: a U+200B-split closer in an assistant turn came out as [closing tag removed] in additionalContext. Cross-boundary closers between an archived string and the fixed text after it fail on the fixed ASCII separators ('): ', '\\n- turn', ' ended', ',', '\\nIt last')."
+    },
+    {
+      "n": 5,
+      "truth": "No archived text can close the delimiter: a closer split by an invisible ASCII control character is neutralized like one split by U+200B",
+      "status": "FAILED",
+      "uat_item": null,
+      "evidence": "inject/mod.rs:452-454 is_ignorable is c.is_whitespace() || !c.is_ascii(), so U+0000-0008, U+000E-001F and U+007F break the match, and excerpt.rs:236-251 flatten keeps them. Probe of the real neutralizer source: </term U+0000 inus-recall>, </terminus U+001F -recall>, </terminus- U+001B recall>, </terminus-rec U+007F all> and < U+0007 /terminus-recall> all come back unchanged, while the U+200B form becomes [closing tag removed]. End to end through target/debug/terminus hook UserPromptSubmit: the U+001F and U+001B closers reach additionalContext intact mid-block, so the output carries two closer-shaped spans once the control char is dropped."
+    },
+    {
+      "n": 6,
+      "truth": "A budget too small for the header and both tags emits nothing and exits 0, and every emitted text fits the budget and ends with the closing tag, in both arms",
+      "status": "VERIFIED",
+      "uat_item": 4,
+      "evidence": "mod.rs:470-488 frame_fits/frame (the backstop clips the body only); prompt.rs:458 skips the attach and record_injected when the frame does not fit; brief.rs:218-222 returns before reading. Tests pass: the_injection_is_cut_to_the_configured_budget (every budget 0..=full length, own session each, nothing-with-empty-state or framed-and-within-budget, both outcomes seen), every_brief_budget_gives_nothing_or_a_framed_brief_that_fits (same sweep for brief_chars), and the binary test a_budget_too_small_for_the_frame_writes_nothing (prompt_chars = 200 against a 239-char frame, exit 0, empty stdout; the same prompt injects at default and at 300 in the neighbouring tests). hook.rs:331-345 emits the arm's text verbatim."
+    },
+    {
+      "n": 7,
+      "truth": "Two SessionStart renders against an unchanged store, and two prompt-hook renders of one prompt, are byte-identical",
+      "status": "VERIFIED",
+      "uat_item": 5,
+      "evidence": "Tests pass: two_filtered_briefs_against_an_unchanged_store_are_byte_identical (lib, now with assert_framed), two_session_starts_against_an_unchanged_store_are_byte_identical (spawned binary), the_injected_text_names_the_turn_and_the_day_and_repeats_itself (lib, same bytes under a second session, framed). Tags are fixed constants (mod.rs:221, :226) with no nonce and no clock read."
+    },
+    {
+      "n": 8,
+      "truth": "docs/design/0007-injection.md and THREAT-MODEL.md no longer say injected text has no delimiter, and both describe the frame and the tool-result exclusion",
+      "status": "VERIFIED",
+      "uat_item": 6,
+      "evidence": "grep -i 'no delimiter' and 'any record type qualifies' over both files print nothing. Both spell <terminus-recall> and </terminus-recall>. 0007-injection.md:75-83 and :110-115 show the framed blocks, :104 is the exclusion step naming is_typed and the trade. THREAT-MODEL.md:149 describes header, tags and neutralization, and :202 says tool-result turns are never injected. The bundle strings THREAT-MODEL.md:116 quotes are in ~/.local/share/claude/versions/2.1.302 (gF=\"<system-reminder>\",RGe=\"</system-reminder>\" 1 hit, the replaceAll regex 1 hit, 'hook additional context: ' 2 hits)."
+    },
+    {
+      "n": 9,
+      "truth": "The design doc describes the neutralizer and the prompt flow as they shipped",
+      "status": "FAILED",
+      "uat_item": null,
+      "evidence": "0007-injection.md:90 and :118 give the old ignorable set (whitespace, Default_Ignorable ranges, combining marks), but since 9f3ac99 mod.rs:452-454 skips any non-ASCII char. Figure 2 (0007-injection.md:170-195) has no exclusion step and no frame or neutralize step. The replay outputs list at :144 names candidates, eligible, within and capped and leaves out quotable. SUMMARY lists all of this as open."
+    },
+    {
+      "n": 10,
+      "truth": "CHANGELOG.md records the frame and the exclusion",
+      "status": "VERIFIED",
+      "uat_item": 8,
+      "evidence": "CHANGELOG.md:123-131, under ## [Unreleased] (line 10) and ### Fixed (line 35), adds one entry: tool-result turns are no longer injected, both hooks hand over recall between a fixed <terminus-recall> pair under a quoted-history header, planted closers are neutralized, and a budget too small for the frame hands over nothing (#60)."
+    },
+    {
+      "n": 11,
+      "truth": "terminus replay credits the same turns the live hook injects at every prompt_chars",
+      "status": "FAILED",
+      "uat_item": null,
+      "evidence": "replay.rs has no reference to a budget, prompt_chars or the frame (grep finds none), and would_inject (replay.rs:302-317) credits the capped hits whatever the budget. The live arm now fires nothing when the frame does not fit (prompt.rs:458; the frame is 239 chars). Below that budget a decision logs no injected turn and replay credits up to three. SUMMARY lists this as open."
+    },
+    {
+      "n": 12,
+      "truth": "The pull request that lands this phase carries Fixes #60, and #60 closes once it merges",
+      "status": "UNCERTAIN",
+      "uat_item": 7,
+      "evidence": "The PR does not exist yet (branch hardin has not landed), and checking it needs GitHub."
+    }
+  ],
+  "passes": [
+    {
+      "k": 1,
+      "name": "Planted Read result never reaches the prompt hook",
+      "evidence": "prompt.rs:441 quotable (prompt.rs:578-596) sits between eligible and the cap on the hook's path (hook.rs:254 -> user_prompt_submit -> selected). a_read_result_is_never_injected_but_the_read_still_fires passes, and its premise shows the result turn was eligible. Binary probe: terminus search shows the planted text in the result's excerpt, and the hook output omits it and still names the Read tool-call turn."
+    },
+    {
+      "k": 2,
+      "name": "terminus replay drops tool-result turns",
+      "evidence": "replay.rs:302-313 runs prompt::quotable in the live arm's order. replay_never_credits_a_tool_result_the_hook_refuses passes: total 1, equal to prompt::select, and 2 on a store without is_typed."
+    },
+    {
+      "k": 3,
+      "name": "Both hooks frame every quoted string and neutralize planted closers",
+      "evidence": "mod.rs:221-249, :281-454, :482-492; prompt.rs:288, :322, :479-485; brief.rs:233, :253, :424-430, :575, :631. a_closing_tag_planted_in_a_firing_turn_is_neutralized, a_closing_tag_planted_in_any_archived_string_is_neutralized and 31 lib inject:: tests pass, and recall_golden passes. Binary probe: a U+200B-split closer was neutralized in additionalContext."
+    },
+    {
+      "k": 4,
+      "name": "A budget too small for the frame writes nothing",
+      "evidence": "mod.rs:470-488, prompt.rs:458, brief.rs:218-222. the_injection_is_cut_to_the_configured_budget and every_brief_budget_gives_nothing_or_a_framed_brief_that_fits sweep every budget, and the binary test a_budget_too_small_for_the_frame_writes_nothing (prompt_chars 200, exit 0, no stdout) passes."
+    },
+    {
+      "k": 5,
+      "name": "Renders are byte-identical for unchanged state",
+      "evidence": "two_filtered_briefs_against_an_unchanged_store_are_byte_identical, two_session_starts_against_an_unchanged_store_are_byte_identical and the_injected_text_names_the_turn_and_the_day_and_repeats_itself pass, with fixed tags and no nonce."
+    },
+    {
+      "k": 6,
+      "name": "Design doc and threat model describe the frame and the exclusion",
+      "evidence": "No 'no delimiter' or 'any record type qualifies' in either file. Both spell both tags. 0007-injection.md:104 is the is_typed exclusion step, and THREAT-MODEL.md:149 and :202 describe the frame and the exclusion. The bundle strings quoted at THREAT-MODEL.md:116 are present in 2.1.302."
+    },
+    {
+      "k": 8,
+      "name": "CHANGELOG records the frame and the exclusion",
+      "evidence": "CHANGELOG.md:123-131 under [Unreleased] / ### Fixed names the exclusion, the <terminus-recall> frame, the neutralization and #60."
+    }
+  ],
+  "gaps": [
+    {
+      "name": "A closing tag split by an invisible ASCII control character passes the neutralizer",
+      "reason": "behavior wrong - the phase treats invisible chars inside a closer as still closing it (U+200B is neutralized), but invisible ASCII controls are not ignorable, so the same attack with U+001F, U+001B, U+0000 or U+007F reaches the model intact. ROADMAP criterion 2 asks for a delimiter no excerpt text can close.",
+      "evidence": "crates/terminus-core/src/inject/mod.rs:452-454 is_ignorable is c.is_whitespace() || !c.is_ascii(), which leaves out U+0000-0008, U+000E-001F and U+007F. crates/terminus-core/src/recall/excerpt.rs:236-251 flatten keeps them. Probe of the real neutralize source returned </terminus U+001F -recall>, </terminus- U+001B recall>, </term U+0000 inus-recall> and </terminus-rec U+007F all> unchanged. target/debug/terminus hook UserPromptSubmit on a scratch store put the U+001F and U+001B closers into additionalContext mid-block, while the U+200B form came out as [closing tag removed]. The same rule covers the day, branch and project label. Whether a model reads such a span as a closer is unmeasured, the same as for U+200B.",
+      "severity": "major",
+      "missing": "Treat ASCII control characters other than the whitespace ones as ignorable inside a closer (for example c.is_whitespace() || c.is_ascii_control() || !c.is_ascii()). Add unit tests in inject/mod.rs with U+0000, U+001B, U+001F and U+007F at several insertion points, plus one planted variant in the prompt-arm and brief AC3 tests. Update THREAT-MODEL.md:149 and 0007-injection.md:90/:118 to match."
+    },
+    {
+      "name": "The design doc's neutralizer description and Figure 2 do not match what shipped",
+      "reason": "behavior wrong (doc) - the design record describes the pre-9f3ac99 ignorable set and a prompt flow without the exclusion or the frame",
+      "evidence": "docs/design/0007-injection.md:90 and :118 list whitespace, Default_Ignorable ranges and combining marks as what may sit inside a closer, but crates/terminus-core/src/inject/mod.rs:452-454 skips any non-ASCII char. Figure 2 (0007-injection.md:170-195) goes from threshold to pool to suppress to cap with no exclusion step and ends at 'clipped to prompt_chars' with no frame or neutralizer. The replay outputs at :144 list candidates, eligible, within and capped, without quotable.",
+      "severity": "minor",
+      "missing": "Reword :90 and :118 to say whitespace and any non-ASCII character may sit inside a closer, with the over-match stated. Add the exclusion step and the frame/neutralize step to Figure 2. Add quotable to the replay function list at :144."
+    },
+    {
+      "name": "terminus replay credits turns the live hook no longer injects when prompt_chars is below the frame's cost",
+      "reason": "behavior wrong - D-06 made the live arm silent under a 239-char budget, and replay does not model the budget, so it diverges from the hook there",
+      "evidence": "crates/terminus-core/src/feedback/replay.rs has no reference to a budget, prompt_chars or the frame. would_inject (replay.rs:302-317) credits the capped hits. crates/terminus-core/src/inject/prompt.rs:458 fires nothing when !frame_fits. This only affects configs with prompt_chars under 240 (the default is 4000). SUMMARY lists it as an open item.",
+      "severity": "minor",
+      "missing": "Have would_inject credit nothing when the budget the decision recorded cannot hold the frame (inject::frame_fits), plus a feedback.rs test at a budget under the frame's cost. Or record it as a deliberate limitation in 0007-injection.md's replay section."
+    }
+  ],
+  "human_checks": [
+    {
+      "name": "After landing, confirm the pull request that merges hardin carries 'Fixes #60' and that issue #60 is closed once it merges",
+      "expected": "The PR body contains 'Fixes #60' and crenshawdev/terminus issue #60 shows closed by that PR",
+      "why_human": "Out-of-reach resource and a future event: the PR does not exist until the phase lands, and checking it needs GitHub, which this verification may not reach (no network). It is not a truth the model cannot exercise. It just cannot be exercised before the landing."
+    }
+  ]
+}

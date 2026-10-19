@@ -15,6 +15,7 @@ use std::process::ExitCode;
 #[macro_use]
 mod out;
 mod cmd;
+mod escape;
 
 use cmd::Failure;
 

@@ -4,7 +4,7 @@ When a Claude Code session ends, the next one starts without it, and when a long
 
 Terminus keeps a copy of every session you run in Claude Code and lets you and Claude find the work in it again. A new session starts knowing where the last one in the project left off. A prompt that names a file or an identifier from earlier work can bring back the turns where it came up, and after a compaction, the next prompt can bring back the turns that dropped out. The whole history stays searchable, from the command line and by Claude itself.
 
-> **Status: built, with known gaps.** Archiving, the recall tools Claude uses, the context Claude is given at the start of a session and on a prompt, and every command below work today. 0.1.1 is published, and the one-line install below is checked on Linux and macOS, on x86_64 and aarch64, each time a release is published. The gaps that touch what this page says are under [Current state](#current-state).
+> **Status: built, with known gaps.** Archiving, the recall tools Claude uses, the context Claude is given at the start of a session and on a prompt, and every command below work today. 0.1.1 is published, and the one-line install below is checked on Linux and macOS, on x86_64 and aarch64, each time a release is published.
 
 ## Trust
 
@@ -44,10 +44,6 @@ It also refuses, under these conditions:
 - A project listed in `exclude` is never opened. Its transcript files are skipped before they are read, and anything archived from it before it was excluded is left out of every search, recall, brief and injection.
 - Retention does nothing unless `[retention] action` and `age_days` are both set, and `delete` removes a session only once Claude Code has already deleted its transcript.
 - Hooks fail open. Once the event name is known, a hook exits 0 whatever goes wrong, with one line on stderr, so it never blocks a prompt, and an injection that misses its deadline hands over nothing.
-
-## Current state
-
-- `[privacy] redact_recall` misses a bare OpenAI-style `sk-` token in plain prose, because none of its rules recognizes that shape, so the token reaches Claude Code unfiltered ([#5](https://github.com/jcrenshaw-dev/terminus/issues/5)).
 
 ## How it works
 

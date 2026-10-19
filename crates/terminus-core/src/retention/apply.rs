@@ -170,6 +170,17 @@ fn evict_one(conn: &mut Connection, session_key: &str) -> Result<()> {
 /// the next pass and report a repair for damage retention caused.
 fn delete_one(conn: &mut Connection, session_key: &str) -> Result<bool> {
     let tx = conn.transaction()?;
+    let observations = delete_session(&tx, session_key)?;
+    tx.commit()?;
+    Ok(observations > 0)
+}
+
+/// Delete one session and every row keyed on it, in [`delete_one`]'s order,
+/// inside the caller's transaction. Answers how many `observations` rows went.
+///
+/// Shared with recovery, which deletes a twin it merged into an older session
+/// (phase 4 D-11), so the order has one definition.
+pub(crate) fn delete_session(tx: &Connection, session_key: &str) -> Result<usize> {
     const TURN_IDS: &str = "SELECT id FROM turns WHERE session_key = ?1";
     for statement in [
         format!("DELETE FROM paths WHERE turn_id IN ({TURN_IDS})"),
@@ -188,12 +199,11 @@ fn delete_one(conn: &mut Connection, session_key: &str) -> Result<bool> {
         "DELETE FROM session_meta WHERE session_key = ?1",
         [session_key],
     )?;
-    archive::remove(&tx, session_key)?;
+    archive::remove(tx, session_key)?;
     tx.execute("DELETE FROM sessions WHERE session_key = ?1", [session_key])?;
     tx.execute(
         "DELETE FROM watermarks WHERE transcript_path = ?1",
         [session_key],
     )?;
-    tx.commit()?;
-    Ok(observations > 0)
+    Ok(observations)
 }

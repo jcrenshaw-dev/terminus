@@ -146,6 +146,11 @@ path = "tests/retention.rs"
 required-features = ["testkit"]
 
 [[test]]
+name = "session_keys"
+path = "tests/session_keys.rs"
+required-features = ["testkit"]
+
+[[test]]
 name = "snapshot"
 path = "tests/snapshot.rs"
 required-features = ["testkit"]

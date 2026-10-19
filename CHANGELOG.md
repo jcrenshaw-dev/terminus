@@ -120,6 +120,88 @@ and the versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   100.002 s that started at :59.998 read as 101 s. Observations already
   recorded keep the old value until `terminus observations regenerate`
   recomputes them.
+- The `UserPromptSubmit` hook could inject a tool result, so text planted in a
+  file Claude read came back as the user's own history whenever the user named
+  that file. Tool-result turns are no longer injected: a prompt that pastes an
+  error line no longer fires, and `recall_search` still reaches those turns.
+  Both hooks now hand over what they quote between a fixed
+  `<terminus-recall>` tag pair, under a header saying the text is quoted
+  history, not instructions, and a closing tag planted in the archived text is
+  neutralized in any case, spacing or lookalike spelling. A budget too small
+  for the header and both tags now hands over nothing (#60).
+- With `[privacy] redact_recall` on, a secret stored under a secret-named key
+  in a tool's input, a tool's result or an attachment, such as
+  `"api_token": "..."` in a tool call, was replaced in a `recall_get` body but
+  went out whole in `recall_search` excerpts, `recall_context` text,
+  `terminus search` and `terminus show`, the brief and the per-prompt
+  injection. The text those are cut from drops the key that names the value,
+  so no rule could see it. Those values are now replaced with `[redacted]` on
+  every surface (#62).
+- With `[privacy] redact_recall` on, an `sk-` key pasted bare in prose, with no
+  name beside it, reached Claude Code unfiltered, because none of the filter's
+  rules recognized it. A run that opens with `sk-` and has 20 or more key
+  characters after it is now replaced with `[redacted:an-sk-key]`. Shorter
+  words such as `sk-notification` are left alone (#5).
+- With `[privacy] redact_recall` on, a turn with a non-ASCII character in or
+  just before the word ahead of an `=`, such as `café=1`, `Größe=10` or
+  `“token=abc”`, made the filter panic. The MCP server exited mid-request, both
+  hooks injected nothing, and `terminus search` and `terminus show` failed. The
+  filter now reads the name before an `=` as ASCII only: `café=1` and
+  `Größe=10` come back unchanged, and `“token=abc”` loses its value like any
+  other secret assignment (#61).
+- `terminus install` and `terminus uninstall` wrote the whole of
+  `settings.json`, which can hold an `env` block of credentials, into a
+  temporary file at the umask's mode, 0644 under umask 022, and set the file's
+  own mode on it only after the contents were in. A `settings.json` install
+  created kept the umask's mode, and `settings.json.terminus-backup` took the
+  mode of the file it copied. Every temporary is now 0600 from the moment it is
+  opened. A `settings.json` Terminus creates is 0600, one that already exists
+  keeps its own mode, and the backup is 0600 whatever the mode of the file it
+  copies (#64).
+- `terminus data move` moved the store into any existing directory it found no
+  files in. A symlink to another directory, a directory another account owns, a
+  directory open to group or world, and a directory it could not list were all
+  accepted, the last because a listing that failed was read as empty. A
+  directory created at the destination while the question waited was accepted
+  too. An existing destination is now refused unless it is an empty directory
+  the user owns, not a symlink, with no group or world bit, and the same check
+  runs again after the answer, refusing a destination that was created,
+  removed, replaced or changed in the meantime. An empty directory with group
+  or world bits, such as one made with `mkdir` under umask 022, is now refused
+  with the `chmod 700` command that fixes it, where earlier builds moved the
+  store into it. Trailing slashes and `.` parts are dropped from the path
+  before it is checked, and the pointer records it without them (#59).
+- A session was keyed on the absolute path of its transcript, so when
+  `~/.claude` moved behind a symlink, or was reached through one, every session
+  was archived a second time under the new spelling. Search and injected
+  context showed each turn twice, and `terminus status` counted about double
+  the sessions. A session is now keyed on its transcript's path below its
+  project folder, such as `<uuid>.jsonl`, so moving `.claude` or moving a
+  project folder does not change it, and a sidecar that is a symlink to another
+  session's sidecar is archived once, under the key of the file it points at.
+  The first ingest after upgrading repairs a store that is already doubled,
+  including the copies a moved project folder left behind. It merges each pair
+  that is provably one transcript into the older session, keeps every session
+  that exists only in the archive, and names in that run's errors any pair it
+  cannot prove is one transcript, keeping both. After `.claude` moves with no
+  symlink left behind, retention's delete rule no longer removes a session
+  whose transcript is still on disk. A file in another project folder with an
+  archived session's name is refused, not appended to that session, unless
+  the session's own file is gone and the new one begins with the archived
+  bytes (#69). Under `lean` or `minimal` capture the archived bytes are not
+  the file's, so that comparison cannot pass and such a file is refused too.
+  `session_key` in `--json` output and in
+  `recall_search` and `recall_get` results is now the path below the project
+  folder and not an absolute path, so a script that opens `session_key` as a
+  file breaks (#57).
+- `terminus search`, `terminus show` and `terminus observations` printed
+  control characters from archived text straight to the terminal, so an escape
+  sequence a tool printed during a session, such as an OSC 52 clipboard write,
+  could act on the terminal of whoever read it back. Their human output now
+  prints every control character other than tab and newline, DEL and the C1
+  controls included, as a `\u00XX` escape such as `\u001b`, with or without
+  `--raw`. The record body `terminus show` prints is still the archived line
+  byte for byte, and `--json` output is unchanged (#63, #65, #66).
 
 ## [0.1.1] - 2026-10-15
 

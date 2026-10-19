@@ -461,6 +461,34 @@ fn the_knob_filters_the_briefs_quoted_prompt_at_the_hook_boundary() {
     );
 }
 
+/// The fixture whose last assistant record writes `café=1` and `Größe=10`,
+/// which is the record the brief quotes.
+const REDACTION_FIXTURE: &str = "session-redaction.jsonl";
+
+/// The `SessionStart` brief quotes the multi-byte turn with the knob on (#61).
+///
+/// The stderr check is the one that matters before the fix: `cmd::hook` catches
+/// the unwind and exits 0, so the exit status alone passes on a build whose
+/// rule 5 panics.
+#[test]
+fn the_knob_on_brief_quotes_a_multi_byte_turn() {
+    let bench = bench();
+    bench.ingest(REDACTION_FIXTURE);
+    std::fs::write(bench.config_dir.join("terminus.toml"), KNOB_ON).unwrap();
+
+    let output = bench.hook("SessionStart", &payload(&bench.project(REDACTION_FIXTURE)));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("panicked"), "the hook panicked: {stderr}");
+
+    let context = additional_context(&output, "the run with the knob on");
+    for assignment in ["café=1", "Größe=10"] {
+        assert!(
+            context.contains(assignment),
+            "the brief lost {assignment}:\n{context}"
+        );
+    }
+}
+
 /// AC4's hook half: no environment variable reaches past the knob.
 ///
 /// D-07 chose a per-invocation CLI flag over an environment variable precisely

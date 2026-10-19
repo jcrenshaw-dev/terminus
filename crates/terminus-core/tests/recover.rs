@@ -58,7 +58,7 @@ impl Bench {
     }
 
     fn key(&self) -> String {
-        self.transcript.to_str().unwrap().to_owned()
+        terminus_core::ingest::path_key(&self.transcript).unwrap()
     }
 
     fn config(&self) -> Config {

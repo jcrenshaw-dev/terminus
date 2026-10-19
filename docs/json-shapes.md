@@ -70,11 +70,22 @@ data on stdout, the counts and the warnings on stderr.
 
 ## `data` by command
 
+`session_key`, wherever it appears, is the transcript's path below its project
+folder: `<uuid>.jsonl`, or
+`<sessionId>/subagents/[workflows/wf_*/]agent-*.jsonl` for a sidecar. It is read
+off the shape of the path, which must sit in a project folder inside a
+`projects` folder, and never by stripping a root. It is the same in every
+command and in the `recall_search` and `recall_get` results, and it does not
+change when `.claude` moves or is reached through a symlink, or when a project
+folder moves. A transcript that is a symlink shows the key of the
+file it points at, and a path outside those two shapes, such as a file under no
+`projects` folder, shows its canonical path. It is a key, not a path to open.
+
 ### `search`
 
 ```json
 {"query": "src/worker/S.ts", "truncated": false, "hits": [
-  {"turn_id": 42, "session_key": "/abs/path/session.jsonl", "project": "/abs/path/repo",
+  {"turn_id": 42, "session_key": "5e0a....jsonl", "project": "/abs/path/repo",
    "record_type": "assistant", "ts": "2026-08-12T21:00:00.000Z", "sidechain": false,
    "relevance": 1.83, "entity_score": 0.0,
    "matched_on": [{"kind": "path", "value": "src/worker/S.ts"}],
@@ -301,7 +312,7 @@ and unchanged.
 
 ```json
 {"observations": [
-  {"session_key": "/home/you/.claude/projects/-code-verbatim/1111....jsonl",
+  {"session_key": "1111....jsonl",
    "session_id": "1111...", "generated_at": "2026-08-21T18:31:07.412Z",
    "mechanical": {"files_read": ["..."], "files_modified": ["..."],
                   "tools": ["Bash", "Edit"],
@@ -359,8 +370,8 @@ and unchanged.
 
 ```json
 {"cutoff": "2026-08-22T22:33:40.115Z",
- "evict": ["/home/you/.claude/projects/-data-code-app/9f2c....jsonl"],
- "delete": ["/home/you/.claude/projects/-data-code-app/1a04....jsonl"],
+ "evict": ["9f2c....jsonl"],
+ "delete": ["1a04....jsonl"],
  "over": 0, "excluded": 3}
 ```
 
@@ -378,8 +389,8 @@ disagree about a `'now'`-relative rule.
   clock from. A pass running later reads its own instant, so a session sitting
   on an age boundary can legitimately fall the other side of it; that is why the
   instant is reported rather than implied.
-- `evict` and `delete` are session keys - the canonical transcript paths - oldest
-  first, and capped at what one pass will act on per action.
+- `evict` and `delete` are session keys, each a transcript's path below its
+  project folder, oldest first, and capped at what one pass will act on per action.
 - `over` is how many more eligible sessions that cap left for the pass after
   next. The hook spawn is the scheduler, so "the next pass" is the next prompt.
 - `excluded` counts sessions in projects the config excludes, which retention
@@ -528,7 +539,9 @@ snapshot, not an export.
   it, the session / turn / evicted counts, the total bytes, the distinct
   projects, the `first_turn_at`..`last_turn_at` range, and a `files` array with
   one entry per session: `file`, `session_key`, `session_id`, `project`,
-  `turns`, `bytes`, `evicted`, `first_turn_at` and `last_turn_at`. It is
+  `turns`, `bytes`, `evicted`, `first_turn_at` and `last_turn_at`.
+  `session_key` is the session key, the path below the project folder, and not
+  where the transcript sits on disk. The manifest is
   pretty-printed, unlike the one-line `--json` envelope: an envelope is piped,
   a manifest is opened and read.
 

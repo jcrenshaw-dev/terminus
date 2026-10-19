@@ -608,17 +608,27 @@ fn bare_ingest_walks_only_the_configured_temporary_root() {
         .collect();
 
     let mut expected = vec![
-        top.to_str().unwrap().to_owned(),
-        sidecar.to_str().unwrap().to_owned(),
+        terminus_core::ingest::path_key(&top).unwrap(),
+        terminus_core::ingest::path_key(&sidecar).unwrap(),
     ];
     expected.sort();
     assert_eq!(keys, expected, "the pass walked a tree it was not given");
 
+    // The key is the path below the project folder, so the file each session
+    // was read from is checked through the path ingest stored beside it.
+    let paths: Vec<String> = conn
+        .prepare("SELECT transcript_path FROM session_meta")
+        .unwrap()
+        .query_map([], |r| r.get::<_, String>(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(paths.len(), 2);
     let root = bench.claude_dir.canonicalize().unwrap();
-    for key in &keys {
+    for path in &paths {
         assert!(
-            std::path::Path::new(key).starts_with(&root),
-            "{key} is outside this test's temporary transcript root"
+            std::path::Path::new(path).starts_with(&root),
+            "{path} is outside this test's temporary transcript root"
         );
     }
 
