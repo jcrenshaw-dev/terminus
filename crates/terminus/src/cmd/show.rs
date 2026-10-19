@@ -20,6 +20,13 @@
 //! in-process and would inherit a variable, which is exactly the unfiltering
 //! the knob exists to prevent.
 //!
+//! **The header and the window are escaped, the body is not.** The header's
+//! time, file name and project and every window line are archived text, and
+//! they go through [`crate::escape`] so a control in them cannot drive the
+//! terminal, with or without `--raw`. The body stays the archived line: JSON
+//! already spells every C0 control as `\u00XX`, and escaping the DEL and C1 it
+//! can still carry would end this as the way back to the record's own bytes.
+//!
 //! **The window stops at the session (D-06)** and says which end it stopped at,
 //! rather than just returning a shorter list. A caller that cannot tell "there
 //! is nothing earlier" from "you asked for five and got two" cannot decide
@@ -33,6 +40,7 @@ use terminus_core::recall::{context, get, ContextTurn, Window};
 use super::json::Document;
 use super::read::{self, Opened};
 use super::Failure;
+use crate::escape;
 
 const COMMAND: &str = "show";
 
@@ -99,9 +107,9 @@ fn render(fetched: &get::Fetched, windows: &[Option<Window>]) -> std::io::Result
         let header = format!(
             "{}  {}  {}  {}{}",
             record.turn_id,
-            record.ts.as_deref().unwrap_or("(no time)"),
-            file_name(&record.session_key),
-            record.project.as_deref().unwrap_or("(no project)"),
+            escape::controls(record.ts.as_deref().unwrap_or("(no time)")),
+            escape::controls(file_name(&record.session_key)),
+            escape::controls(record.project.as_deref().unwrap_or("(no project)")),
             if record.body_evicted {
                 "  (body evicted)"
             } else {
@@ -150,8 +158,8 @@ fn render_window(out: &mut impl Write, window: &Window) -> std::io::Result<()> {
             "  {} {}  {}  {}",
             if turn.is_anchor { '>' } else { ' ' },
             turn.turn_seq,
-            label(turn),
-            turn.text
+            escape::controls(&label(turn)),
+            escape::controls(&turn.text)
         )?;
     }
     if window.at_session_end {
@@ -160,7 +168,11 @@ fn render_window(out: &mut impl Write, window: &Window) -> std::io::Result<()> {
     // Returned and NOT followed (D-06). A caller that wants the turns before
     // this file's first one resolves this itself and runs a second `show`.
     if let Some(previous) = &window.continues_from {
-        writeln!(out, "  (this session continues from {previous})")?;
+        writeln!(
+            out,
+            "  (this session continues from {})",
+            escape::controls(previous)
+        )?;
     }
     Ok(())
 }

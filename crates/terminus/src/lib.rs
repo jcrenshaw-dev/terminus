@@ -15,9 +15,6 @@ use std::process::ExitCode;
 #[macro_use]
 mod out;
 mod cmd;
-// Unused until the recall and observations output call it; `expect` rather
-// than `allow`, so the attribute fails the lint once they do and goes.
-#[cfg_attr(not(test), expect(dead_code))]
 mod escape;
 
 use cmd::Failure;

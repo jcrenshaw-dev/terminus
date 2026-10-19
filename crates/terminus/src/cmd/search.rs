@@ -28,6 +28,7 @@ use terminus_core::Error;
 use super::json::Document;
 use super::read::{self, Opened};
 use super::Failure;
+use crate::escape;
 
 /// The command name, which is also what the `--json` envelope reports.
 const COMMAND: &str = "search";
@@ -136,15 +137,19 @@ pub fn run(args: Args) -> Result<(), Failure> {
         // The id first, and unmissable: it is the argument `terminus show`
         // takes, and following a hit into the conversation around it is what
         // the next command a reader runs does.
+        //
+        // Everything archived on these two lines goes through `escape`, after
+        // the day cut and after core's excerpt cut, so an excerpt holding a
+        // control prints longer than `EXCERPT_CHARS`.
         outln!(
             "{}  {}  {}  {}{}",
             hit.turn_id,
-            day(hit.ts.as_deref()),
-            session_of(&hit.session_key),
-            hit.project.as_deref().unwrap_or("(no project)"),
+            escape::controls(day(hit.ts.as_deref())),
+            escape::controls(session_of(&hit.session_key)),
+            escape::controls(hit.project.as_deref().unwrap_or("(no project)")),
             if hit.sidechain { "  (subagent)" } else { "" },
         );
-        outln!("    {}", hit.excerpt);
+        outln!("    {}", escape::controls(&hit.excerpt));
     }
 
     // Commentary on stderr, so stdout stays the hits and nothing else. It is
