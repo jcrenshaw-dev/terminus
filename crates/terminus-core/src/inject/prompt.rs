@@ -732,10 +732,10 @@ fn refusal(
 
 /// The `session_key` of the session the user is looking at, or nothing (D-15).
 ///
-/// The archive's own key for the payload's `transcript_path`, canonicalized the
-/// way ingest keys a session so that the two spellings are comparable at all:
-/// `~/.claude` is a symlink chain on the development machine, and a raw string
-/// comparison would call one session two and suppress nothing.
+/// The archive's own key for the payload's `transcript_path`: canonicalized,
+/// then through `ingest::path_key`, the one function ingest keys a session
+/// with. Keyed any other way, the compaction lookup finds no boundary and the
+/// live session's own turns are injected back into it (D-05).
 ///
 /// `None` for a payload with no `transcript_path`, and for a path that will not
 /// canonicalize - a session whose file Claude Code has not created yet, or one

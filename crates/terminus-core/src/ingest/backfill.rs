@@ -397,11 +397,15 @@ fn commit_one(
 }
 
 /// What the store already holds for one transcript, read on the writer thread.
+///
+/// A link is read as the file it points at (D-03), so the worker reads, and the
+/// store records, that file.
 fn read_existing(store: &Store, path: &Path) -> Result<Job> {
-    let session_key = crate::ingest::path_key(path)?;
+    let path = crate::ingest::link_target(path).unwrap_or_else(|| path.to_path_buf());
+    let session_key = crate::ingest::path_key(&path)?;
     let existing = Existing::read(store.conn(), &session_key)?;
     Ok(Job {
-        path: path.to_path_buf(),
+        path,
         session_key,
         existing,
     })

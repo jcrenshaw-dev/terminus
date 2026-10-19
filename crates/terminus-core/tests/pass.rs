@@ -116,10 +116,15 @@ fn uuid(n: u8) -> String {
     format!("{n:08x}-1111-4111-8111-111111111111")
 }
 
+/// The key a transcript is archived under: its path below `projects`.
+fn key_of(path: &Path) -> String {
+    terminus_core::ingest::path_key(path).unwrap()
+}
+
 fn key(conn: &Connection, path: &Path) -> Option<String> {
     conn.query_row(
         "SELECT session_key FROM sessions WHERE session_key = ?1",
-        [path.to_str().unwrap()],
+        [key_of(path)],
         |r| r.get(0),
     )
     .ok()
@@ -128,7 +133,7 @@ fn key(conn: &Connection, path: &Path) -> Option<String> {
 fn turns_for(conn: &Connection, path: &Path) -> i64 {
     conn.query_row(
         "SELECT count(*) FROM turns WHERE session_key = ?1",
-        [path.to_str().unwrap()],
+        [key_of(path)],
         |r| r.get(0),
     )
     .unwrap()
@@ -170,7 +175,7 @@ fn one_damaged_transcript_does_not_stop_the_rest_of_the_tree() {
         .conn()
         .execute(
             "DELETE FROM session_meta WHERE session_key = ?1",
-            [orphaned.to_str().unwrap()],
+            [key_of(&orphaned)],
         )
         .unwrap();
     // Damage the other: shorter on disk than its stored watermark. `read_tail`
@@ -223,7 +228,7 @@ fn one_damaged_transcript_does_not_stop_the_rest_of_the_tree() {
 
     let conn = bench.conn();
     for path in &healthy {
-        assert_eq!(key(&conn, path).as_deref(), path.to_str());
+        assert_eq!(key(&conn, path), Some(key_of(path)));
         assert!(
             turns_for(&conn, path) > 0,
             "{} archived no turns",
@@ -302,7 +307,7 @@ fn an_excluded_project_is_never_opened_and_adds_no_row() {
 
     let conn = bench.conn();
     for path in &excluded {
-        let key = path.to_str().unwrap();
+        let key = key_of(path);
         for (table, column) in [
             ("sessions", "session_key"),
             ("session_meta", "session_key"),
@@ -312,7 +317,7 @@ fn an_excluded_project_is_never_opened_and_adds_no_row() {
             let rows: i64 = conn
                 .query_row(
                     &format!("SELECT count(*) FROM {table} WHERE {column} = ?1"),
-                    [key],
+                    [&key],
                     |r| r.get(0),
                 )
                 .unwrap();
@@ -329,7 +334,7 @@ fn an_excluded_project_is_never_opened_and_adds_no_row() {
     );
 
     // The sibling is there in full, and was opened.
-    assert_eq!(key(&conn, &kept).as_deref(), kept.to_str());
+    assert_eq!(key(&conn, &kept), Some(key_of(&kept)));
     assert!(turns_for(&conn, &kept) > 0);
     assert!(!discover::opened::under(&kept).is_empty());
 }

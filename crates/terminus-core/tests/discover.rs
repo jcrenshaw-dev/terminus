@@ -132,7 +132,9 @@ fn two_walks_of_one_tree_return_the_same_order() {
 }
 
 /// D-17. The root is canonicalized once and every entry is joined onto it, so a
-/// root reached through a symlink still produces the session keys ingest writes.
+/// root reached through a symlink still yields canonical paths. Those are files
+/// to read, not session keys: ingest keys a session on the path below
+/// `projects`.
 #[test]
 fn every_path_begins_with_the_canonical_root_even_through_a_symlink() {
     let (dir, root) = tree();

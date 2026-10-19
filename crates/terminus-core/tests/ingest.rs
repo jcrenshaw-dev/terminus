@@ -309,15 +309,20 @@ fn resuming_from_a_mid_line_watermark_converges_on_a_single_pass() {
 }
 
 /// The same transcript reached through a symlink is one session, not two
-/// (`DESIGN-BRIEF.md:406`; CONTEXT's third flagged assumption, resolved as
-/// "canonicalize").
+/// (`DESIGN-BRIEF.md:406`), and its key is the path below `projects` rather
+/// than either absolute spelling (D-01).
 #[test]
 fn two_paths_to_one_transcript_produce_one_session() {
     let bench = bench();
-    let path = bench.copy("session-basic.jsonl");
+    let claude = bench.work.join("claude");
+    let project = claude.join("projects").join("-tmp-p");
+    std::fs::create_dir_all(&project).unwrap();
+    let name = "11111111-1111-4111-8111-111111111111.jsonl";
+    let path = project.join(name);
+    std::fs::copy(testkit::fixture_path("session-basic.jsonl"), &path).unwrap();
     let link_dir = bench.work.join("link");
-    std::os::unix::fs::symlink(&bench.work, &link_dir).unwrap();
-    let through_link = link_dir.join("session-basic.jsonl");
+    std::os::unix::fs::symlink(&claude, &link_dir).unwrap();
+    let through_link = link_dir.join("projects").join("-tmp-p").join(name);
 
     let first = committed(bench.ingest(&path));
     assert_eq!(bench.ingest(&through_link), Outcome::UpToDate);
@@ -327,10 +332,7 @@ fn two_paths_to_one_transcript_produce_one_session() {
         .query_row("SELECT count(*) FROM sessions", [], |r| r.get(0))
         .unwrap();
     assert_eq!(sessions, 1, "the symlinked path opened a second session");
-    assert_eq!(
-        first.session_key,
-        path.canonicalize().unwrap().to_str().unwrap()
-    );
+    assert_eq!(first.session_key, format!("-tmp-p/{name}"));
 }
 
 /// D-11. `continues_from` comes from the record's foreign `session_id`, which

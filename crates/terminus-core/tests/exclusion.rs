@@ -101,7 +101,7 @@ impl Tree {
             .conn()
             .query_row(
                 "SELECT count(*) FROM session_meta WHERE session_key = ?1",
-                [path.to_str().unwrap()],
+                [key(path)],
                 |r| r.get(0),
             )
             .unwrap();
@@ -123,7 +123,7 @@ fn record(n: u8, cwd: Option<&str>) -> String {
 }
 
 fn key(path: &Path) -> String {
-    path.to_str().unwrap().to_owned()
+    terminus_core::ingest::path_key(path).unwrap()
 }
 
 /// The case a per-session flag could never cover: three projects archived with

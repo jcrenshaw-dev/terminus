@@ -725,7 +725,7 @@ impl Tree {
         self.conn()
             .query_row(
                 "SELECT byte_offset FROM watermarks WHERE transcript_path = ?1",
-                [path.to_string_lossy().as_ref()],
+                [terminus_core::ingest::path_key(path).unwrap()],
                 |r| r.get(0),
             )
             .unwrap()
@@ -748,7 +748,7 @@ fn a_pass_records_no_failure_for_an_evicted_session_whose_transcript_grew() {
     assert_eq!(first.files_committed, 2);
     assert!(first.failures.is_empty(), "{:?}", first.failures);
 
-    let evicted = evicted_path.to_string_lossy().into_owned();
+    let evicted = terminus_core::ingest::path_key(&evicted_path).unwrap();
     let mut store = Store::open(&tree.data_dir).unwrap();
     let applied = retention::apply(
         &mut store,

@@ -1213,7 +1213,8 @@ pub mod visible {
     /// One session a read path may see.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct Session {
-        /// The canonical transcript path, which is what `sessions` is keyed on.
+        /// The transcript's path below `projects`, which is what `sessions` is
+        /// keyed on.
         pub session_key: String,
         pub session_no: i64,
         pub project: Option<String>,

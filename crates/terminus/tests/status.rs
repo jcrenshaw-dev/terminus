@@ -473,7 +473,7 @@ fn status_stops_counting_a_project_excluded_after_it_was_archived() {
         .conn()
         .query_row(
             "SELECT count(*) FROM session_meta WHERE session_key = ?1",
-            [hidden.to_str().unwrap()],
+            [terminus_core::ingest::path_key(&hidden).unwrap()],
             |r| r.get(0),
         )
         .unwrap();

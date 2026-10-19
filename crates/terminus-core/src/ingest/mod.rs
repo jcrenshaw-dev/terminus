@@ -57,7 +57,7 @@ pub enum Outcome {
 /// What a committed pass moved.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Pass {
-    /// The canonical transcript path, which is also the session's key (D-01).
+    /// The session's key: the transcript's path below `projects` (D-01).
     pub session_key: String,
     pub bytes_read: u64,
     pub turns_added: usize,
@@ -157,10 +157,14 @@ pub(crate) fn ingest_locked(
     projects: &mut Resolver,
     mode: CaptureMode,
 ) -> Result<Outcome> {
-    // The session is keyed on the transcript FILE identity, never on the
-    // record's session id (D-01): 812 real sidecar files report their parent's
-    // sessionId, and keying on that writes a 3 KB agent transcript over a
-    // parent session's archive. The watermark is keyed on the same value.
+    // The session is keyed on the transcript's path below `projects`, never on
+    // the record's session id (D-01, D-02): 812 real sidecar files report their
+    // parent's sessionId, and keying on that writes a 3 KB agent transcript
+    // over a parent session's archive. The watermark is keyed on the same
+    // value. A link is read as the file it points at (D-03), so the key, the
+    // read and the stored `transcript_path` all name that file.
+    let target = link_target(path);
+    let path = target.as_deref().unwrap_or(path);
     let session_key = path_key(path)?;
     let existing = Existing::read(store.conn(), &session_key)?;
     let prepared = prepare(path, session_key, &existing, mode)?;
@@ -359,11 +363,9 @@ pub(crate) fn prepare(
 
     // D-03: a sidecar's parent comes from its path and never from its records,
     // which all report the parent's `sessionId` and so distinguish nothing. The
-    // path is already the canonical one the walk built, so the derived value is
-    // exactly the key the parent's own ingest wrote - whether or not the parent
-    // has been ingested yet.
-    let parent_session_key =
-        lineage::sidecar_parent(path).map(|p| p.to_string_lossy().into_owned());
+    // parent's path goes through the same key function the parent's own ingest
+    // uses, so the two agree whether or not the parent has been ingested yet.
+    let parent_session_key = lineage::sidecar_parent(path).and_then(|p| path_key(&p).ok());
 
     // Read once per session, not once per pass: the bytes never change, and a
     // steady-state pass over 818 real sidecars would otherwise reopen 818 meta
@@ -973,9 +975,23 @@ impl Existing {
     }
 }
 
-/// The session key: the canonical path, as text.
-pub(crate) fn path_key(path: &Path) -> Result<String> {
-    path.to_str().map(str::to_owned).ok_or_else(|| {
+/// The session key for a transcript path: the path below the `projects` folder
+/// (D-01), so moving `.claude` or reaching it through a symlink keeps the key.
+///
+/// `<project dir>/<uuid>.jsonl` for a session, and
+/// `<project dir>/<sessionId>/subagents/[workflows/wf_*/]agent-*.jsonl` for a
+/// sidecar. The shape is read from the end of the path, never by stripping a
+/// configured root, so a stored key from a root that no longer exists reduces
+/// the same way. Any other path keys on its own text, which every caller hands
+/// in canonical.
+///
+/// A path whose last component is a link keys on the file it points at (D-03),
+/// found from link metadata alone. No byte of the file is read (D-02), and a
+/// path that does not exist gets the shape test and is not an error.
+pub fn path_key(path: &Path) -> Result<String> {
+    let target = link_target(path);
+    let path = target.as_deref().unwrap_or(path);
+    let text = path.to_str().ok_or_else(|| {
         Error::io(
             path,
             std::io::Error::new(
@@ -983,7 +999,58 @@ pub(crate) fn path_key(path: &Path) -> Result<String> {
                 "transcript path is not valid UTF-8, so it cannot key a session",
             ),
         )
-    })
+    })?;
+    Ok(below_projects(path).unwrap_or_else(|| text.to_owned()))
+}
+
+/// The file a link points at, when the path's last component is a link.
+///
+/// Only an absolute path is looked at, so a key that is already relative never
+/// resolves against the working directory. A link that will not resolve is
+/// keyed as itself.
+pub(crate) fn link_target(path: &Path) -> Option<PathBuf> {
+    if !path.is_absolute() {
+        return None;
+    }
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    if !meta.file_type().is_symlink() {
+        return None;
+    }
+    path.canonicalize().ok()
+}
+
+/// The part of a UTF-8 path below `projects`, when the path has one of the two
+/// transcript shapes discovery yields.
+fn below_projects(path: &Path) -> Option<String> {
+    use std::path::Component;
+    let parts: Vec<&str> = path
+        .components()
+        .rev()
+        .map_while(|c| match c {
+            Component::Normal(name) => name.to_str(),
+            _ => None,
+        })
+        .collect();
+    // `parts` runs from the file name upwards and stops at the first component
+    // that is not a plain name, such as the root or a `..`.
+    let file = *parts.first()?;
+    let depth = if crate::discover::is_uuid_transcript(file) {
+        2
+    } else if crate::discover::is_agent_transcript(file) {
+        match parts.get(1..4)? {
+            [crate::lineage::SIDECAR_DIR, _, _] => 4,
+            [wf, "workflows", crate::lineage::SIDECAR_DIR] if wf.starts_with("wf_") => 6,
+            _ => return None,
+        }
+    } else {
+        return None;
+    };
+    if *parts.get(depth)? != "projects" {
+        return None;
+    }
+    let mut key: Vec<&str> = parts[..depth].to_vec();
+    key.reverse();
+    Some(key.join("/"))
 }
 
 /// A flagged session's tail, read only once its prefix proves the file is the

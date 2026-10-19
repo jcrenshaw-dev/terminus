@@ -15,11 +15,12 @@
 //! depth 6 (`.../subagents/workflows/wf_*/agent-*.jsonl`, 41 real files). A
 //! depth limit silently drops those 41.
 //!
-//! **Canonicalize the root once, join onto it (D-17).** There are zero symlinks
-//! inside the real tree while the root itself is a two-hop symlink chain
-//! (`~/.claude -> /claude/.claude -> /data/claude/.claude`), so canonicalizing
-//! the root alone yields exactly the session keys `ingest::run` produces
-//! per-file today - at one syscall instead of two thousand.
+//! **Canonicalize the root once, join onto it (D-17).** The root itself is a
+//! two-hop symlink chain (`~/.claude -> /claude/.claude -> /data/claude/.claude`),
+//! so canonicalizing the root alone yields canonical paths at one syscall
+//! instead of two thousand. Those paths are not the session keys: ingest keys a
+//! session on the path below `projects` (`ingest::path_key`), so the same file
+//! reached through another root spelling keeps its key.
 //!
 //! The walk is sequential and single-threaded, with no `walkdir`, no `glob` and
 //! no `rayon` (D-18): bounded-parallelism backfill is phase 4's, and a walker
@@ -33,7 +34,7 @@ use crate::config::Config;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Discovered {
     /// Every transcript, sorted, each path built by joining onto the canonical
-    /// root so it equals the session key ingest will write.
+    /// root. A path here is a file to read, not a session key.
     pub transcripts: Vec<PathBuf>,
     /// Directories that could not be listed, with why. Reported and skipped -
     /// one unreadable directory is not a reason to archive nothing.
@@ -259,13 +260,13 @@ fn is_transcript_name(name: &str, at_project_depth: bool) -> bool {
     at_project_depth && is_uuid_transcript(name)
 }
 
-fn is_agent_transcript(name: &str) -> bool {
+pub(crate) fn is_agent_transcript(name: &str) -> bool {
     // `agent-*.meta.json` fails on the extension, which is the whole reason
     // D-04 can store those bytes without them ever becoming a session.
     name.starts_with("agent-") && name.ends_with(".jsonl")
 }
 
-fn is_uuid_transcript(name: &str) -> bool {
+pub(crate) fn is_uuid_transcript(name: &str) -> bool {
     name.strip_suffix(".jsonl").is_some_and(is_uuid)
 }
 

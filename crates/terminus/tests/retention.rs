@@ -31,6 +31,11 @@ const AGED: &str = "-40 days";
 /// Comfortably inside it, with twenty-nine days to spare.
 const FRESH: &str = "-1 days";
 
+/// The key a transcript is archived under: its path below `projects`.
+fn key_of(path: &Path) -> String {
+    terminus_core::ingest::path_key(path).unwrap()
+}
+
 /// The same isolation `cli.rs` and `status.rs` use, and for the same reason: a
 /// spawn that set only `TERMINUS_DATA_DIR` would resolve the developer's real
 /// config and walk the live `~/.claude` tree.
@@ -110,7 +115,7 @@ impl Bench {
                 .execute(
                     "UPDATE session_meta SET is_final = 1, last_turn_at = ?2
                      WHERE session_key = ?1",
-                    rusqlite::params![key.to_string_lossy(), at],
+                    rusqlite::params![key_of(key), at],
                 )
                 .unwrap();
             assert_eq!(changed, 1, "no session_meta row for {}", key.display());
@@ -121,7 +126,7 @@ impl Bench {
         self.conn()
             .query_row(
                 "SELECT is_evicted FROM session_meta WHERE session_key = ?1",
-                [key.to_string_lossy()],
+                [key_of(key)],
                 |r| r.get(0),
             )
             .unwrap()
@@ -131,7 +136,7 @@ impl Bench {
         self.conn()
             .query_row(
                 "SELECT count(*) FROM sessions WHERE session_key = ?1",
-                [key.to_string_lossy()],
+                [key_of(key)],
                 |r| r.get::<_, i64>(0),
             )
             .unwrap()
@@ -148,7 +153,7 @@ impl Bench {
         let out = self.run(&["search", "--project", "*", token, "--json"]);
         assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
         let value = document(&out);
-        let wanted = key.to_string_lossy().into_owned();
+        let wanted = key_of(key);
         value["data"]["hits"]
             .as_array()
             .unwrap_or_else(|| panic!("hits is an array: {value}"))
@@ -257,10 +262,7 @@ fn the_dry_run_names_exactly_what_the_next_ingest_pass_evicts() {
 
     let mut named = strings(&value["data"]["evict"]);
     named.sort();
-    let mut expected = vec![
-        old_a.to_string_lossy().into_owned(),
-        old_b.to_string_lossy().into_owned(),
-    ];
+    let mut expected = vec![key_of(&old_a), key_of(&old_b)];
     expected.sort();
     assert_eq!(named, expected, "{value}");
     assert_eq!(strings(&value["data"]["delete"]), Vec::<String>::new());
@@ -357,7 +359,7 @@ fn an_evicted_session_stays_listed_and_searchable_while_a_deleted_one_is_gone() 
     let value = document(&out);
     assert_eq!(
         strings(&value["data"]["delete"]),
-        vec![doomed.to_string_lossy().into_owned()],
+        vec![key_of(&doomed)],
         "{value}"
     );
     assert_eq!(
@@ -386,11 +388,11 @@ fn an_evicted_session_stays_listed_and_searchable_while_a_deleted_one_is_gone() 
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     let listed = document(&out).to_string();
     assert!(
-        listed.contains(&evicted.to_string_lossy().into_owned()),
+        listed.contains(&key_of(&evicted)),
         "the evicted session is no longer listed: {listed}"
     );
     assert!(
-        !listed.contains(&doomed.to_string_lossy().into_owned()),
+        !listed.contains(&key_of(&doomed)),
         "the deleted session is still listed: {listed}"
     );
 
@@ -488,7 +490,7 @@ fn the_human_output_keeps_the_stream_split() {
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
 
     let text = stdout(&out);
-    let key = aged.to_string_lossy().into_owned();
+    let key = key_of(&aged);
     assert!(text.contains(&format!("evict   {key}")), "{text:?}");
     assert!(text.starts_with("cutoff  "), "{text:?}");
     assert!(
