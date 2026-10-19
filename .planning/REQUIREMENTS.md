@@ -32,7 +32,7 @@ names, which holds the detail and the code references behind it.
 
 ### Ingest (ING)
 
-- **ING-13**: A transcript reached through a moved or symlinked `.claude` directory keeps the session key it already has, so it is not archived a second time, and an archive that already holds sessions under both an old and a new path is repaired without losing a session that exists only in the archive. (#57)
+- **ING-13**: A session's key does not change when its `.claude` directory moves or is reached through a symlink, so a transcript is not archived a second time, and an archive that already holds sessions under both an old and a new path is repaired without losing a session that exists only in the archive. (#57)
 
 ### Recall (RCL)
 
