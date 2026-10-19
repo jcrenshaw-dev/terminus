@@ -189,6 +189,14 @@ and the versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `recall_search` and `recall_get` results is now the path below the project
   folder and not an absolute path, so a script that opens `session_key` as a
   file breaks (#57).
+- `terminus search`, `terminus show` and `terminus observations` printed
+  control characters from archived text straight to the terminal, so an escape
+  sequence a tool printed during a session, such as an OSC 52 clipboard write,
+  could act on the terminal of whoever read it back. Their human output now
+  prints every control character other than tab and newline, DEL and the C1
+  controls included, as a `\u00XX` escape such as `\u001b`, with or without
+  `--raw`. The record body `terminus show` prints is still the archived line
+  byte for byte, and `--json` output is unchanged (#63, #65, #66).
 
 ## [0.1.1] - 2026-10-15
 

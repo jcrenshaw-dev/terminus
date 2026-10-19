@@ -58,7 +58,7 @@ An excluded project is never shown, with `*` too, including sessions archived be
 
 Finds past turns by text, a path, an error line or an identifier. Every word after `search` that is not an option is part of the query, so the words need no quotes, and a turn must match all of them. Only the first 32 terms are used, and stderr says so when a query is cut.
 
-Each hit is two lines: the turn id, the day, the transcript's file name, the project, and `(subagent)` for a subagent's turn, then an excerpt around the match. The count of hits goes to stderr. The turn id is what `terminus show` takes.
+Each hit is two lines: the turn id, the day, the transcript's file name, the project, and `(subagent)` for a subagent's turn, then an excerpt around the match. The count of hits goes to stderr. The turn id is what `terminus show` takes. Control characters in archived text, other than tab and newline, print as `\u00XX` escapes, such as `\u001b` for ESC, with or without `--raw`.
 
 - `--project <path>`: which project to search, as [above](#which-project-a-read-command-sees).
 - `--tool <name>`: only turns that called this tool, such as `Bash` or `Read`.
@@ -71,7 +71,7 @@ Each hit is two lines: the turn id, the day, the transcript's file name, the pro
 
 ### `terminus show <id>...`
 
-Prints the archived record behind each turn id, byte for byte as it was archived. It takes one or more ids, and a word that is not a number exits 2. Each record has a header line with the id, the time, the transcript's file name, the project, and `(body evicted)` when retention has evicted the session's text. An id that is not in the project is named on stderr.
+Prints the archived record behind each turn id, byte for byte as it was archived. It takes one or more ids, and a word that is not a number exits 2. Each record has a header line with the id, the time, the transcript's file name, the project, and `(body evicted)` when retention has evicted the session's text. An id that is not in the project is named on stderr. The header and the `--before`/`--after` turns print control characters in archived text, other than tab and newline, as `\u00XX` escapes, such as `\u001b` for ESC, with or without `--raw`. The record itself is still printed byte for byte.
 
 - `--project <path>`: which project the ids are looked up in, as [above](#which-project-a-read-command-sees). An id from another project needs that project or `*`.
 - `--before <n>`, `--after <n>`: also prints up to this many turns before and after each record, from the same session, at most 25 each. A larger number is treated as 25. The window stops at the session's first and last turn and says which end it reached.
@@ -89,7 +89,7 @@ Lists every archived session in the project, one line each: the day of its first
 
 ### `terminus observations`
 
-Lists the facts recorded for each closed session in the project: the transcript's file name, branch, turns, duration and compactions, then the files modified and read, the tools, the commands, the errors and the commits. The facts come from the transcript's own records, and no model is involved. A session has an entry once a pass has closed it. A list that hit its cap is named under `truncated`.
+Lists the facts recorded for each closed session in the project: the transcript's file name, branch, turns, duration and compactions, then the files modified and read, the tools, the commands, the errors and the commits. The facts come from the transcript's own records, and no model is involved. A session has an entry once a pass has closed it. A list that hit its cap is named under `truncated`. Control characters in archived text, other than tab and newline, print as `\u00XX` escapes, such as `\u001b` for ESC.
 
 - `--project <path>`: which project to list, as [above](#which-project-a-read-command-sees).
 - `--json`
