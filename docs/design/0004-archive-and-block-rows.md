@@ -12,7 +12,7 @@ The archive does not decide what goes into it. The ingest pass in [0003: Ingest]
 
 | Term | Meaning |
 |---|---|
-| Session | One transcript file, keyed by `session_key` and numbered by `session_no`, a stable integer assigned when it is first archived. The key is the transcript's path below the `projects` folder: `<project dir>/<uuid>.jsonl`, or `<project dir>/<sessionId>/subagents/[workflows/wf_*/]agent-*.jsonl` for a sidecar. It is read off the shape of the path, never by stripping a root, so a moved or symlinked `.claude` does not change it. A transcript that is a symlink takes the key of the file it points at, and a path outside those two shapes, such as a file under no `projects` folder, keeps its canonical path as its key. The absolute path the file was last read from is `session_meta.transcript_path`. Recovery re-keys a session whose stored key is still an absolute path, and merges sessions that reduce to one key into the oldest of them when their streams are provably one, as [0003: Ingest](0003-ingest.md) describes. |
+| Session | One transcript file, keyed by `session_key` and numbered by `session_no`, a stable integer assigned when it is first archived. The key is the transcript's path below its project folder: `<uuid>.jsonl`, or `<sessionId>/subagents/[workflows/wf_*/]agent-*.jsonl` for a sidecar. It is read off the shape of the path, which must sit in a project folder inside a `projects` folder, never by stripping a root, so a moved or symlinked `.claude` or a moved project folder does not change it. A transcript that is a symlink takes the key of the file it points at, and a path outside those two shapes, such as a file under no `projects` folder, keeps its canonical path as its key. The absolute path the file was last read from is `session_meta.transcript_path`. Recovery re-keys a session whose stored key is still an absolute path, and merges sessions that reduce to one key into the oldest of them when their streams are provably one, as [0003: Ingest](0003-ingest.md) describes. |
 | Session stream | The bytes the archive holds for one session: the transcript as it was read, byte for byte under `[capture] mode` `full`. Offsets in `turns` and `compactions` are offsets in this stream, never in a block. |
 | Block row | One row of `blocks`: block `block_no` of a session's stream, compressed with zstd, with the BLAKE3 hash of its uncompressed bytes. |
 | Block size | How many uncompressed bytes each block of a session holds, recorded per session in `session_meta.block_size`. New sessions are cut at `BLOCK_SIZE`, 65536. |
@@ -63,7 +63,7 @@ The truth. They are never dropped, never rebuilt and never converted.
 
 | Column | Type | What it holds |
 |---|---|---|
-| `session_key` | `TEXT` primary key | The transcript's path below `projects`, such as `-code-app/<uuid>.jsonl`, or its canonical path when it has neither transcript shape below a `projects` folder. |
+| `session_key` | `TEXT` primary key | The transcript's path below its project folder, such as `<uuid>.jsonl`, or its canonical path when it has neither transcript shape in a project folder inside a `projects` folder. |
 | `session_no` | `INTEGER NOT NULL UNIQUE` | The session's number, the next unused one when it is first archived. Block rows and turn ids are keyed on it. |
 
 `blocks`, one row per block of a session's stream, primary key `(session_no, block_no)`:
@@ -93,7 +93,7 @@ The truth. They are never dropped, never rebuilt and never converted.
 | `branch` | `TEXT` | The git branch the records carry. |
 | `is_final` | `INTEGER` | 1 once the session has been idle for 6 hours. |
 | `is_evicted` | `INTEGER` | 1 once retention has deleted the session's block rows. |
-| `parent_session_key` | `TEXT` | For a sidecar, the session key of the transcript it belongs to, in the same form, such as `-code-app/<sessionId>.jsonl`, read from the sidecar's path. |
+| `parent_session_key` | `TEXT` | For a sidecar, the session key of the transcript it belongs to, in the same form, such as `<sessionId>.jsonl`, read from the sidecar's path. |
 | `agent_meta` | `BLOB` | A sidecar's `agent-*.meta.json`, stored as bytes and never parsed into columns. |
 | `transcript_diverged` | `INTEGER` | 1 when the transcript on disk is shorter than what was archived or does not match it. `terminus verify` reports it. |
 | `project_pre_worktree` | `TEXT` | The project key before a worktree was folded into its repository. |

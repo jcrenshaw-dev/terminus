@@ -175,17 +175,20 @@ and the versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `~/.claude` moved behind a symlink, or was reached through one, every session
   was archived a second time under the new spelling. Search and injected
   context showed each turn twice, and `terminus status` counted about double
-  the sessions. A session is now keyed on its transcript's path below
-  `projects`, such as `-code-app/<uuid>.jsonl`, which a move does not change,
-  and a sidecar that is a symlink to another session's sidecar is archived
-  once, under the key of the file it points at. The first ingest after
-  upgrading repairs a store that is already doubled. It merges each pair that
-  is provably one transcript into the older session, keeps every session that
-  exists only in the archive, and names in that run's errors any pair it cannot
-  prove is one transcript, keeping both. `session_key` in `--json` output and
-  in `recall_search` and `recall_get` results is now the path below `projects`
-  and not an absolute path, so a script that opens `session_key` as a file
-  breaks (#57).
+  the sessions. A session is now keyed on its transcript's path below its
+  project folder, such as `<uuid>.jsonl`, so moving `.claude` or moving a
+  project folder does not change it, and a sidecar that is a symlink to another
+  session's sidecar is archived once, under the key of the file it points at.
+  The first ingest after upgrading repairs a store that is already doubled,
+  including the copies a moved project folder left behind. It merges each pair
+  that is provably one transcript into the older session, keeps every session
+  that exists only in the archive, and names in that run's errors any pair it
+  cannot prove is one transcript, keeping both. After `.claude` moves with no
+  symlink left behind, retention's delete rule no longer removes a session
+  whose transcript is still on disk. `session_key` in `--json` output and in
+  `recall_search` and `recall_get` results is now the path below the project
+  folder and not an absolute path, so a script that opens `session_key` as a
+  file breaks (#57).
 
 ## [0.1.1] - 2026-10-15
 

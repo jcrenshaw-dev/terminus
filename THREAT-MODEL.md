@@ -9,7 +9,7 @@ Last reviewed: 2026-10-15
 
 ## What this tool reads
 
-**Transcripts.** Terminus walks `<root>/projects/` under each root. The roots are the `roots` list in `terminus.toml` when it is set, otherwise `$CLAUDE_CONFIG_DIR`, otherwise `$HOME/.claude` (`core/config.rs`). `roots` entries are used as written, with no `~` expansion and no absolute-path check. Each root is canonicalized once (`core/discover.rs`). The session key does not depend on the root. It is the transcript's path below `projects`, read off the shape of the path (`path_key` in `core/ingest/mod.rs`), so a transcript reached through a moved root, or a root behind a symlink, keeps its key.
+**Transcripts.** Terminus walks `<root>/projects/` under each root. The roots are the `roots` list in `terminus.toml` when it is set, otherwise `$CLAUDE_CONFIG_DIR`, otherwise `$HOME/.claude` (`core/config.rs`). `roots` entries are used as written, with no `~` expansion and no absolute-path check. Each root is canonicalized once (`core/discover.rs`). The session key does not depend on the root or the project folder. It is the transcript's path below its project folder, such as `<uuid>.jsonl`, read off the shape of the path (`path_key` in `core/ingest/mod.rs`), so a transcript reached through a moved root, a root behind a symlink or a moved project folder keeps its key.
 
 - A project is a directory directly under `projects/`. A symlinked project directory is skipped.
 - Inside a project the walk has no depth limit, enters dot-directories, and does not enter symlinked directories.
@@ -18,7 +18,7 @@ Last reviewed: 2026-10-15
 - For a sidecar transcript, the sibling `agent-<x>.meta.json` is read whole, through symlinks, with no size limit (`core/ingest/mod.rs`).
 - Each transcript is opened read-only with `File::open` (`open_transcript` in `core/discover.rs`) and read from the stored byte offset to end of file in one buffer (`read_tail` in `core/ingest/mod.rs`).
 
-**`terminus ingest <path>`.** Reads any file the user names. The path is canonicalized and checked against `exclude`, with no check on its name or location (`core/ingest/mod.rs`). Its session key is its path below `projects`, whichever root it sits under, as in a walk. When the store holds that key for a different file that still exists, the named file is refused unread.
+**`terminus ingest <path>`.** Reads any file the user names. The path is canonicalized and checked against `exclude`, with no check on its name or location (`core/ingest/mod.rs`). Its session key is its path below its project folder, whichever root and project folder it sits under, as in a walk. When the store holds that key for a different file that still exists, the named file is refused unread.
 
 **Config directory.** `$TERMINUS_CONFIG_DIR`, otherwise `$XDG_CONFIG_HOME/terminus`, otherwise `$HOME/.config/terminus`, on Linux and macOS alike (`core/config.rs`).
 
@@ -237,7 +237,7 @@ A same-user process that can already write `~/.claude/projects` or the data dire
   - `parentUuid` sets the `continues_from` link, looked up with `LIMIT 1` and no `ORDER BY`.
   - `compactMetadata.preservedMessages` decides which turns count as dropped after a compaction, which makes them injectable.
   - Message content feeds the FTS index, the entity index and injection.
-- **Session identity.** The session key is the transcript's path below `projects`: `<project dir>/<uuid>.jsonl`, or `<project dir>/<sessionId>/subagents/[workflows/wf_*/]agent-*.jsonl` for a sidecar. It is computed from the path before any byte of the file is read, never from the record's `sessionId` or any other field, so a forged id cannot overwrite another session. A transcript that is a symlink takes the key of the file it points at. A path outside those two shapes, such as a file under no `projects` folder, keeps its canonical path as its key. Two different files that reduce to one key, such as the same path below `projects` under two roots, are never appended to one session. A walk ingests the first and reports the other as a failed file without opening it.
+- **Session identity.** The session key is the transcript's path below its project folder: `<uuid>.jsonl`, or `<sessionId>/subagents/[workflows/wf_*/]agent-*.jsonl` for a sidecar. It is read off the shape of the path, which must sit in a project folder inside a `projects` folder, and never by stripping a root. It is computed from the path before any byte of the file is read, never from the record's `sessionId` or any other field, so a forged id cannot overwrite another session. A transcript that is a symlink takes the key of the file it points at. A path outside those two shapes, such as a file under no `projects` folder, keeps its canonical path as its key. Two different files that reduce to one key, such as the same session file in two project folders, or under two roots, are never appended to one session. A walk ingests the first and reports the other as a failed file without opening it.
 - **Who controls top-level fields.** Claude Code writes the top-level fields, and tool output appears only inside message content [VERIFY]. Anyone who can write a file under `~/.claude/projects` controls every field.
 
 **2. The shape of the projects tree.** A symlinked `<uuid>.jsonl` or `agent-*.jsonl` is followed to any target that is not excluded. `agent-*.meta.json` is read through symlinks with no size limit.
