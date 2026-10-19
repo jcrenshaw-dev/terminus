@@ -1,21 +1,22 @@
 ---
 phase: 4
 status: complete
-completed: 2026-10-18
+completed: 2026-10-19
 ---
 
 # Phase 4: Session keys - Summary
 
-A session is keyed on its transcript's path below `projects`, so a moved or symlinked `.claude` keeps every key, and the first run after upgrading re-keys the old absolute-path sessions and merges each provable twin into the older session (#57).
+A session is keyed on its transcript's path below its project folder, so moving `.claude`, reaching it through a symlink, or moving a project folder keeps every key. The first run after upgrading re-keys the old absolute-path sessions and merges each provable twin into the older session, and a pass over an unchanged file records where it now lives, so retention never deletes a moved session (#57).
 
 ## What shipped
 
-- The key is the path below `projects`, found from the shape of the path, with a last-component link keyed on its target - `path_key` in `crates/terminus-core/src/ingest/mod.rs`
-- Each key is ingested once per walk, and a second root's different file under the same key is refused, unread, in the pass, backfill and single-file ingest - `ingest::claim`, `ingest::run_with`
+- The key is the path below the project folder (`<uuid>.jsonl`, or `<sessionId>/subagents/[workflows/wf_*/]agent-*.jsonl` for a sidecar), found from the shape of the path, with a last-component link keyed on its target - `path_key` and `below_project_folder` in `crates/terminus-core/src/ingest/mod.rs`
+- Each key is ingested once per walk, and a second file under a held key is refused, unread, in the pass, backfill and single-file ingest - `ingest::claim`, `ingest::run_with`
 - The repair runs inside recovery in one transaction: drain waiting decision files, re-key every unpaired session in place, merge each proven twin into the oldest session, report and keep every pair that is not provably one stream, then point labels and decision documents at the survivor - `crates/terminus-core/src/recover.rs`
 - `delete_session` factored out of retention's delete, so the merge deletes a twin the way retention does - `crates/terminus-core/src/retention/apply.rs`
-- Regression tests: `a_moved_claude_dir_behind_a_symlink_archives_nothing_twice` (`tests/pass.rs`), `a_second_roots_file_never_appends_onto_the_first_roots_session` (`tests/ingest.rs`), and the planted-store test `one_pass_repairs_a_store_keyed_on_absolute_paths` with `recovery_with_nothing_to_repair_leaves_decision_files_waiting` (`tests/session_keys.rs`, testkit)
-- The docs that define the key describe the new one: `THREAT-MODEL.md`, `docs/design/0003-ingest.md`, `docs/design/0004-archive-and-block-rows.md`, `docs/json-shapes.md`, and a `CHANGELOG.md` `[Unreleased]` `### Fixed` entry for #57 that records the `session_key` output change
+- A pass that reaches an archived session and writes no turn updates `session_meta.transcript_path` when the file now lives somewhere else, and writes nothing when it has not moved - `Existing::read`, `Prepared::moved` and `apply` in `crates/terminus-core/src/ingest/mod.rs`
+- Regression tests: `a_moved_claude_dir_behind_a_symlink_archives_nothing_twice` and `a_moved_project_folder_archives_nothing_twice` (`tests/pass.rs`), `a_second_roots_file_never_appends_onto_the_first_roots_session` (`tests/ingest.rs`), the planted-store tests `one_pass_repairs_a_store_keyed_on_absolute_paths` and `one_pass_merges_the_copies_a_moved_project_folder_left` with `recovery_with_nothing_to_repair_leaves_decision_files_waiting` (`tests/session_keys.rs`, testkit), and `a_moved_claude_dir_keeps_every_session_whose_transcript_is_still_on_disk` (`tests/retention.rs`)
+- The docs that define the key describe the new one: `THREAT-MODEL.md`, `docs/design/0003-ingest.md`, `docs/design/0004-archive-and-block-rows.md`, `docs/json-shapes.md`, and a `CHANGELOG.md` `[Unreleased]` `### Fixed` entry for #57 that records the `session_key` output change, the moved-project-folder repair and the retention fix
 
 ## Commits
 
@@ -30,6 +31,10 @@ A session is keyed on its transcript's path below `projects`, so a moved or syml
 | 2 | 4 | 0c2fa88 | Point labels and decisions at the surviving session |
 | 3 | 1 | 0f29f3d | Describe the session key as the path below `projects`, and the repair recovery makes |
 | 3 | 2 | 07f8ecd | Record the doubled archive and the new `session_key` in the changelog |
+| 4 | 1 | b48c8c3 | Key a session on its path below the project folder |
+| 4 | 2 | ebf7b65 | Prove a moved project folder, and the copies one left in the archive, are one session |
+| 4 | 3 | 95411fa | Record where an unchanged file was read from |
+| 4 | 4 | a24a04b | Describe the session key as the path below the project folder |
 
 ## Deviations
 
@@ -38,12 +43,14 @@ A session is keyed on its transcript's path below `projects`, so a moved or syml
 - [deviation] Plan 3: the fallback sentence D-01 requires (a file under no `projects` folder keeps its canonical path) is the only match left by Task 1's pattern search, which said nothing should match. The sentence was kept. (0f29f3d)
 - [deviation] Plan 3: `THREAT-MODEL.md:17` said the session is keyed by the link's path, a line D-15 did not name. It now says the session is keyed by the file the link points at. Figure 3 in 0003 said recovery removes a deleted session's watermark; it now says retention deletes the session and its watermark. (0f29f3d)
 - [deviation] Plan 2's `risk_surface` review raised three findings, all `high`. Two were refuted against the code and one was downgraded to low; all three were declined, so nothing was filed. Recorded in `ADJUDICATION-risk_surface-plan-2.json` and `.planning/DECLINED.md`.
+- Plan 4 ran as written, with no deviation.
 
 ## Open items
 
-- AC4 has not been run: on a copy of the live store, one ingest pass with the new binary, then check that `recall_search` returns each turn once, `terminus status` counts each session once, the `-code-cadence/388a000f` orphan is still archived, and no label or decision turn id dangles. This is the check against the real 2,733 transcripts.
+- AC4 has not been run: on a fresh copy of the live store, one ingest pass with this branch's release build, then the checks in PLAN-4's Notes (each transcript archived once, the `388a000f` orphan still session 2000 with 857,565 bytes, `terminus verify` clean, no dangling label or decision turn id). This is the check against the real archive.
+- John reads the docs plan 3 and plan 4 changed in RustRover (plan 3 Task 1, plan 4 Task 4).
+- CONTEXT D-01 still states the key as `<encoded project dir>/<uuid>.jsonl`, and D-13 still says ingest overwrites `transcript_path` on every pass. John's ruling overrode D-01 and plan 4 Task 3 made D-13's claim true, but neither line is annotated.
 - AC7 at landing: the pull request carries `Fixes #57`, and #57 closes once it merges.
-- John reads each changed doc in RustRover (plan 3, Task 1).
 - `cargo fmt --check` fails on four files outside this phase, predating it.
 - A longer twin with no `watermarks` row leaves the survivor's own, shorter watermark. No writer produces that state; it was the downgraded review finding.
 - A merged twin's `observations` row is deleted with it, not carried; `terminus observations regenerate` rebuilds it from the survivor's stream.
@@ -54,4 +61,4 @@ A session is keyed on its transcript's path below `projects`, so a moved or syml
 
 ## Goal check
 
-The commits plausibly deliver the goal. The key no longer depends on the root (6fe9190), and `a_moved_claude_dir_behind_a_symlink_archives_nothing_twice` (`tests/pass.rs:848`) fails at the pre-phase tree with the session count moving from 3 to 6 and passes now. The repair re-keys in place and merges only proven twins into the oldest session, keeping every archive-only session and both halves of any pair it cannot prove (1685971, fb08cdf, 3ece63e), and the planted-store test in `tests/session_keys.rs:340` checks block rows, checksums, turn ids, watermarks, `verify` and an empty `foreign_key_check`, failing at the pre-phase tree at 15 sessions against 11. Labels and decision documents follow the survivor (0c2fa88). The full suite passed 976 of 976 after the last plan. Two things are unproven here: success criterion 3 (`recall_search` once, `status` once) is shown only by plan 1's by-hand check on a small tree, and AC4 against a copy of the live store has not been run, so the real archive's repair is still untested.
+The commits plausibly deliver the goal, including the two gaps UAT found. The key no longer depends on the root or the project folder (b48c8c3, `path_key` at `crates/terminus-core/src/ingest/mod.rs:1112`). `a_moved_project_folder_archives_nothing_twice` (`tests/pass.rs:927`) failed at 742e352 with the session count moving from 2 to 4 and passes now, beside the earlier symlink test at `tests/pass.rs:848`. `one_pass_merges_the_copies_a_moved_project_folder_left` (`tests/session_keys.rs:719`) plants UAT item 5's shape, including the prefix pair whose gone copy is shorter and a `wf_*` sidecar pair, and failed at 742e352 with 6 sessions where there should be 3. `a_moved_claude_dir_keeps_every_session_whose_transcript_is_still_on_disk` (`tests/retention.rs:817`) closes UAT item 10: at 742e352 retention deleted every row of the moved session, and now the rows stay and `transcript_path` names the new place (95411fa). The full suite passed 979 of 979 after the last plan (plan 4 report). What is still unproven is the real archive: AC4 against a fresh copy of the live store has not been run, so the repair of the 175 doubled `-code-cadence` groups is shown only by the planning prototype in PLAN-4's Notes, not by this build.
