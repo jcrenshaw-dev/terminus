@@ -433,7 +433,16 @@ fn a_good_draft_is_signed_and_published(shell: Shell) {
 /// so nothing that looks like a flag ever reaches `gh`.
 fn a_bad_tag_is_refused(shell: Shell) {
     let fx = fixture(shell);
-    for tag in ["0.1.0", "v0.1", "v0.01.0", "v0.1.0-rc1", "--repo=x/y", ""] {
+    for tag in [
+        "0.1.0",
+        "v0.1",
+        "v0.01.0",
+        "v0.1.0-rc1",
+        "--repo=x/y",
+        "",
+        "v123456789012345678901.0.0",
+        "v18446744073709551616.0.0",
+    ] {
         let output = fx.run(tag);
         assert!(!output.status.success(), "{tag}: {}", text(&output));
         assert_eq!(
