@@ -834,3 +834,87 @@ fn the_bounded_step_leaves_the_rest_for_the_next_pass_and_says_how_many() {
         .iter()
         .all(|(len, flag)| *len == 0 && *flag == Some(1)));
 }
+
+/// D-14's first regression test (AC1, AC2, ING-13). Moving `.claude` and
+/// leaving a symlink at the old path changes every absolute path in the tree,
+/// and the second pass must still find every session it archived rather than
+/// archive each one again under a second key.
+///
+/// The tree carries a sidecar link spelled through the root's own path, the
+/// way Claude Code writes its resume links through `~/.claude`, so the session
+/// count is the number of distinct transcript files and not the number of
+/// paths discovery yields.
+#[test]
+fn a_moved_claude_dir_behind_a_symlink_archives_nothing_twice() {
+    let bench = bench();
+    let parent = "44444444-4444-4444-8444-444444444444";
+    let resumed = "55555555-5555-4555-8555-555555555555";
+    bench.place(PROJECT, &format!("{parent}.jsonl"), "session-basic.jsonl");
+    bench.place(
+        PROJECT,
+        &format!("{parent}/subagents/agent-a.jsonl"),
+        "subagents/agent-alpha.jsonl",
+    );
+    let link_dir = bench
+        .projects()
+        .join(PROJECT)
+        .join(resumed)
+        .join("subagents");
+    std::fs::create_dir_all(&link_dir).unwrap();
+    std::os::unix::fs::symlink(
+        bench
+            .projects()
+            .join(PROJECT)
+            .join(parent)
+            .join("subagents/agent-a.jsonl"),
+        link_dir.join("agent-a.jsonl"),
+    )
+    .unwrap();
+
+    let config = Config::from_parts(vec![bench.claude_dir.clone()], Vec::new());
+    let run = || match pass::run_with(&bench.data_dir, &config).unwrap() {
+        PassOutcome::Ran(summary) => summary,
+        PassOutcome::LockHeld => panic!("nothing else holds the lock"),
+    };
+    let observe = || {
+        let conn = Connection::open(bench.data_dir.join(DB_FILE_NAME)).unwrap();
+        let counted = terminus_core::config::visible::counts(&conn, &config)
+            .unwrap()
+            .sessions;
+        let mut keys: Vec<String> = conn
+            .prepare("SELECT session_key FROM sessions")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        keys.sort();
+        (counted, keys)
+    };
+
+    let first = run();
+    assert!(first.failures.is_empty(), "{:?}", first.failures);
+    let (count_before, keys_before) = observe();
+
+    let moved = bench.claude_dir.with_file_name("claude-moved");
+    std::fs::rename(&bench.claude_dir, &moved).unwrap();
+    std::os::unix::fs::symlink(&moved, &bench.claude_dir).unwrap();
+
+    let second = run();
+    let (count_after, keys_after) = observe();
+    assert_eq!(
+        count_after, count_before,
+        "the session count moved from {count_before} to {count_after} when .claude moved"
+    );
+    assert!(second.failures.is_empty(), "{:?}", second.failures);
+    assert_eq!(
+        second.files_committed, 0,
+        "the second pass committed a file"
+    );
+    assert_eq!(second.turns_added, 0, "the second pass added turns");
+    assert_eq!(keys_after, keys_before);
+    assert_eq!(
+        count_before, 2,
+        "one session per transcript file, not one per path: {keys_before:?}"
+    );
+}
