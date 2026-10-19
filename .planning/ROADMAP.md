@@ -6,7 +6,7 @@ The archive is the product, so it is built first and everything else is built on
 
 ## Phases
 
-- [ ] **Phase 1: Signer version check** - `sign-release.sh` refuses every version `install.sh` refuses
+- [x] **Phase 1: Signer version check** - `sign-release.sh` refuses every version `install.sh` refuses
 - [ ] **Phase 2: Read-only status and verify** - `status` and `verify` open the store read-only, like every other read command
 - [ ] **Phase 3: One excluded-project rule** - the rule that keeps an excluded project out of recall lives in one place
 - [ ] **Phase 4: Steady-state ingest pass** - a pass over unchanged transcripts stops reading their archive state
