@@ -59,7 +59,10 @@ evidence: The old THREAT-MODEL sentence is gone (grep exits 1). THREAT-MODEL.md:
 ### 7. PR closes #63, #65 and #66
 expected: The pull request that lands this phase carries `Fixes #63`, `Fixes #65` and `Fixes #66`, and all three close once it merges. (human-verify: needs GitHub, after landing)
 criterion: AC7
-status: pending
+status: pass
+first_pass: pass
+source: model
+evidence: `gh pr view 68 --json body,closingIssuesReferences` -> body carries `Fixes #63`, `Fixes #65`, `Fixes #66`; closingIssuesReferences lists 63, 65 and 66. `gh issue view <n> --repo jcrenshaw-dev/terminus --json number,state,closedByPullRequestsReferences` -> #63, #65 and #66 each `state: CLOSED`, closed by PR 68.
 
 ### 8. The observations regression test leaves the session file name clean on a false premise
 expected: behavior wrong - test coverage: Task 3 required planting a control in the file name if a bare ingest accepts such a name, and it does accept one (agent-*.jsonl). The test skipped it, and its comment and the SUMMARY deviation both claim it cannot be done.
@@ -77,14 +80,17 @@ fix: 42fd350, retest
 expected: The PR body has all three Fixes lines, and #63, #65 and #66 are closed and linked to the merged PR
 origin: verifier
 why_human: Out-of-reach resource: the PR does not exist until landing, and checking it needs GitHub, which this verifier may not reach (no network)
-status: pending
+status: pass
+first_pass: pass
+source: model
+evidence: `gh pr view 68 --json body,closingIssuesReferences` -> body carries `Fixes #63`, `Fixes #65`, `Fixes #66`; closingIssuesReferences lists 63, 65 and 66. `gh issue view <n> --repo jcrenshaw-dev/terminus --json number,state,closedByPullRequestsReferences` -> #63, #65 and #66 each `state: CLOSED`, closed by PR 68.
 
 ## Summary
 
 total: 9
-passed: 7
+passed: 9
 failed: 0
-pending: 2
+pending: 0
 skipped: 0
 blocked: 0
 reworked: 1

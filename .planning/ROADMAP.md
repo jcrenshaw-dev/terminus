@@ -10,7 +10,7 @@ The archive is the product, so it is built first and everything else is built on
 - [x] **Phase 2: Redaction** - redaction catches keyed JSON secrets and bare `sk-` tokens, never panics, and its test proves each rule
 - [x] **Phase 3: Owner-only files** - install's `settings.json` temporaries and the destination of `data move` are owner-only from the start
 - [x] **Phase 4: Session keys** - a moved or symlinked `.claude` no longer archives every session twice, and the doubled archive is repaired
-- [ ] **Phase 5: Terminal output escaping** - `search`, `show` and `observations` neutralize control characters in archived text
+- [x] **Phase 5: Terminal output escaping** - `search`, `show` and `observations` neutralize control characters in archived text
 
 ## Phase Details
 
