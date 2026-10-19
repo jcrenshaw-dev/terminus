@@ -7,27 +7,8 @@ Scope comes from `DESIGN-BRIEF.md`, where every decision is settled unless marke
 
 ## Active
 
-Committed scope for hardin. Each maps to exactly one roadmap phase. All of it
-comes from the sentinel audit of 2026-10-18, filed as the GitHub issue each line
-names, which holds the detail and the code references behind it.
-
-### Injection (INJ)
-
-
-### Privacy (PRIV)
-
-
-### Install (INST)
-
-
-### Archive (STOR)
-
-
-### Ingest (ING)
-
-
-### Recall (RCL)
-
+No cycle open. hardin's nine requirements are under `## Shipped`, labelled
+hardin. `/cad-phase add` opens the next cycle.
 
 ## Shipped
 
