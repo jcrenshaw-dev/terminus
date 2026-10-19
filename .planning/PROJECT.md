@@ -22,8 +22,6 @@ The fixes the 2026-10-18 sentinel audit says must land before the first release,
 
 The version is named at the release. The fixes and features phases 12 to 14 left under `## [Unreleased]` in `CHANGELOG.md` ship with it.
 
-After hardin come the five pieces of archive and injection work from the outside review of 2026-10-12, recorded under Seeds in `CAPTURE.md`. They get a theme name when they open.
-
 **Shipped: v0.0.1, closed 2026-10-17.**
 
 The install and release cycle, with four phases of docs, fixes and CI on top of it. The first ten phases took the model calls, the API keys, the network use, the npm package and every Windows path out, gave `terminus install` its defaults and its receipt, wrote the one-line signed install and the release machinery, stored each session as block rows, wrote the README and user docs, and published 0.1.0. The last four wrote the design docs, closed twelve small issues, put the test suite in CI with the archive and decision fixes under it, and taught the MCP server protocol 2026-07-28.
