@@ -122,23 +122,9 @@ pub fn run_with(
     // written in another.
     let (mut store, _recovered) = crate::recover::recover(data_dir)?;
 
-    // Before a byte of the file is read. Two project folders, in one root or
-    // two, can hold the same session file, and outside a flagged divergence
-    // `prepare` checks a file against the watermark by length alone, so the
-    // second folder's longer file would be appended onto the first one's
-    // session. A walk remembers which
-    // file took a key first; one named file has only the store to ask.
+    // Which file holds this key in the store is asked in `Existing::read`, the
+    // one place the walk, backfill and this path all go through.
     let session_key = path_key(&canonical)?;
-    if let Some(holder) = holder_of(store.conn(), &session_key)? {
-        match Path::new(&holder).canonicalize() {
-            Ok(held) if held == canonical => {}
-            // Moved: the file the session was read from is gone, and this is
-            // where it went.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            // Another file, or one that cannot be told apart from another.
-            _ => return Err(key_held(&canonical, Path::new(&holder))),
-        }
-    }
 
     // One resolver for one invocation: a single file has one `cwd`, so the memo
     // buys nothing here and costs nothing either, and `ingest_locked` takes the
@@ -155,16 +141,18 @@ pub fn run_with(
     )
 }
 
-/// The file the session under this key was last read from, if it is archived.
-fn holder_of(conn: &Connection, session_key: &str) -> Result<Option<String>> {
-    Ok(conn
-        .query_row(
-            "SELECT transcript_path FROM session_meta WHERE session_key = ?1",
-            [session_key],
-            |r| r.get(0),
-        )
-        .optional()?
-        .flatten())
+/// A file named like an archived session whose file is gone, and whose first
+/// bytes are not the ones archived. Not a divergence: the session's own file
+/// may come back, and it must not find its session flagged.
+fn not_the_holder(path: &Path, holder: &Path) -> Error {
+    Error::io(
+        path,
+        std::io::Error::other(format!(
+            "its session key is held by {}, which is gone, and this file does not \
+             begin with the bytes archived from it, so it was not appended",
+            holder.display()
+        )),
+    )
 }
 
 /// A second file whose key another file already holds. It is never opened.
@@ -197,7 +185,12 @@ pub(crate) enum Claim {
 /// path a walk meets takes the key, and a later one naming a different file is
 /// refused without being opened, because ingest appends from the watermark and
 /// would mix two files into one stream with nothing to detect it.
+///
+/// The store is asked before the walk is: a file the archived session was not
+/// read from, while that one is still there, never takes the key, so the
+/// session's own file can, whichever of the two sorts first.
 pub(crate) fn claim(
+    conn: &Connection,
     taken: &mut std::collections::HashMap<String, PathBuf>,
     path: &Path,
 ) -> Result<Claim> {
@@ -205,12 +198,32 @@ pub(crate) fn claim(
     let session_key = path_key(&file)?;
     Ok(match taken.get(&session_key) {
         None => {
+            if let Holder::Other(holder) = stored_holder(conn, &session_key, &file)? {
+                return Ok(Claim::Held(key_held(&file, &holder)));
+            }
             taken.insert(session_key.clone(), file.clone());
             Claim::Ingest { file, session_key }
         }
         Some(holder) if *holder == file => Claim::Same,
         Some(holder) => Claim::Held(key_held(&file, holder)),
     })
+}
+
+/// [`Holder::of`] for one key, read straight off the store.
+fn stored_holder(conn: &Connection, session_key: &str, path: &Path) -> Result<Holder> {
+    let stored: Option<Option<String>> = conn
+        .query_row(
+            "SELECT m.transcript_path FROM sessions s JOIN session_meta m USING (session_key)
+             WHERE s.session_key = ?1",
+            [session_key],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(Holder::of(
+        stored.as_ref().and_then(|s| s.as_deref()),
+        stored.is_some(),
+        path,
+    ))
 }
 
 /// Who owns the `runs` row for this file's transaction.
@@ -247,7 +260,7 @@ pub(crate) fn ingest_locked(
     projects: &mut Resolver,
     mode: CaptureMode,
 ) -> Result<Outcome> {
-    let existing = Existing::read(store.conn(), &session_key)?;
+    let existing = Existing::read(store.conn(), &session_key, path)?;
     let prepared = prepare(path, session_key, &existing, mode)?;
     apply(store, prepared, started, run_row, projects)
 }
@@ -325,6 +338,14 @@ pub(crate) fn prepare(
     existing: &Existing,
     mode: CaptureMode,
 ) -> Result<Prepared> {
+    // Before anything else, evicted or not. Two project folders, in one root or
+    // two, can hold files with one key, and the tail read below checks a file
+    // against the watermark by length alone, so a different file would be
+    // appended onto the archived session.
+    if let Holder::Other(holder) = &existing.holder {
+        return Err(key_held(path, holder));
+    }
+
     // Before the file is even opened, and the only safe answer for a session
     // retention emptied (RET-02, phase 8 D-03). An append checks the stored
     // hashes and tail, and an evicted session has no block rows left, so left
@@ -362,8 +383,20 @@ pub(crate) fn prepare(
     // block row and a read of the whole file, and it is paid only by a session
     // that is actually flagged - the steady state reads the flag, finds it
     // clear, and fetches at most the tail row (D-13).
+    //
+    // A file standing in for one that is gone gets the same comparison: a moved
+    // transcript begins with the archived bytes, and any other file named like
+    // it does not. Its refusal flags nothing, because the archive still matches
+    // the file it was read from.
     let tail = if existing.diverged {
         read_flagged(path, existing)?
+    } else if let Holder::Gone(holder) = &existing.holder {
+        read_flagged(path, existing).map_err(|e| match e {
+            Error::TranscriptDiverged { .. } | Error::TranscriptRewritten { .. } => {
+                not_the_holder(path, holder)
+            }
+            e => e,
+        })?
     } else {
         read_tail(path, existing.watermark)?
     };
@@ -940,7 +973,35 @@ pub(crate) struct Existing {
     /// from. Off the same row as the flags, so knowing whether it moved costs
     /// no extra query.
     transcript_path: Option<String>,
+    /// Whether that file is the one this pass reads.
+    holder: Holder,
     session: Option<ExistingSession>,
+}
+
+/// The file an archived session was read from, against the file a pass is
+/// about to read under the same key.
+enum Holder {
+    /// The same file, or no archived session to disagree with.
+    This,
+    /// The stored file no longer exists. The file read now may be it, moved.
+    Gone(PathBuf),
+    /// Another file, still there, or one that cannot be told apart from
+    /// another.
+    Other(PathBuf),
+}
+
+impl Holder {
+    fn of(stored: Option<&str>, archived: bool, path: &Path) -> Holder {
+        let Some(stored) = stored.filter(|s| archived && *s != &*path.to_string_lossy()) else {
+            return Holder::This;
+        };
+        let held = PathBuf::from(stored);
+        match (held.canonicalize(), path.canonicalize()) {
+            (Ok(a), Ok(b)) if a == b => Holder::This,
+            (Err(e), _) if e.kind() == std::io::ErrorKind::NotFound => Holder::Gone(held),
+            _ => Holder::Other(held),
+        }
+    }
 }
 
 struct ExistingSession {
@@ -952,7 +1013,8 @@ struct ExistingSession {
 }
 
 impl Existing {
-    pub(crate) fn read(conn: &Connection, session_key: &str) -> Result<Existing> {
+    /// `path` is the file the pass will read under `session_key`.
+    pub(crate) fn read(conn: &Connection, session_key: &str, path: &Path) -> Result<Existing> {
         let watermark: Option<i64> = conn
             .query_row(
                 "SELECT byte_offset FROM watermarks WHERE transcript_path = ?1",
@@ -1047,6 +1109,11 @@ impl Existing {
             None => None,
         };
 
+        let holder = Holder::of(transcript_path.as_deref(), session.is_some(), path);
+        // A file standing in for a gone one is compared against every archived
+        // byte, the way a flagged one is.
+        let whole = diverged || matches!(holder, Holder::Gone(_));
+
         let session = match session {
             Some((session_no, checksum)) => {
                 let checksum =
@@ -1062,7 +1129,7 @@ impl Existing {
                 let archive = if evicted {
                     archive::AppendState::empty()
                 } else {
-                    archive::append_state(conn, session_no, block_size, uncompressed_len, diverged)?
+                    archive::append_state(conn, session_no, block_size, uncompressed_len, whole)?
                 };
                 Some(ExistingSession {
                     session_no,
@@ -1083,6 +1150,7 @@ impl Existing {
             stored_capture_mode,
             block_size,
             transcript_path,
+            holder,
             session,
         })
     }

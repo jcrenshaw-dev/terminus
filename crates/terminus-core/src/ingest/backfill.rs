@@ -321,7 +321,7 @@ fn dispatch_round(
 
     for (slot, path) in batch.iter().enumerate() {
         summary.files_walked += 1;
-        let claimed = claim(taken, path).and_then(|claim| match claim {
+        let claimed = claim(store.conn(), taken, path).and_then(|claim| match claim {
             Claim::Ingest { file, session_key } => {
                 read_existing(store, file, session_key).map(Some)
             }
@@ -418,7 +418,7 @@ fn commit_one(
 /// `path` is the file [`claim`] resolved, a link's target and never the link,
 /// so the worker reads, and the store records, that file (D-03).
 fn read_existing(store: &Store, path: PathBuf, session_key: String) -> Result<Job> {
-    let existing = Existing::read(store.conn(), &session_key)?;
+    let existing = Existing::read(store.conn(), &session_key, &path)?;
     Ok(Job {
         path,
         session_key,

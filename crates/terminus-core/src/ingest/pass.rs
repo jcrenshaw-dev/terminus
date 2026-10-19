@@ -382,7 +382,7 @@ fn walk(
         }
 
         summary.files_walked += 1;
-        let (path, session_key) = match crate::ingest::claim(&mut taken, path) {
+        let (path, session_key) = match crate::ingest::claim(store.conn(), &mut taken, path) {
             Ok(Claim::Ingest { file, session_key }) => (file, session_key),
             Ok(Claim::Same) => continue,
             Ok(Claim::Held(e)) | Err(e) => {

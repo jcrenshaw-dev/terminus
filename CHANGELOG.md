@@ -185,7 +185,12 @@ and the versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   that exists only in the archive, and names in that run's errors any pair it
   cannot prove is one transcript, keeping both. After `.claude` moves with no
   symlink left behind, retention's delete rule no longer removes a session
-  whose transcript is still on disk. `session_key` in `--json` output and in
+  whose transcript is still on disk. A file in another project folder with an
+  archived session's name is refused, not appended to that session, unless
+  the session's own file is gone and the new one begins with the archived
+  bytes (#69). Under `lean` or `minimal` capture the archived bytes are not
+  the file's, so that comparison cannot pass and such a file is refused too.
+  `session_key` in `--json` output and in
   `recall_search` and `recall_get` results is now the path below the project
   folder and not an absolute path, so a script that opens `session_key` as a
   file breaks (#57).

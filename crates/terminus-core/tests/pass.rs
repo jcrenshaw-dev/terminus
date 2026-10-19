@@ -979,3 +979,147 @@ fn a_moved_project_folder_archives_nothing_twice() {
     );
     assert_eq!(second.turns_added, 0, "the second pass added turns");
 }
+
+/// The stored stream, the per-file failures and the divergence flag a pass
+/// leaves for one session, read the same way before and after.
+fn stream_of(conn: &Connection, key: &str) -> Vec<u8> {
+    testkit::stream(conn, key).unwrap()
+}
+
+fn diverged(conn: &Connection, key: &str) -> Option<i64> {
+    conn.query_row(
+        "SELECT transcript_diverged FROM session_meta WHERE session_key = ?1",
+        [key],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+/// The fixture's last line, which a test appends to make a transcript grow by
+/// one complete record.
+fn last_line(fixture: &str) -> Vec<u8> {
+    let bytes = testkit::fixture_bytes(fixture);
+    let body = &bytes[..bytes.len() - 1];
+    let start = body.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
+    bytes[start..].to_vec()
+}
+
+fn append(path: &Path, bytes: &[u8]) {
+    use std::io::Write;
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(path)
+        .unwrap()
+        .write_all(bytes)
+        .unwrap();
+}
+
+/// #69. Two project folders holding files with one name share a session key.
+/// The store already holds the session from `-code-zzz`, and `-code-aaa` sorts
+/// first, so a walk that only remembers its own paths gave the key to the
+/// wrong file: it appended that file's bytes onto the archived session and
+/// refused the real one on every pass after.
+#[test]
+fn a_second_file_with_an_archived_name_is_refused_while_its_holder_is_there() {
+    let bench = bench();
+    let name = format!("{}.jsonl", uuid(9));
+    let real = bench.place("-code-zzz", &name, "session-basic.jsonl");
+    let first = bench.pass(&[]);
+    assert!(first.failures.is_empty(), "{:?}", first.failures);
+    let key = key_of(&real);
+    let archived = stream_of(&bench.conn(), &key);
+
+    let other = bench.place("-code-aaa", &name, "session-capture.jsonl");
+    let grown = last_line("session-basic.jsonl");
+    append(&real, &grown);
+
+    let second = bench.pass(&[]);
+    let failed: Vec<&PathBuf> = second.failures.iter().map(|(p, _)| p).collect();
+    assert_eq!(failed, vec![&other], "{:?}", second.failures);
+    assert!(
+        second.failures[0].1.contains("already held"),
+        "{:?}",
+        second.failures
+    );
+    let mut expected = archived;
+    expected.extend_from_slice(&grown);
+    assert_eq!(
+        stream_of(&bench.conn(), &key),
+        expected,
+        "the session holds something other than its own file's bytes"
+    );
+    assert_eq!(diverged(&bench.conn(), &key), None);
+}
+
+/// #69. When the file a session was read from is gone, a file with its name is
+/// appended only if it begins with the archived bytes. A moved transcript does,
+/// so a moved project folder still carries on; a different file does not, and
+/// is refused without flagging the session.
+#[test]
+fn a_file_named_like_a_gone_session_is_appended_only_if_it_begins_with_the_archive() {
+    let bench = bench();
+    let name = format!("{}.jsonl", uuid(10));
+    let real = bench.place("-code-zzz", &name, "session-basic.jsonl");
+    let first = bench.pass(&[]);
+    assert!(first.failures.is_empty(), "{:?}", first.failures);
+    let key = key_of(&real);
+    let archived = stream_of(&bench.conn(), &key);
+    std::fs::remove_dir_all(bench.projects().join("-code-zzz")).unwrap();
+
+    let other = bench.place("-code-aaa", &name, "session-capture.jsonl");
+    let second = bench.pass(&[]);
+    let failed: Vec<&PathBuf> = second.failures.iter().map(|(p, _)| p).collect();
+    assert_eq!(failed, vec![&other], "{:?}", second.failures);
+    assert!(
+        second.failures[0].1.contains("which is gone"),
+        "{:?}",
+        second.failures
+    );
+    assert_eq!(stream_of(&bench.conn(), &key), archived);
+    assert_eq!(
+        diverged(&bench.conn(), &key),
+        None,
+        "the session was flagged"
+    );
+
+    std::fs::copy(testkit::fixture_path("session-basic.jsonl"), &other).unwrap();
+    let grown = last_line("session-basic.jsonl");
+    append(&other, &grown);
+    let third = bench.pass(&[]);
+    assert!(third.failures.is_empty(), "{:?}", third.failures);
+    let mut expected = archived;
+    expected.extend_from_slice(&grown);
+    assert_eq!(stream_of(&bench.conn(), &key), expected);
+}
+
+/// #69, on the other two ways in: backfill walks with its own claim, and a
+/// named file has only the store to ask. Neither appends a file the archived
+/// session was not read from, whether that session's file is there or gone.
+#[test]
+fn backfill_and_a_named_file_refuse_a_file_the_session_was_not_read_from() {
+    let bench = bench();
+    let name = format!("{}.jsonl", uuid(11));
+    let real = bench.place("-code-zzz", &name, "session-basic.jsonl");
+    let first = bench.pass(&[]);
+    assert!(first.failures.is_empty(), "{:?}", first.failures);
+    let key = key_of(&real);
+    let archived = stream_of(&bench.conn(), &key);
+    let other = bench.place("-code-aaa", &name, "session-capture.jsonl");
+
+    let report = ingest::backfill::run_with(&bench.data_dir, &bench.config(&[]), 2).unwrap();
+    let PassOutcome::Ran(summary) = &report.outcome else {
+        panic!("nothing else holds the lock");
+    };
+    let failed: Vec<&PathBuf> = summary.failures.iter().map(|(p, _)| p).collect();
+    assert_eq!(failed, vec![&other], "{:?}", summary.failures);
+    assert_eq!(stream_of(&bench.conn(), &key), archived);
+
+    let held = ingest::run_with(&bench.data_dir, &other, &bench.config(&[])).unwrap_err();
+    assert!(held.to_string().contains("already held"), "{held}");
+
+    std::fs::remove_dir_all(bench.projects().join("-code-zzz")).unwrap();
+    let gone = ingest::run_with(&bench.data_dir, &other, &bench.config(&[])).unwrap_err();
+    assert!(gone.to_string().contains("which is gone"), "{gone}");
+    assert_eq!(stream_of(&bench.conn(), &key), archived);
+    assert_eq!(diverged(&bench.conn(), &key), None);
+}
