@@ -57,7 +57,8 @@ pub enum Outcome {
 /// What a committed pass moved.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Pass {
-    /// The session's key: the transcript's path below `projects` (D-01).
+    /// The session's key: the transcript's path below its project folder,
+    /// `<uuid>.jsonl` or a sidecar's `<sessionId>/subagents/...` path.
     pub session_key: String,
     pub bytes_read: u64,
     pub turns_added: usize,
@@ -118,10 +119,11 @@ pub fn run_with(
     // written in another.
     let (mut store, _recovered) = crate::recover::recover(data_dir)?;
 
-    // Before a byte of the file is read. Two roots can hold the same path below
-    // `projects`, and outside a flagged divergence `prepare` checks a file
-    // against the watermark by length alone, so a second root's longer file
-    // would be appended onto the first root's session. A walk remembers which
+    // Before a byte of the file is read. Two project folders, in one root or
+    // two, can hold the same session file, and outside a flagged divergence
+    // `prepare` checks a file against the watermark by length alone, so the
+    // second folder's longer file would be appended onto the first one's
+    // session. A walk remembers which
     // file took a key first; one named file has only the store to ask.
     let session_key = path_key(&canonical)?;
     if let Some(holder) = holder_of(store.conn(), &session_key)? {
@@ -186,8 +188,9 @@ pub(crate) enum Claim {
 
 /// Resolve a discovered path once and decide whether this walk ingests it.
 ///
-/// After D-01 two paths can share a key: a sidecar link and the file it points
-/// at (D-03), or two roots holding the same path below `projects`. The first
+/// Two paths can share a key: a sidecar link and the file it points at (D-03),
+/// or two project folders, in one root or two, holding the same session file
+/// below the project folder. The first
 /// path a walk meets takes the key, and a later one naming a different file is
 /// refused without being opened, because ingest appends from the watermark and
 /// would mix two files into one stream with nothing to detect it.
@@ -228,10 +231,10 @@ pub(crate) enum RunRow {
 ///
 /// `path` is the file to read, never a link, and `session_key` is what
 /// [`path_key`] made of it. The session is keyed on the transcript's path below
-/// `projects`, never on the record's session id (D-01, D-02): 812 real sidecar
-/// files report their parent's sessionId, and keying on that writes a 3 KB
-/// agent transcript over a parent session's archive. The watermark is keyed on
-/// the same value.
+/// its project folder, never on the record's session id (D-01, D-02): 812 real
+/// sidecar files report their parent's sessionId, and keying on that writes a
+/// 3 KB agent transcript over a parent session's archive. The watermark is
+/// keyed on the same value.
 pub(crate) fn ingest_locked(
     store: &mut Store,
     path: &Path,
@@ -1050,14 +1053,16 @@ impl Existing {
     }
 }
 
-/// The session key for a transcript path: the path below the `projects` folder
-/// (D-01), so moving `.claude` or reaching it through a symlink keeps the key.
+/// The session key for a transcript path: the path below its project folder,
+/// so moving `.claude`, reaching it through a symlink or moving the project
+/// folder keeps the key.
 ///
-/// `<project dir>/<uuid>.jsonl` for a session, and
-/// `<project dir>/<sessionId>/subagents/[workflows/wf_*/]agent-*.jsonl` for a
-/// sidecar. The shape is read from the end of the path, never by stripping a
-/// configured root, so a stored key from a root that no longer exists reduces
-/// the same way. Any other path keys on its own text, which every caller hands
+/// `<uuid>.jsonl` for a session, and
+/// `<sessionId>/subagents/[workflows/wf_*/]agent-*.jsonl` for a sidecar. The
+/// shape is read from the end of the path, which must sit in a project folder
+/// inside a `projects` folder, never by stripping a configured root, so a
+/// stored key from a root or project folder that no longer exists reduces the
+/// same way. Any other path keys on its own text, which every caller hands
 /// in canonical.
 ///
 /// A path whose last component is a link keys on the file it points at (D-03),
@@ -1075,7 +1080,7 @@ pub fn path_key(path: &Path) -> Result<String> {
             ),
         )
     })?;
-    Ok(below_projects(path).unwrap_or_else(|| text.to_owned()))
+    Ok(below_project_folder(path).unwrap_or_else(|| text.to_owned()))
 }
 
 /// The file a link points at, when the path's last component is a link.
@@ -1094,9 +1099,10 @@ pub(crate) fn link_target(path: &Path) -> Option<PathBuf> {
     path.canonicalize().ok()
 }
 
-/// The part of a UTF-8 path below `projects`, when the path has one of the two
-/// transcript shapes discovery yields.
-fn below_projects(path: &Path) -> Option<String> {
+/// The part of a UTF-8 path below its project folder, when the path has one of
+/// the two transcript shapes discovery yields and the project folder sits in a
+/// `projects` folder. The project folder's name is left out of the key.
+fn below_project_folder(path: &Path) -> Option<String> {
     use std::path::Component;
     let parts: Vec<&str> = path
         .components()
@@ -1109,6 +1115,9 @@ fn below_projects(path: &Path) -> Option<String> {
     // `parts` runs from the file name upwards and stops at the first component
     // that is not a plain name, such as the root or a `..`.
     let file = *parts.first()?;
+    // `depth` counts the components up to and including the project folder,
+    // which must sit in a folder named `projects`. The key keeps all of them
+    // but the project folder.
     let depth = if crate::discover::is_uuid_transcript(file) {
         2
     } else if crate::discover::is_agent_transcript(file) {
@@ -1123,7 +1132,7 @@ fn below_projects(path: &Path) -> Option<String> {
     if *parts.get(depth)? != "projects" {
         return None;
     }
-    let mut key: Vec<&str> = parts[..depth].to_vec();
+    let mut key: Vec<&str> = parts[..depth - 1].to_vec();
     key.reverse();
     Some(key.join("/"))
 }

@@ -4,7 +4,8 @@
 //!
 //! `session_meta.continues_from` holds a **session id** - the value Claude Code
 //! writes in a record's `sessionId` / `session_id` fields - while `sessions` is
-//! keyed on **file identity**, the transcript's path below `projects` (D-01).
+//! keyed on **file identity**, the transcript's path below its project folder
+//! (D-01).
 //! The two namespaces are deliberately not the same thing, because 818 real
 //! sidecar files report their parent's `sessionId` and keying the archive on
 //! that would overwrite a parent session's blob with a 3 KB agent transcript.

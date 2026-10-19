@@ -37,10 +37,10 @@
 //!
 //! # Which identifier names a failure
 //!
-//! The `session_key` - the transcript's path below `projects` - and never the
-//! record's `session_id`. D-01 is the reason: 812 real sidecar files report
-//! their *parent's* `sessionId`, so a report naming session ids cannot say
-//! which of two sessions is corrupt, and "prints no other session id" is
+//! The `session_key` - the transcript's path below its project folder - and
+//! never the record's `session_id`. D-01 is the reason: 812 real sidecar files
+//! report their *parent's* `sessionId`, so a report naming session ids cannot
+//! say which of two sessions is corrupt, and "prints no other session id" is
 //! unfalsifiable when two sessions share one. The key is the primary key of
 //! `sessions` and is unique by construction.
 
@@ -53,8 +53,8 @@ use crate::store::{archive, Store};
 /// One thing about one session that did not verify.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Failure {
-    /// The transcript's path below `projects`: the unique identity of the
-    /// session.
+    /// The transcript's path below its project folder, such as
+    /// `<uuid>.jsonl`: the unique identity of the session.
     pub session_key: String,
     /// The block the failure is pinned to, or `None` for one about the whole
     /// session: the checksum, the metadata row, the block size, divergence.

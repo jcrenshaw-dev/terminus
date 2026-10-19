@@ -136,7 +136,8 @@ pub fn estimate(data_dir: &Path, config: &Config) -> Result<Estimate, Failure> {
 
 /// Every stored watermark, as one query.
 ///
-/// Keyed on the session key, the transcript's path below `projects` (D-01).
+/// Keyed on the session key, the transcript's path below its project folder
+/// (D-01).
 /// [`estimate`] turns each discovered path into that key with the same function
 /// ingest uses, so the join is a string lookup.
 fn watermarks(data_dir: &Path, config: Config) -> Result<HashMap<String, u64>, Failure> {

@@ -54,19 +54,21 @@ impl Bench {
     }
 
     /// An absolute key under a `.claude` at `root` that no longer exists.
-    fn gone(&self, root: &str, below_projects: &str) -> String {
+    /// `in_projects` is the path inside its `projects` folder, project folder
+    /// first.
+    fn gone(&self, root: &str, in_projects: &str) -> String {
         self.dir
             .path()
             .join(root)
             .join(".claude/projects")
-            .join(below_projects)
+            .join(in_projects)
             .display()
             .to_string()
     }
 
     /// Write a transcript into the tree the pass walks, answering its path.
-    fn place(&self, below_projects: &str, bytes: &[u8]) -> String {
-        let path = self.claude_dir.join("projects").join(below_projects);
+    fn place(&self, in_projects: &str, bytes: &[u8]) -> String {
+        let path = self.claude_dir.join("projects").join(in_projects);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, bytes).unwrap();
         path.display().to_string()
@@ -74,13 +76,18 @@ impl Bench {
 
     /// Archive `bytes` as a session of its own, to be keyed on `key` once every
     /// session is planted.
+    ///
+    /// Each plant is staged under a session id of its own, so no two staged
+    /// sessions share a key below the project folder and none shares one with
+    /// a session the test plants or the pass reads.
     fn plant(&mut self, bytes: &[u8], key: String) -> i64 {
+        let n = self.planted.len();
         let staged = self
             .dir
             .path()
             .join("staging/projects")
-            .join(format!("-stage-{}", self.planted.len()))
-            .join(format!("{U0}.jsonl"));
+            .join(format!("-stage-{n}"))
+            .join(format!("e{n:07x}-0000-4000-8000-000000000000.jsonl"));
         std::fs::create_dir_all(staged.parent().unwrap()).unwrap();
         std::fs::write(&staged, bytes).unwrap();
         match ingest::run_with(&self.data_dir, &staged, &Config::from_parts(vec![], vec![])) {
@@ -351,8 +358,8 @@ fn one_pass_repairs_a_store_keyed_on_absolute_paths() {
     let sidecar_old = bench.gone("old-home", &format!("-p/{U0}/subagents/agent-a.jsonl"));
     bench.plant(&alpha, sidecar_old.clone());
 
-    // Two roots holding different files at one path below `projects`, which
-    // differ in a full block.
+    // Two roots holding different files at one path below the project folder,
+    // which differ in a full block.
     let apart = [
         bench.gone("root-a", &format!("-n/{U1}.jsonl")),
         bench.gone("root-b", &format!("-n/{U1}.jsonl")),
@@ -505,18 +512,18 @@ fn one_pass_repairs_a_store_keyed_on_absolute_paths() {
     let three_stream = testkit::stream(&conn, &three[1]).unwrap();
     let oldest = |group: &[String]| group.iter().map(|k| session_no(&conn, k)).min().unwrap();
     let survivors = [
-        (format!("-g/{U3}.jsonl"), oldest(&three)),
-        (format!("-q/{U4}.jsonl"), oldest(&identical)),
-        (format!("-q/{U5}.jsonl"), oldest(&prefix)),
-        (format!("-r/{U6}/subagents/agent-x.jsonl"), oldest(&linked)),
+        (format!("{U3}.jsonl"), oldest(&three)),
+        (format!("{U4}.jsonl"), oldest(&identical)),
+        (format!("{U5}.jsonl"), oldest(&prefix)),
+        (format!("{U6}/subagents/agent-x.jsonl"), oldest(&linked)),
     ];
     drop(conn);
 
     bench.pass();
 
     let conn = bench.conn();
-    let orphan = format!("-p/{U0}.jsonl");
-    let sidecar = format!("-p/{U0}/subagents/agent-a.jsonl");
+    let orphan = format!("{U0}.jsonl");
+    let sidecar = format!("{U0}/subagents/agent-a.jsonl");
     let mut expected = vec![orphan.clone(), sidecar.clone()];
     expected.extend(kept.iter().cloned());
     expected.extend(survivors.iter().map(|(key, _)| key.clone()));
@@ -624,7 +631,9 @@ fn one_pass_repairs_a_store_keyed_on_absolute_paths() {
 
     let error = last_error(&conn).unwrap_or_default();
     assert!(
-        error.contains("re-keyed 6 session(s) to their path below `projects` and merged 4 twin(s)"),
+        error.contains(
+            "re-keyed 6 session(s) to their path below the project folder and merged 4 twin(s)"
+        ),
         "runs.error: {error}"
     );
     for (pair, why) in [

@@ -7,8 +7,10 @@
 //!
 //! **The re-key** (#57, phase 4). A session used to be keyed on its absolute
 //! path, so a moved or symlinked `.claude` gave every transcript a second key
-//! and archived it twice. The key is now the path below `projects`
-//! ([`crate::ingest::path_key`]), and a store written before that is re-keyed
+//! and archived it twice. The key is now the path below the project folder,
+//! `<uuid>.jsonl` or a sidecar's `<sessionId>/subagents/...` path
+//! ([`crate::ingest::path_key`]), so a moved project folder keeps the key too,
+//! and a store written before that is re-keyed
 //! here, in one transaction, before anything is rebuilt or read. A session with
 //! no twin is re-keyed in place: its key moves in every table that holds it, and
 //! its block rows, `session_no` and turn ids do not change. Twins, sessions that
@@ -101,7 +103,8 @@ pub struct UnmergedTwin {
 pub struct Recovered {
     pub lowered: Vec<LoweredWatermark>,
     pub removed: Vec<RemovedWatermark>,
-    /// Sessions whose absolute-path key moved to the path below `projects`.
+    /// Sessions whose absolute-path key moved to the path below the project
+    /// folder.
     pub rekeyed: usize,
     /// Twins merged into an older session and deleted.
     pub merged: usize,
@@ -130,8 +133,8 @@ impl Recovered {
         let mut out = Vec::new();
         if self.rekeyed > 0 || self.merged > 0 {
             out.push(format!(
-                "re-keyed {} session(s) to their path below `projects` and merged {} twin(s) \
-                 into the older session",
+                "re-keyed {} session(s) to their path below the project folder and merged {} \
+                 twin(s) into the older session",
                 self.rekeyed, self.merged
             ));
         }
@@ -185,7 +188,7 @@ pub fn recover(data_dir: &Path) -> Result<(Store, Recovered)> {
     Ok((store, report))
 }
 
-/// Move every absolute-path key to the path below `projects` (#57).
+/// Move every absolute-path key to the path below the project folder (#57).
 fn rekey(store: &mut Store, report: &mut Recovered) -> Result<()> {
     let groups = stale_keys(store.conn())?;
     let parents = stale_parents(store.conn())?;

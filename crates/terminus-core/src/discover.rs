@@ -19,8 +19,9 @@
 //! two-hop symlink chain (`~/.claude -> /claude/.claude -> /data/claude/.claude`),
 //! so canonicalizing the root alone yields canonical paths at one syscall
 //! instead of two thousand. Those paths are not the session keys: ingest keys a
-//! session on the path below `projects` (`ingest::path_key`), so the same file
-//! reached through another root spelling keeps its key.
+//! session on its path below the project folder (`ingest::path_key`), so the
+//! same file reached through another root spelling, or in a moved project
+//! folder, keeps its key.
 //!
 //! The walk is sequential and single-threaded, with no `walkdir`, no `glob` and
 //! no `rayon` (D-18): bounded-parallelism backfill is phase 4's, and a walker

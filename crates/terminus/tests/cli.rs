@@ -614,8 +614,8 @@ fn bare_ingest_walks_only_the_configured_temporary_root() {
     expected.sort();
     assert_eq!(keys, expected, "the pass walked a tree it was not given");
 
-    // The key is the path below `projects`, so the file each session was read
-    // from is checked through the path ingest stored beside it.
+    // The key is the path below the project folder, so the file each session
+    // was read from is checked through the path ingest stored beside it.
     let paths: Vec<String> = conn
         .prepare("SELECT transcript_path FROM session_meta")
         .unwrap()

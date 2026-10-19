@@ -31,7 +31,7 @@ const AGED: &str = "-40 days";
 /// Comfortably inside it, with twenty-nine days to spare.
 const FRESH: &str = "-1 days";
 
-/// The key a transcript is archived under: its path below `projects`.
+/// The key a transcript is archived under: its path below the project folder.
 fn key_of(path: &Path) -> String {
     terminus_core::ingest::path_key(path).unwrap()
 }

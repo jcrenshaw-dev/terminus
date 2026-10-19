@@ -30,7 +30,7 @@ const SESSIONS: u8 = 8;
 /// at zstd level 3.
 const INCOMPRESSIBLE_CHARS: usize = 32 * 1024;
 
-/// The key a transcript is archived under: its path below `projects`.
+/// The key a transcript is archived under: its path below the project folder.
 fn key_of(path: &Path) -> String {
     terminus_core::ingest::path_key(path).unwrap()
 }

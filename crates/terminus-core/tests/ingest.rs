@@ -309,8 +309,8 @@ fn resuming_from_a_mid_line_watermark_converges_on_a_single_pass() {
 }
 
 /// The same transcript reached through a symlink is one session, not two
-/// (`DESIGN-BRIEF.md:406`), and its key is the path below `projects` rather
-/// than either absolute spelling (D-01).
+/// (`DESIGN-BRIEF.md:406`), and its key is the path below the project folder,
+/// `<uuid>.jsonl`, rather than either absolute spelling.
 #[test]
 fn two_paths_to_one_transcript_produce_one_session() {
     let bench = bench();
@@ -332,7 +332,7 @@ fn two_paths_to_one_transcript_produce_one_session() {
         .query_row("SELECT count(*) FROM sessions", [], |r| r.get(0))
         .unwrap();
     assert_eq!(sessions, 1, "the symlinked path opened a second session");
-    assert_eq!(first.session_key, format!("-tmp-p/{name}"));
+    assert_eq!(first.session_key, name);
 }
 
 /// D-11. `continues_from` comes from the record's foreign `session_id`, which
@@ -574,8 +574,8 @@ fn a_session_that_lost_its_metadata_row_is_refused_rather_than_re_ingested() {
     );
 }
 
-/// Two roots holding different files at one path below `projects` share a
-/// key. Named one file, ingest asks the store which file holds the key and
+/// Two roots holding different files at one path below the project folder
+/// share a key. Named one file, ingest asks the store which file holds the key and
 /// refuses a different one before reading a byte of it, so the second file is
 /// never appended onto the first one's session. Once the first root has moved
 /// away, the file at its new location is the same transcript and appends.
@@ -600,7 +600,7 @@ fn a_second_roots_file_never_appends_onto_the_first_roots_session() {
         other => panic!("{other:?}"),
     };
     let key = pass.session_key;
-    assert_eq!(key, format!("-tmp-p/{name}"));
+    assert_eq!(key, name);
 
     let conn = bench.conn();
     let state = |conn: &Connection| {
@@ -615,7 +615,7 @@ fn a_second_roots_file_never_appends_onto_the_first_roots_session() {
     };
     let before = state(&conn);
 
-    // A longer, different file at the same path below `projects`.
+    // A longer, different file at the same path below the project folder.
     let mut other = continuation.clone();
     other.extend_from_slice(&basic);
     let second = place("b", &other);
