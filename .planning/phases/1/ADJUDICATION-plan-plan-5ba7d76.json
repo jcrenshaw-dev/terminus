@@ -1,0 +1,68 @@
+{
+  "phase": "1",
+  "trigger": "plan",
+  "discriminator": "plan-5ba7d76",
+  "round": 1,
+  "base": "5ba7d76",
+  "head": "5ba7d76",
+  "base_id": "5ba7d7621378d7200f6e740aa90d244ef3b96a9f",
+  "head_id": "5ba7d7621378d7200f6e740aa90d244ef3b96a9f",
+  "voices": [
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol"
+    }
+  ],
+  "citations": {
+    "checked": true
+  },
+  "entries": [
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol",
+      "file": ".planning/phases/1/PLAN.md",
+      "line": 47,
+      "severity": "high",
+      "claim": "The zero-definition path cannot produce the required custom failure as written because `grep -c` returns status 1 when it finds zero matches, and the script runs with `set -e`.",
+      "failure_scenario": "With an adjacent `install.sh` containing no `valid_version` definition, `count=$(grep -c ...)` exits with status 1 and the shell terminates at the assignment before reaching the proposed zero-or-many count check. The signer therefore emits no `fail` message naming `install.sh`, violating AC4. The count must tolerate grep's no-match status, for example by placing it in an explicit conditional or otherwise normalizing status 1.",
+      "ruling": "downgraded",
+      "convergent": false,
+      "citation_missing": true,
+      "base_id": "5ba7d7621378d7200f6e740aa90d244ef3b96a9f",
+      "head_id": "5ba7d7621378d7200f6e740aa90d244ef3b96a9f"
+    },
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol",
+      "file": ".planning/phases/1/PLAN.md",
+      "line": 21,
+      "severity": "medium",
+      "claim": "The acceptance criterion that issue #86 is closed by the merged change is not delivered by any task in the plan.",
+      "failure_scenario": "All three implementation tasks can complete and all automated and manual verification can pass while the PR is merged without `Closes #86`, or while GitHub fails to close the issue. The note says the orchestrator will write the closing phrase, but no task requires or verifies that action; consequently the plan can be marked complete with AC6 and the ROADMAP's fourth success criterion still false.",
+      "ruling": "refuted",
+      "convergent": false,
+      "counter_evidence": {
+        "file": ".planning/phases/1/PLAN.md",
+        "line": 24,
+        "note": "AC6 is marked human-verify on the merged PR, and Notes name Closes #86 in the PR body; an issue closes on merge, which no plan task performs."
+      },
+      "citation_missing": true,
+      "base_id": "5ba7d7621378d7200f6e740aa90d244ef3b96a9f",
+      "head_id": "5ba7d7621378d7200f6e740aa90d244ef3b96a9f"
+    },
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol",
+      "file": ".planning/phases/1/PLAN.md",
+      "line": 75,
+      "severity": "low",
+      "claim": "Task 2's final restoration verification cannot detect a failed or incorrect restoration because it compares the saved file with the destination immediately after copying that same saved file back.",
+      "failure_scenario": "After `copy the saved file back`, `cmp` of the saved file against `scripts/sign-release.sh` is tautological and passes even if the saved file was taken from the wrong revision or already contained unintended edits. Thus this verification cannot falsify the property it purports to check; it does not establish restoration of the planned implementation.",
+      "ruling": "survived",
+      "convergent": false,
+      "citation_missing": true,
+      "base_id": "5ba7d7621378d7200f6e740aa90d244ef3b96a9f",
+      "head_id": "5ba7d7621378d7200f6e740aa90d244ef3b96a9f"
+    }
+  ]
+}
