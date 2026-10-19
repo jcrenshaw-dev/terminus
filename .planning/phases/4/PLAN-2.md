@@ -116,17 +116,20 @@ An archive that already holds sessions under both an old and a new absolute path
 
   A reference is rewritten when its `session_no` half, from `schema::split_turn_id`, is the member's. Rewrite it to `schema::turn_id` of the survivor's `session_no` and the same `turn_seq`. That is exact because the survivor holds every `turn_seq` the member held (D-11). Ids into the survivor, and ids into a member that failed the test, stay as they are.
 
+  Decision files still waiting on disk are references too. In a pass, `feedback::drain` runs after `recover` (`ingest/pass.rs:262-271`), so without a change the files waiting at the first upgraded run would be moved into the store after their twins were merged away. So when the repair has work to do, and only then, `recover` calls `feedback::drain` after `Store::open` and before the repair, and this task rewrites the rows it moved in along with every other decision. The pass's own drain then finds nothing to move. When the repair has no work, recovery does not drain, so the steady state is unchanged, and `terminus ingest <path>` and `terminus backfill` still leave decision files to the next pass. A drain that fails here is reported in a `Recovered` line and the repair continues, as the pass treats a failed drain. John chose this on 2026-10-18.
+
   D-11 names labels, injected and candidates. `suppressed` and `dropped` hold turn ids too, and AC4 requires that no decision turn id point at a missing turn, so they are rewritten as well. Keep every other field of each JSON document semantically unchanged. A document that does not parse is left as it is and named in a `Recovered` line. `decisions.watermark_session_no` is not touched: the survivor has the lower number, which is the reason D-11 keeps it.
 
-  In the planted store, add a decision whose candidates, injected, suppressed and dropped lists name turns in both twins of the prefix pair, plus a label on a turn in each twin.
+  In the planted store, add a decision whose candidates, injected, suppressed and dropped lists name turns in both twins of the prefix pair, plus a label on a turn in each twin. Also leave a decision file waiting in the data directory, written the way the prompt hook writes one, whose candidates name a turn in the newer twin.
 - **Verify:**
-  - `cargo test -p terminus-core --all-features --test session_keys` passes. After one pass, every `labels.turn_id` and every turn id in the four decision lists names an existing `turns.id`. Ids that named the newer twin now carry the survivor's `session_no` with the same `turn_seq`, ids that named the survivor are unchanged, and the other JSON fields are equal to before.
+  - `cargo test -p terminus-core --all-features --test session_keys` passes. After one pass, every `labels.turn_id` and every turn id in the four decision lists names an existing `turns.id`. Ids that named the newer twin now carry the survivor's `session_no` with the same `turn_seq`, ids that named the survivor are unchanged, and the other JSON fields are equal to before. The waiting decision file is now a row, its candidate names the survivor's `session_no`, and the file is gone from the data directory.
+  - On a store with no old keys, recovery moves no decision file: a file left waiting before `recover` is still on disk after it.
   - The full suite and clippy pass.
 
 ## Notes
 
 - **AC4 steps (human-verify).**
-  1. Copy the live `terminus.db` without its `decisions/` folder. Use `sqlite3 <live data dir>/terminus.db ".backup '<copy dir>/terminus.db'"`; `.backup` is consistent while a hook-triggered pass writes.
+  1. Copy the live `terminus.db` with `sqlite3 <live data dir>/terminus.db ".backup '<copy dir>/terminus.db'"`; `.backup` is consistent while a hook-triggered pass writes. Then copy the decision files waiting in the live data directory beside it, so the check covers them.
   2. Before the pass, run on the copy:
      - `terminus search --json --project '*'` for three words that show doubled hits today;
      - the count of `labels.turn_id` not in `turns.id`;
@@ -139,6 +142,6 @@ An archive that already holds sessions under both an old and a new absolute path
      - `SELECT session_key FROM sessions WHERE session_key LIKE '-code-cadence/388a000f%'` returns one row;
      - `terminus verify` is clean;
      - no reference count from step 2 is higher than before.
-- **Edge not planned: pending decision files.** Decision files still on disk when the first repaired run starts are drained after the repair (`pass::locked` runs `feedback::drain` after `recover`). They can carry turn ids into a twin that was merged away. Step 1 copies the store without them for that reason. If `session_no` values freed by deleted twins are reused, those ids would name other turns.
+- **Pending decision files.** Task 4 drains them inside recovery before the repair, only when the repair has work, so their turn ids are rewritten with the rest. A `session_no` freed by a deleted twin can still be reused when that twin held the highest number (`ingest/mod.rs:1118-1120` allocates the highest plus one). After the repair no turn id names it, and `decisions.watermark_session_no` is left as D-11 says.
 - **Edge not planned: a link sidecar under an old root that is gone.** Such a link session cannot be resolved, so it reduces by shape to its own folder's key and stays a separate session. D-03's 10 links are all archived under new-key numbers (2187 and 2562), so the live store does not have this case.
 - **Measured while planning, 2026-10-18.** With SQLite 3.54.0, updating `sessions.session_key` with child rows fails at once with foreign keys on, commits once `PRAGMA defer_foreign_keys = ON` is set inside the transaction, and still fails at commit when a child is left dangling. The bundled build is proved by Task 1's `foreign_key_check`.
