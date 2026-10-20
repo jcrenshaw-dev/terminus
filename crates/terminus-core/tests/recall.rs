@@ -2277,3 +2277,103 @@ fn a_get_of_an_excluded_projects_turn_is_absent_with_a_reason() {
         "an excluded turn read a row"
     );
 }
+
+/// A turn excluded only by its worktree key is `NoSuchTurn` to get and to
+/// context, at `*` and at its own repository's scope.
+///
+/// Ingest folds a worktree session into its repository, so at the repository's
+/// scope the scope check passes and only the pre-worktree check refuses the
+/// turn. The other exclusion tests for both doors exclude a whole project,
+/// which the `project` check alone refuses.
+#[test]
+fn a_turn_excluded_only_by_its_worktree_key_is_refused_by_get_and_context() {
+    let bench = bench();
+    // Directories nothing creates, so project identity degrades to the path.
+    let repo = bench.work.join("zeta");
+    let worktree = repo.join(".claude/worktrees/wt-a");
+    let session = |cwd: &std::path::Path, id: &str, token: &str| {
+        let mut body = String::new();
+        for n in 0..3 {
+            let line = serde_json::json!({
+                "parentUuid": null,
+                "isSidechain": false,
+                "cwd": cwd.to_string_lossy(),
+                "sessionId": id,
+                "type": "user",
+                "uuid": format!("{}-0000-4000-8000-{n:012}", &id[..8]),
+                "timestamp": format!("2026-08-12T22:00:{n:02}.000Z"),
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": format!("{token} line {n}")}],
+                },
+            });
+            body.push_str(&line.to_string());
+            body.push('\n');
+        }
+        body
+    };
+    bench.archive(
+        "zeta-repo.jsonl",
+        &session(&repo, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "repoword"),
+    );
+    bench.archive(
+        "zeta-forked.jsonl",
+        &session(
+            &worktree,
+            "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            "forkword",
+        ),
+    );
+
+    let conn = bench.conn();
+    let repo_key = repo.to_string_lossy().into_owned();
+    let worktree_key = worktree.to_string_lossy().into_owned();
+    let forked = turn_at(&conn, "zeta-forked.jsonl", 1);
+    let plain = turn_at(&conn, "zeta-repo.jsonl", 1);
+
+    // The premise: ingest folded the worktree session into the repository.
+    let (project, pre): (Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT m.project, m.project_pre_worktree FROM turns t
+               JOIN session_meta m USING (session_key) WHERE t.id = ?1",
+            [forked],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(project.as_deref(), Some(repo_key.as_str()), "it folded");
+    assert_eq!(pre.as_deref(), Some(worktree_key.as_str()));
+
+    let excluded: &[&str] = &[&worktree_key];
+    for scope in [Scope::Everything, Scope::parse(&repo_key)] {
+        let fetched = scoped_fetch(&conn, excluded, &scope, &[forked]);
+        assert!(fetched.records.is_empty(), "{scope:?}: {fetched:?}");
+        assert_eq!(
+            fetched.absent,
+            vec![get::Absent {
+                turn_id: forked,
+                reason: Reason::NoSuchTurn { turn_id: forked },
+            }],
+            "{scope:?}"
+        );
+
+        let window = scoped_around(&conn, excluded, &scope, forked, 1, 1);
+        assert!(window.turns.is_empty(), "{scope:?}: {window:?}");
+        assert_eq!(
+            window.reason,
+            Some(Reason::NoSuchTurn { turn_id: forked }),
+            "{scope:?}"
+        );
+
+        // The controls: under the same exclusion the repository's own turn is
+        // served, and with nothing excluded so is the worktree turn.
+        let own = scoped_fetch(&conn, excluded, &scope, &[plain]);
+        assert_eq!(own.records.len(), 1, "{scope:?}: {own:?}");
+        let own = scoped_around(&conn, excluded, &scope, plain, 1, 1);
+        assert!(!own.turns.is_empty(), "{scope:?}: {own:?}");
+
+        let open = scoped_fetch(&conn, &[], &scope, &[forked]);
+        assert_eq!(open.records.len(), 1, "{scope:?}: {open:?}");
+        let open = scoped_around(&conn, &[], &scope, forked, 1, 1);
+        assert!(!open.turns.is_empty(), "{scope:?}: {open:?}");
+    }
+}

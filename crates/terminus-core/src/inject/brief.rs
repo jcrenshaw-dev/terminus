@@ -654,3 +654,89 @@ fn plural(count: i64, noun: &str) -> String {
         format!("{count} {noun}s")
     }
 }
+
+/// The brief's SQL on a store with no `project_pre_worktree` column and an
+/// exclusion configured.
+///
+/// Here and not in `tests/`: `inject::open` refuses every store older than
+/// this build, so `session_start` never reaches the brief's SQL on one and only
+/// [`render`] does. What it pins is the per-list skip that keeps the
+/// pre-worktree clause out of the SQL when that list is empty, which it always
+/// is on such a store. No other test configures an exclusion against one.
+#[cfg(all(test, feature = "testkit"))]
+mod predating_store {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::recall::scope::{self, Scope};
+    use crate::recall::{search, Request, MAX_RESULTS};
+    use crate::store::Store;
+    use crate::testkit;
+
+    #[test]
+    fn search_and_the_brief_still_answer_and_hide_an_excluded_project() {
+        let dir = tempfile::tempdir_in(testkit::temp_root()).unwrap();
+        let data_dir = dir.path().join("data");
+        let work = dir.path().join("work");
+        let root = dir.path().join("root");
+        std::fs::create_dir_all(&work).unwrap();
+        for fixture in ["session-recall.jsonl", "session-errors-a.jsonl"] {
+            let path = testkit::copy_rooted_fixture_into(fixture, &work, &root);
+            match crate::ingest::run(&data_dir, &path).unwrap() {
+                crate::ingest::Outcome::Committed(_) => {}
+                other => panic!("{fixture}: {other:?}"),
+            }
+        }
+        let kept = testkit::fixture_project("session-recall.jsonl", &root)
+            .to_string_lossy()
+            .into_owned();
+        let excluded = testkit::fixture_project("session-errors-a.jsonl", &root)
+            .to_string_lossy()
+            .into_owned();
+
+        // Only the column the skip guards goes, so the brief's other reads
+        // meet the store they always do.
+        Connection::open(data_dir.join(crate::store::DB_FILE_NAME))
+            .unwrap()
+            .execute_batch("ALTER TABLE session_meta DROP COLUMN project_pre_worktree")
+            .unwrap();
+        let store = Store::open_read_only(&data_dir).unwrap();
+        assert!(
+            store
+                .missing_columns()
+                .iter()
+                .any(|c| c.column == "project_pre_worktree"),
+            "the premise: the column has to be gone for this to be a test"
+        );
+        let conn = store.conn();
+
+        let projects = |config: &Config| -> Vec<String> {
+            let response = search::run(
+                conn,
+                config,
+                &Request::new(Query::parse("the"), Scope::Everything).limit(MAX_RESULTS),
+            )
+            .expect("a search against this store must answer, not error");
+            let mut projects: Vec<String> = response
+                .hits
+                .into_iter()
+                .filter_map(|h| h.project)
+                .collect();
+            projects.sort();
+            projects.dedup();
+            projects
+        };
+        assert_eq!(
+            projects(&Config::from_parts(Vec::new(), Vec::new())),
+            vec![kept.clone(), excluded.clone()]
+        );
+        let config = Config::from_parts(Vec::new(), vec![excluded.clone()]);
+        assert_eq!(projects(&config), vec![kept.clone()]);
+
+        let scoped =
+            scope::resolve(conn, &config, &Scope::Directory(PathBuf::from(&kept))).unwrap();
+        let brief = render(conn, &scoped, config.brief_chars(), &Redaction::of(&config))
+            .expect("a brief against this store must still render");
+        assert!(!brief.text.contains(&excluded), "{}", brief.text);
+    }
+}

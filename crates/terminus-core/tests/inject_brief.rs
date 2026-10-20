@@ -1055,3 +1055,99 @@ fn the_knob_leaves_an_ordinary_brief_exactly_as_it_was() {
         bench.brief_with("project-alpha", &bench.redacting(false)),
     );
 }
+
+/// The earlier session of `project-zeta`, run from the repository itself.
+const REPO: Session<'static> = Session {
+    file: "zeta-repo.jsonl",
+    id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    project: "project-zeta",
+    branch: Some("branch-of-the-repo-one"),
+    day: "2026-08-10",
+    prompt: "the repo prompt, about gaskets",
+    reply: "the repo reply, about gaskets",
+};
+
+/// The later session of `project-zeta`, run from one of its worktrees. Ingest
+/// folds it into the repository's `project` and keeps the worktree path as its
+/// `project_pre_worktree`.
+const FORKED: Session<'static> = Session {
+    file: "zeta-forked.jsonl",
+    id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    project: "project-zeta/.claude/worktrees/wt-a",
+    branch: Some("branch-of-the-worktree-one"),
+    day: "2026-08-14",
+    prompt: "the worktree prompt, about flanges",
+    reply: "the worktree reply, about flanges",
+};
+
+/// A session excluded under its worktree key is neither the one the brief
+/// quotes nor one it counts.
+///
+/// `scope::resolve` refuses only a scope whose own project is excluded, so a
+/// worktree session folded into a visible repository is still in the brief's
+/// scope, and only the `project_pre_worktree` clause keeps it out of the last
+/// session and out of both counts. Every other exclusion test reads search or
+/// the session listing, never the brief.
+#[test]
+fn a_session_excluded_under_its_worktree_key_is_neither_quoted_nor_counted() {
+    let bench = bench();
+    bench.archive(&REPO);
+    bench.archive(&FORKED);
+
+    let repo = bench.project(REPO.project).to_string_lossy().into_owned();
+    let worktree = bench.project(FORKED.project).to_string_lossy().into_owned();
+
+    // The premise: ingest folded the worktree session into the repository.
+    let conn = rusqlite::Connection::open(bench.data_dir.join(terminus_core::store::DB_FILE_NAME))
+        .unwrap();
+    let (project, pre): (Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT project, project_pre_worktree FROM session_meta WHERE session_id = ?1",
+            [FORKED.id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        project.as_deref(),
+        Some(repo.as_str()),
+        "it folded to the repo"
+    );
+    assert_eq!(pre.as_deref(), Some(worktree.as_str()));
+
+    // The control: with nothing excluded the later, worktree session is the
+    // one quoted, and both sessions are counted.
+    let open = bench.brief(REPO.project).expect("a brief");
+    for present in [
+        FORKED.day,
+        FORKED.branch.unwrap(),
+        FORKED.prompt,
+        FORKED.reply,
+        "2 sessions and 4 turns",
+    ] {
+        assert!(
+            open.contains(present),
+            "the brief omits {present:?}: {open}"
+        );
+    }
+
+    let config = Config::from_parts(Vec::new(), vec![worktree]);
+    let brief = bench.brief_with(REPO.project, &config).expect("a brief");
+    for present in [
+        REPO.day,
+        REPO.branch.unwrap(),
+        REPO.prompt,
+        REPO.reply,
+        "1 session and 2 turns",
+    ] {
+        assert!(
+            brief.contains(present),
+            "the brief omits {present:?}: {brief}"
+        );
+    }
+    for absent in [FORKED.day, FORKED.branch.unwrap(), "flanges"] {
+        assert!(
+            !brief.contains(absent),
+            "the brief carries the excluded session's {absent:?}: {brief}"
+        );
+    }
+}
