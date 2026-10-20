@@ -408,6 +408,30 @@ impl Store {
     }
 }
 
+/// Does the database file in `data_dir` hold no tables at all?
+///
+/// For a read command whose [`Store::open_read_only`] came back `NotAStore`.
+/// `Store::open` stamps `journal_mode=wal` on a new file before `initialize`
+/// commits, so a store another process is creating is a non-empty file with no
+/// tables, and that is no store yet rather than a broken one. A file holding
+/// tables but no `meta` is somebody else's SQLite file and gets `false` here.
+///
+/// The same read-only flags and busy timeout as [`Store::open_read_only`]. It
+/// creates, writes and repairs nothing, so a hot journal is an error here, not
+/// a rollback.
+pub fn holds_no_tables(data_dir: &Path) -> Result<bool> {
+    let path = data_dir.join(DB_FILE_NAME);
+    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let conn = Connection::open_with_flags(&path, flags)?;
+    conn.busy_timeout(std::time::Duration::from_millis(BUSY_TIMEOUT_MS.into()))?;
+    let tables: i64 = conn.query_row(
+        "SELECT count(*) FROM sqlite_master WHERE type = 'table'",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(tables == 0)
+}
+
 /// Narrow a store an earlier build left readable by group or world (PRIV-02).
 ///
 /// Runs on every [`Store::open`] and on NO read-only open (D-05): `doctor`,
