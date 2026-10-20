@@ -984,6 +984,174 @@ fn stats_against_no_store_is_a_reason_and_exits_zero() {
     );
 }
 
+/// The two `verify` runs with no store to check: exit 0 and the reason, and
+/// in `--json` nothing checked and nothing failed.
+fn assert_verify_says_no_store(bench: &Bench) {
+    let out = bench.run(&["verify"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "", "the reason belongs on stderr");
+    assert!(
+        stderr(&out).contains("no terminus store"),
+        "{}",
+        stderr(&out)
+    );
+
+    let out = bench.run(&["verify", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let value = document(&out);
+    assert_eq!(value["ok"], true, "{value}");
+    assert!(
+        value["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("no terminus store")),
+        "{value}"
+    );
+    assert_eq!(value["data"]["checked"], 0, "{value}");
+    assert_eq!(value["data"]["failures"], serde_json::json!([]), "{value}");
+}
+
+/// #77: `verify` on a machine that has never ingested creates no store.
+#[test]
+fn verify_against_no_store_is_a_reason_and_creates_nothing() {
+    let bench = bench();
+    assert_verify_says_no_store(&bench);
+    assert!(
+        !bench.data_dir.exists(),
+        "verify created the data directory"
+    );
+}
+
+/// A `terminus.db` with no tables is a store another process is still
+/// creating: the same answer as no store, and the file keeps no tables.
+#[test]
+fn verify_against_a_database_with_no_tables_is_no_store() {
+    let bench = bench();
+    std::fs::create_dir_all(&bench.data_dir).unwrap();
+    bench
+        .conn()
+        .pragma_update(None, "journal_mode", "wal")
+        .unwrap();
+
+    assert_verify_says_no_store(&bench);
+
+    let tables: i64 = bench
+        .conn()
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(tables, 0, "verify created a table");
+}
+
+/// Every `sqlite_master` row and every table's `PRAGMA table_info`.
+fn schema(path: &std::path::Path) -> Vec<String> {
+    let conn =
+        Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    let mut rows: Vec<String> = conn
+        .prepare("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .unwrap()
+        .query_map([], |r| {
+            Ok(format!(
+                "{:?}",
+                (
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                )
+            ))
+        })
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let tables: Vec<String> = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    for table in tables {
+        let mut info = conn.prepare("SELECT * FROM pragma_table_info(?1)").unwrap();
+        let columns = info
+            .query_map([&table], |r| {
+                Ok(format!(
+                    "{table}: {:?}",
+                    (0..6)
+                        .map(|i| r.get::<_, rusqlite::types::Value>(i))
+                        .collect::<Result<Vec<_>, _>>()?
+                ))
+            })
+            .unwrap()
+            .map(Result::unwrap);
+        rows.extend(columns);
+    }
+    rows
+}
+
+/// #77: on a format-2 store an older build wrote - `derived_schema` one behind,
+/// `decisions` without the two columns that arrived after it - `verify` says
+/// so in both modes and leaves the schema as it found it. A writable open would
+/// have added the columns back.
+#[test]
+fn verify_on_an_older_store_says_so_and_changes_nothing() {
+    let bench = bench();
+    bench.ingest("session-basic.jsonl");
+    let conn = bench.conn();
+    conn.execute(
+        "UPDATE meta SET value = ?1 WHERE key = ?2",
+        rusqlite::params![(DERIVED_SCHEMA - 1).to_string(), META_DERIVED_SCHEMA],
+    )
+    .unwrap();
+    conn.execute_batch(
+        "ALTER TABLE decisions DROP COLUMN compacted;
+         ALTER TABLE decisions DROP COLUMN dropped;",
+    )
+    .unwrap();
+    drop(conn);
+    let path = bench.data_dir.join(DB_FILE_NAME);
+    let before = schema(&path);
+
+    for args in [&["verify"][..], &["verify", "--json"]] {
+        let out = bench.run(args);
+        assert_eq!(out.status.code(), Some(0), "{args:?}: {}", stderr(&out));
+        assert!(
+            stderr(&out).contains("predate this build"),
+            "{args:?}: {}",
+            stderr(&out)
+        );
+    }
+
+    assert_eq!(schema(&path), before, "verify changed the store's schema");
+}
+
+/// `verify` reads no visible-session filter, so a `terminus.toml` that does not
+/// parse does not stop the integrity check.
+#[test]
+fn verify_checks_a_clean_store_past_a_config_that_does_not_parse() {
+    let bench = bench();
+    bench.ingest("session-basic.jsonl");
+    std::fs::write(
+        bench
+            .config_dir
+            .join(terminus_core::config::CONFIG_FILE_NAME),
+        "this is = = not toml\n",
+    )
+    .unwrap();
+
+    let out = bench.run(&["verify"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "", "a clean store names no session");
+
+    let out = bench.run(&["verify", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let value = document(&out);
+    assert_eq!(value["ok"], true, "{value}");
+    assert_eq!(value["data"]["failures"], serde_json::json!([]), "{value}");
+}
+
 // ---------------------------------------------------------------------------
 // RCL-06: the shapes and the exit codes, swept across every data command
 //
@@ -1249,9 +1417,8 @@ fn json_mode_keeps_stdout_pure_and_warnings_on_stderr() {
         );
     }
 
-    // Now give the commands something to warn about. `reindex` would repair it
-    // and `verify` and `status` do not read through the shared entry point, so
-    // the three read commands are the ones with a warning to place.
+    // Now give the commands something to warn about. `reindex` would repair it,
+    // so the sweep stops at the five read commands before it.
     bench
         .conn()
         .execute(
@@ -1260,7 +1427,7 @@ fn json_mode_keeps_stdout_pure_and_warnings_on_stderr() {
         )
         .unwrap();
 
-    for (command, args, _) in DATA_COMMANDS.iter().take(3) {
+    for (command, args, _) in DATA_COMMANDS.iter().take(5) {
         let mut argv = sweep_args(command, args, &id, &dest);
         argv.push("--json");
         let out = bench.run(&argv);
