@@ -440,11 +440,7 @@ fn read_existing(store: &Store, rows: &Rows, path: PathBuf, session_key: String)
 /// The one `runs` row this pass leaves behind (D-10).
 ///
 /// Field for field the row `pass::record_pass` writes, because a backfill is a
-/// pass and `terminus status` reads one table. It is a second copy of that
-/// function rather than a call to it only because `pass::record_pass` is
-/// private and `pass.rs` is outside this plan's file lease; the two belong
-/// together in one place, and that move is an open item on this plan rather
-/// than a difference in behaviour.
+/// pass and `terminus status` reads one table.
 fn record_pass(
     conn: &rusqlite::Connection,
     summary: &Summary,

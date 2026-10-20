@@ -80,34 +80,12 @@ pub const COMPACT_SOURCE: &str = "compact";
 
 /// How long an injection read waits behind a writer before giving up.
 ///
-/// `store::open` sets five seconds, which is right for a writer and wrong here
-/// by three orders of magnitude: backfill was measured holding the store for
-/// 49 s over the real corpus (`.planning/phases/4/SUMMARY.md`), and a prompt
-/// submitted during one would block the user for the whole busy timeout on
-/// exactly the machine state that provoked it. Lowering it turns lock
-/// contention into an immediate `SQLITE_BUSY`, which is silence - the first of
-/// D-03's two mechanisms, and the one that acts before the hook's watchdog has
-/// to.
-///
-/// A few milliseconds rather than zero so that the microsecond-scale overlap
-/// with an ordinary ingest commit is still waited out rather than reported as a
-/// missing brief.
-///
-/// **It bounds the queries and not the open, which is measured rather than
-/// assumed.** [`Store::open_read_only`] applies its own five-second timeout and
-/// then runs a statement against `sqlite_master` before it returns, so a
-/// connection that cannot get in at all waits inside the open, where nothing
-/// here has been able to lower anything yet. How long that wait is depends on
-/// who is holding the file, and both answers were measured on 2026-08-20
-/// against a store held under `PRAGMA locking_mode = EXCLUSIVE`: a holder in
-/// ANOTHER process let the open fail in about 6 ms
-/// (`crates/terminus/tests/inject.rs`), while a holder in the SAME process took
-/// the busy handler's full five seconds - 5,011 ms for
-/// `a_store_held_by_an_exclusive_writer_is_nothing` below. So the wait is not
-/// bounded by anything in this library, and the hook's watchdog is what bounds
-/// it: exactly why D-03 asks for two mechanisms rather than one. What this
-/// constant does bound is every statement after the open, which is where an
-/// ordinary ingest's contention lands.
+/// `store::open`'s five seconds is right for a writer and wrong on the prompt
+/// path: backfill was measured holding the store for 49 s, and a prompt
+/// submitted then would block for the whole timeout. A few milliseconds turns
+/// that contention into silence and still waits out an ordinary ingest commit.
+/// It bounds the queries, not the open: [`Store::open_read_only`] keeps its own
+/// timeout, and the hook's watchdog bounds that.
 const BUSY_TIMEOUT_MS: u64 = 3;
 
 /// Open the store injection reads, or nothing.

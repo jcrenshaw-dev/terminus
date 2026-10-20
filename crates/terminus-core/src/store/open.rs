@@ -15,46 +15,19 @@ use crate::error::{Error, Result};
 /// than rebuilt: a rebuild would read the old bytes as the new format and fail
 /// every session.
 ///
-/// 2 as of v0.0.1 phase 7: a session is numbered block rows in `blocks`, each
-/// with its compressed bytes and a BLAKE3 hash of its uncompressed bytes, and
-/// `session_meta` holds the block size and a checksum over those hashes. Format
-/// 1 kept the whole session as one blob in a `sessions.blob` column.
+/// Format 2 is numbered block rows in `blocks`, each with its compressed
+/// bytes and a BLAKE3 hash of its uncompressed bytes, and `session_meta` holds
+/// the block size and a checksum over those hashes.
 pub const ARCHIVE_FORMAT: i64 = 2;
 
 /// The derived-table schema this build writes.
 ///
 /// Bumped whenever anything rebuildable from the archive changes shape: `turns`,
-/// `compactions`, `turns_fts`, `entities`, `paths`. Two integers
-/// rather than one, because one cannot tell "derived tables need a rebuild"
-/// from "the archive itself changed" (D-09).
-///
-/// 2 as of phase 2: `compaction_boundaries` joined the derived set (D-21), so
-/// the first ingest run against a store written by a phase 1 binary rebuilds
-/// every archived session from its blob, inside the ingest lock, before it
-/// walks anything.
-///
-/// 3 as of phase 3 (D-17): `turns_fts.body` changed shape. It held the raw
-/// transcript line and now holds a per-record-type text projection plus RCL-01's
-/// expansion tokens, and `entities` and `paths` are filled for the first time.
-/// Without the bump a store written by a phase 2 binary would keep an index that
-/// matches JSON keys and holds no entity at all, and no integer would say so.
-///
-/// 4 as of v0.1.1 phase 1 (D-03): `turns` gained `is_typed`, the per-turn
-/// discriminator INJ-07's resume brief reads. The bump is what makes
-/// [`crate::reindex::reindex`] the archive-only backfill that fills the column on
-/// a store an earlier build wrote - the bring-forward `ALTER` adds it empty, and
-/// nothing else would ever populate a turn already archived. Note the naming
-/// collision: `crate::ingest::backfill` is the parallel transcript-reading pass
-/// and is NOT this mechanism; it reads the files on disk, and this reads only
-/// the archive.
-///
-/// 5 after 0.1.1 (D-20, D-22): the boundary rows moved from
-/// `compaction_boundaries`, keyed by the boundary's turn, to `compactions`, keyed
-/// by `(session_key, stream_offset)`, so a boundary with no `uuid` or
-/// `timestamp`, which is not a turn, still gets a row. The first ingest after the
-/// upgrade rebuilds every session's derived tables, and
-/// [`crate::reindex::reindex`] carries an evicted session's old boundary rows
-/// across before it drops the old table.
+/// `compactions`, `turns_fts`, `entities`, `paths`. A separate integer from
+/// [`ARCHIVE_FORMAT`], because one cannot tell "derived tables need a rebuild"
+/// from "the archive itself changed". A store with an older number has its
+/// derived tables rebuilt from the archive by
+/// [`crate::reindex::open_up_to_date`].
 pub const DERIVED_SCHEMA: i64 = 5;
 
 /// The store file inside the data directory.

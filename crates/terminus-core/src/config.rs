@@ -438,8 +438,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            // No file, so nothing to name: a config built in memory must not
-            // claim a path a refusal would then print (D-13).
+            // Built in memory, so there is no file for a refusal to name.
             source: None,
             roots: Vec::new(),
             exclusions: Vec::new(),
@@ -447,26 +446,14 @@ impl Default for Config {
             encoded_exclusions: Vec::new(),
             brief_chars: DEFAULT_BRIEF_CHARS,
             prompt_chars: DEFAULT_PROMPT_CHARS,
-            // Every field at its zero, and here that IS the specified state:
-            // `Keep` with no age selects nothing, so a user who never wrote a
-            // `[retention]` table has retention off (RET-01).
+            // `Keep` with no age: retention is off until it is configured.
             retention: Retention::default(),
-            // The one block here whose zero value is the WRONG default, which is
-            // why `Snapshot` writes its own: STOR-06 says rolling snapshots run
-            // by default, so a user who never wrote a `[snapshot]` table has
-            // them on, daily, three kept.
+            // Snapshots are on by default: daily, three kept.
             snapshot: Snapshot::default(),
-            // `Full` is both the derived zero and the specified default
-            // (ING-07), so this line is the one place in this impl where the
-            // two agree and it is still spelled out: the mode a store captures
-            // under is not a value to leave to a derive.
+            // Spelled out: the capture mode is not a value to leave to a derive.
             capture: CaptureMode::Full,
-            // Off, and this is the one default in this impl that would be
-            // actively harmful to get the other way round: every byte in the
-            // archive already reached the model once, when it was typed, so a
-            // filter on by default would spend the product's whole value -
-            // precise recall over what was actually said - to re-hide text the
-            // model has already seen.
+            // Off: the model saw every archived byte once already, and
+            // redacting by default would cost exact recall to hide it again.
             redact_recall: false,
         }
     }
@@ -512,12 +499,8 @@ impl Config {
         Ok(config)
     }
 
-    /// A config built in memory, for callers that have no file. Test support
-    /// and nothing else uses this today.
-    ///
-    /// The signature is the one every existing caller passes, and the injection
-    /// budgets it does not name come out at their defaults: a new argument here
-    /// would be an edit to every test in the workspace that builds a config.
+    /// A config built from roots and exclusions, every other setting at its
+    /// default. `Config::resolve` starts from it, and so do the tests.
     pub fn from_parts(roots: Vec<PathBuf>, exclusions: Vec<String>) -> Config {
         let exclusions: Vec<String> = exclusions.iter().filter_map(|e| normalize(e)).collect();
         let mut exclusion_spellings = Vec::new();

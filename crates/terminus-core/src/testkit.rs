@@ -4,8 +4,7 @@
 //! Behind the `testkit` cargo feature, off by default, so none of it is
 //! compiled into the shipped binary. It lives in the library rather than in a
 //! `tests/common` module because both workspace crates test against the same
-//! fixtures and a third workspace member to hold them would be worse
-//! (`.planning/phases/1/PLAN-1.md`, task 2).
+//! fixtures and a third workspace member to hold them would be worse.
 
 use std::path::{Path, PathBuf};
 

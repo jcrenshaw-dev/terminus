@@ -191,9 +191,9 @@ fn day(ts: Option<&str>) -> &str {
 
 /// The transcript's own file name, which is what a session key ends with.
 ///
-/// The whole key is an absolute path and a terminal line of them is unreadable;
-/// `--json` carries the key in full, because that is the identifier a caller
-/// scripts against.
+/// The whole key is the path below the project folder, too long for a terminal
+/// line; `--json` carries the key in full, because that is the identifier a
+/// caller scripts against.
 fn session_of(session_key: &str) -> &str {
     session_key
         .rsplit(['/', '\\'])
