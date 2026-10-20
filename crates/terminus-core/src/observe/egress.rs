@@ -570,6 +570,14 @@ fn redact_header_spans(line: &str, out: &mut String) {
         }
         let value_at = skip_blanks(bytes, colon + 1);
         let (span_start, first_end) = flag_value_span(bytes, value_at);
+        // `key: Authorization: Bearer <value>` (#93): the value run here is the
+        // next header's own name and colon. Taking it would step the walk past
+        // that colon and leave the real header untested, so this colon is only
+        // punctuation and the next one gets its own test.
+        if span_start == value_at && is_secret_header_name(&line[span_start..first_end]) {
+            at = colon + 1;
+            continue;
+        }
         // `Authorization: Bearer <value>` has to lose the scheme word and the
         // value together, or the shape is still legible enough to say what kind
         // of credential was sent and where the rest of it went.
@@ -598,6 +606,13 @@ fn redact_header_spans(line: &str, out: &mut String) {
         at = span_end;
     }
     out.push_str(&line[copied..]);
+}
+
+/// Is this run a secret name and its colon, such as `Authorization:`?
+fn is_secret_header_name(run: &str) -> bool {
+    run.strip_suffix(':').is_some_and(|name| {
+        !name.is_empty() && name.bytes().all(is_name_byte) && is_secret_name(name)
+    })
 }
 
 /// Is this byte part of a header name?
@@ -1458,6 +1473,31 @@ mod tests {
                      placeholder, and sk-not-a-quoted-string is another";
 
         assert_eq!(for_model_context(prose), prose);
+    }
+
+    /// A secret-named word and its colon right before a header must not
+    /// swallow the header's name and leave its credential behind (#93).
+    #[test]
+    fn a_secret_word_before_a_header_does_not_hide_the_header() {
+        for line in [
+            "rotate the vault key: Authorization: Bearer PLANTED-93-tok",
+            "rotate the api secret key: Authorization: Bearer PLANTED-93-tok",
+        ] {
+            let scrubbed = for_model_context(line);
+            assert!(
+                !scrubbed.contains("PLANTED-93-tok"),
+                "the token survived: {scrubbed}"
+            );
+            assert!(
+                !scrubbed.contains("Bearer"),
+                "the scheme word survived: {scrubbed}"
+            );
+            assert!(
+                scrubbed.contains("Authorization: [redacted]"),
+                "the header rule did not take it: {scrubbed}"
+            );
+            assert_eq!(for_model_context(&scrubbed), scrubbed);
+        }
     }
 
     /// Rules 3 and 5 run first, so a named `sk-` value keeps their marker and
