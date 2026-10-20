@@ -196,7 +196,7 @@ fn one_writable_command_repairs_a_wide_store_and_no_read_command_touches_one() {
     };
 
     widen();
-    bench.ok(&["status", "--json"]);
+    bench.ok(&["observations", "regenerate", "--since", "2999-01-01"]);
 
     let wrong = wrong_modes(
         directories
@@ -222,7 +222,7 @@ fn one_writable_command_repairs_a_wide_store_and_no_read_command_touches_one() {
     // D-06: the repair is compare-then-chmod, so the second run finds every bit
     // already right and issues no chmod at all.
     let before = ctimes(&files);
-    bench.ok(&["status", "--json"]);
+    bench.ok(&["observations", "regenerate", "--since", "2999-01-01"]);
     assert_unmoved(&before, "a second writable open");
 
     // AC3's last clause: the repaired store is still a store.

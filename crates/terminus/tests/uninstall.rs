@@ -776,15 +776,16 @@ fn answering_no_keeps_the_archive_and_exits_zero() {
 ///
 /// The byte count is the footprint on disk - the same three files
 /// `terminus status` reports and the same rule - and it is asserted against a
-/// measurement this test takes for itself. `status`'s own number is larger and
-/// checked as an upper bound instead: it measures while its connection is open,
-/// and the `-shm` it counts exists only for the life of that connection.
+/// measurement this test takes for itself. `status`'s own number is checked as
+/// an upper bound instead, because it measures while its connection is open.
+/// Its read-only open leaves the `-shm` and an empty `-wal` on disk when it
+/// exits, so the footprint is taken after it, as `--purge` will find the files.
 #[test]
 fn purge_with_yes_prints_the_size_and_the_path_then_deletes() {
     let fixture = fixture();
     fixture.install().ingest();
-    let footprint = fixture.footprint();
     let reported = fixture.status_size();
+    let footprint = fixture.footprint();
     assert!(footprint > 0);
     assert!(
         footprint <= reported,

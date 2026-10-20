@@ -22,11 +22,12 @@ use std::fmt::Display;
 use std::path::Path;
 
 use serde_json::json;
+use serde_json::Value;
 use terminus_core::config::visible;
-use terminus_core::store::{Store, DB_FILE_NAME};
-use terminus_core::Config;
+use terminus_core::store::DB_FILE_NAME;
 
 use super::json::Document;
+use super::read::Opened;
 use super::Failure;
 
 /// A store or filesystem error is operational (exit 1), never misuse.
@@ -35,12 +36,17 @@ fn read<T, E: Display>(result: std::result::Result<T, E>) -> Result<T, Failure> 
 }
 
 pub fn run(json: bool) -> Result<(), Failure> {
-    let data_dir = super::data_dir()?;
-    let config = Config::load()?;
-    let store = Store::open(&data_dir)?;
+    // Read-only, through the path every read command uses: with no store this
+    // says so and creates nothing, and an older store is reported, not changed.
+    let reader = match super::read::open()? {
+        Opened::Ready(reader) => reader,
+        Opened::Nothing(reason) => return super::read::empty(nothing(), &reason, json),
+    };
+    let (store, config) = (reader.store(), reader.config());
+    let data_dir = store.data_dir();
     let conn = store.conn();
 
-    let counts = read(visible::counts(conn, &config))?;
+    let counts = read(visible::counts(conn, config))?;
     // Counted first rather than reached for with an optional row, so that "no
     // run yet" and "the query failed" stay two different answers.
     let runs: i64 = read(conn.query_row("SELECT count(*) FROM runs", [], |r| r.get(0)))?;
@@ -74,7 +80,7 @@ pub fn run(json: bool) -> Result<(), Failure> {
         // to prevent.
         Document::new("status")
             .field("store", store.path().display().to_string())
-            .field("size_bytes", size_bytes(&data_dir))
+            .field("size_bytes", size_bytes(data_dir))
             .field("sessions", counts.sessions)
             .field("turns", counts.turns)
             .field("watermarks", counts.watermarks)
@@ -102,7 +108,7 @@ pub fn run(json: bool) -> Result<(), Failure> {
     }
 
     outln!("store          {}", store.path().display());
-    outln!("size           {}", size(&data_dir));
+    outln!("size           {}", size(data_dir));
     outln!("sessions       {}", counts.sessions);
     outln!("turns          {}", counts.turns);
     outln!(
@@ -154,6 +160,20 @@ pub fn run(json: bool) -> Result<(), Failure> {
     }
 
     Ok(())
+}
+
+/// The document for a machine with no store: every field the shape carries, at
+/// zero or null.
+fn nothing() -> Document {
+    Document::new("status")
+        .field("store", Value::Null)
+        .field("size_bytes", 0)
+        .field("sessions", 0)
+        .field("turns", 0)
+        .field("watermarks", 0)
+        .field("watermark_bytes", 0)
+        .field("excluded", Value::Null)
+        .field("last_run", Value::Null)
 }
 
 struct Run {

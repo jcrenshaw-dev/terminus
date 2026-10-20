@@ -102,21 +102,24 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
-/// An empty store is exit 0 with zeroes, not an error: it is what a machine
-/// looks like before the first hook has ever fired.
+/// No store is exit 0 with a reason, not an error: it is what a machine looks
+/// like before the first hook has ever fired. A read creates nothing, so the
+/// data directory is still not there afterwards.
 #[test]
-fn status_on_an_empty_data_directory_exits_zero_with_zeroes() {
+fn status_with_no_store_says_so_and_creates_nothing() {
     let bench = bench();
     let out = bench.run(&["status"]);
 
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-    let text = stdout(&out);
-    assert!(text.contains("sessions       0"), "{text}");
-    assert!(text.contains("turns          0"), "{text}");
-    assert!(text.contains("last run       none"), "{text}");
+    assert_eq!(stdout(&out), "");
     assert!(
-        text.contains(DB_FILE_NAME),
-        "the store path must be named: {text}"
+        stderr(&out).contains("no terminus store"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(
+        !bench.data_dir.exists(),
+        "status created the data directory"
     );
 }
 
@@ -390,19 +393,167 @@ fn status_json_carries_the_same_numbers_as_the_human_output() {
     assert_eq!(stdout(&out), "");
 }
 
-/// An empty store's document is zeroes and a null last run, not an error.
+/// The no-store document: `ok`, the reason, and every field at zero or null.
 #[test]
-fn status_json_on_an_empty_data_directory_is_zeroes_and_a_null_run() {
+fn status_json_with_no_store_is_a_reason_zeroes_and_nulls() {
     let bench = bench();
     let out = bench.run(&["status", "--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_no_store_document(&out);
+    assert!(
+        !bench.data_dir.exists(),
+        "status created the data directory"
+    );
+}
 
-    let document: serde_json::Value = serde_json::from_str(stdout(&out).trim()).unwrap();
+fn assert_no_store_document(out: &Output) {
+    let document: serde_json::Value = serde_json::from_str(stdout(out).trim()).unwrap();
     assert_eq!(document["ok"], true);
-    assert_eq!(document["data"]["sessions"], 0);
-    assert_eq!(document["data"]["turns"], 0);
-    assert_eq!(document["data"]["last_run"], serde_json::Value::Null);
-    assert_eq!(document["data"]["excluded"], serde_json::json!([]));
+    assert!(
+        document["reason"]
+            .as_str()
+            .unwrap()
+            .contains("no terminus store"),
+        "{document}"
+    );
+    let data = &document["data"];
+    for name in ["store", "excluded", "last_run"] {
+        assert_eq!(data[name], serde_json::Value::Null, "{name}: {document}");
+    }
+    for name in [
+        "size_bytes",
+        "sessions",
+        "turns",
+        "watermarks",
+        "watermark_bytes",
+    ] {
+        assert_eq!(data[name], 0, "{name}: {document}");
+    }
+}
+
+/// A `terminus.db` with no tables is a store another process is still
+/// creating, and gets the no-store answer. The file is left with no tables.
+#[test]
+fn status_on_a_database_with_no_tables_says_no_store_and_creates_nothing() {
+    let bench = bench();
+    std::fs::create_dir_all(&bench.data_dir).unwrap();
+    bench
+        .conn()
+        .pragma_update(None, "journal_mode", "wal")
+        .unwrap();
+
+    let out = bench.run(&["status"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "");
+    assert!(
+        stderr(&out).contains("no terminus store"),
+        "{}",
+        stderr(&out)
+    );
+
+    let out = bench.run(&["status", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_no_store_document(&out);
+
+    let tables: i64 = bench
+        .conn()
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(tables, 0, "status created a table");
+}
+
+/// Every `sqlite_master` row and every table's `PRAGMA table_info`.
+fn schema(path: &std::path::Path) -> Vec<String> {
+    let conn =
+        Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    let mut rows: Vec<String> = conn
+        .prepare("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .unwrap()
+        .query_map([], |r| {
+            Ok(format!(
+                "{:?}",
+                (
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                )
+            ))
+        })
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let tables: Vec<String> = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    for table in tables {
+        let mut info = conn.prepare("SELECT * FROM pragma_table_info(?1)").unwrap();
+        let columns = info
+            .query_map([&table], |r| {
+                Ok(format!(
+                    "{table}: {:?}",
+                    (0..6)
+                        .map(|i| r.get::<_, rusqlite::types::Value>(i))
+                        .collect::<Result<Vec<_>, _>>()?
+                ))
+            })
+            .unwrap()
+            .map(Result::unwrap);
+        rows.extend(columns);
+    }
+    rows
+}
+
+/// A format-2 store an older build wrote: `derived_schema` one behind, and
+/// `decisions` without the two columns that arrived after it. `status` never
+/// reads them, and a writable open would add them back.
+fn age(path: &std::path::Path) {
+    let conn = Connection::open(path).unwrap();
+    conn.execute(
+        "UPDATE meta SET value = ?1 WHERE key = ?2",
+        [
+            (terminus_core::DERIVED_SCHEMA - 1).to_string(),
+            terminus_core::store::META_DERIVED_SCHEMA.to_owned(),
+        ],
+    )
+    .unwrap();
+    conn.execute_batch(
+        "ALTER TABLE decisions DROP COLUMN compacted;
+         ALTER TABLE decisions DROP COLUMN dropped;",
+    )
+    .unwrap();
+}
+
+/// #77: on a store older than the binary, `status` says so in both modes and
+/// leaves the schema exactly as it found it.
+#[test]
+fn status_on_an_older_store_says_so_and_changes_nothing() {
+    let bench = bench();
+    bench.place(&format!("{}.jsonl", uuid(1)), "session-basic.jsonl");
+    assert_eq!(bench.run(&["ingest"]).status.code(), Some(0));
+    let path = bench.data_dir.join(DB_FILE_NAME);
+    age(&path);
+    let before = schema(&path);
+
+    for args in [&["status"][..], &["status", "--json"]] {
+        let out = bench.run(args);
+        assert_eq!(out.status.code(), Some(0), "{args:?}: {}", stderr(&out));
+        assert!(
+            stderr(&out).contains("predate this build"),
+            "{args:?}: {}",
+            stderr(&out)
+        );
+    }
+
+    assert_eq!(schema(&path), before, "status changed the store's schema");
 }
 
 /// `status` takes no ingest lock: reading while a pass runs must work, which is
