@@ -32,7 +32,7 @@ Archives one transcript file. A file inside an excluded project is not read, and
 
 ### `terminus backfill`
 
-Archives every transcript already on disk without holding the terminal. It prints how many transcripts there are, how many bytes are not yet archived, and an estimate of the time at the rate measured for its 4 workers. Then it starts the work in a detached process and returns. A folder under a root that cannot be listed is printed as a problem, and nothing under it is counted or archived.
+Archives every transcript already on disk without holding the terminal. It prints how many transcripts there are, how many bytes are not yet archived, and an estimate of the time at the rate measured for its 4 workers. Then it starts the work in a detached process and returns. When it finds no transcripts, it prints the zero counts and starts nothing. A folder under a root that cannot be listed is printed as a problem, and nothing under it is counted or archived.
 
 There is no log file. `terminus status` shows the pass under "last run" once it finishes. A backfill that is stopped part way picks up where it left off the next time a pass runs, because each file keeps its own position. `terminus install` runs a backfill as its last step.
 
@@ -62,7 +62,7 @@ Each hit is two lines: the turn id, the day, the transcript's file name, the pro
 
 - `--project <path>`: which project to search, as [above](#which-project-a-read-command-sees).
 - `--tool <name>`: only turns that called this tool, such as `Bash` or `Read`.
-- `--kind <type>`: only turns of this record type: `user`, `assistant`, `system` or `attachment`. `observation` exits 2, because session summaries were removed.
+- `--kind <type>`: only turns of this record type: `user`, `assistant`, `system` or `attachment`. Any other value is accepted and matches nothing, so a misspelled type returns no hits. `observation` exits 2, because session summaries were removed.
 - `--path <path>`: only turns whose tool call or tool result names this path in a structured field, such as a `Read`'s `file_path`. The match is exact, not a prefix, and a turn that only mentions the path in text does not match. Repeat it to match any of several paths.
 - `--since <time>`, `--until <time>`: only turns inside these [bounds](#time-bounds).
 - `--limit <n>`: how many hits, default 10. A number above 50 is treated as 50, and 0 exits 2.
@@ -119,7 +119,7 @@ Rebuilds every table derived from the archive, the search index among them. Turn
 
 ### `terminus status`
 
-Prints the store's path and size, the number of sessions and turns, how far into the transcripts the archive has read, the excluded projects, and the last ingest pass: when it started, how long it took, the files walked, archived and failed, the bytes read, the turns added, and its notes and errors. A pass's failures are recorded here and nowhere else, since there is no log file. It takes no lock, so it works while a pass runs. With no store, it says so and exits 0, and creates no store. On a store older than the binary, it says so on stderr, reports what is there, and changes nothing.
+Prints the store's path and size, the number of sessions and turns, how far into the transcripts the archive has read, the excluded projects, and the last ingest pass: when it started, how long it took, the files walked, archived and failed, the bytes read, the turns added, and its notes and errors. The lines recovery leaves, such as the count of sessions it re-keyed, print under `error` even when nothing failed. A pass's failures are recorded here and nowhere else, since there is no log file. It takes no lock, so it works while a pass runs. With no store, it says so and exits 0, and creates no store. On a store older than the binary, it says so on stderr, reports what is there, and changes nothing.
 
 - `--json`
 
@@ -188,6 +188,8 @@ It changes nothing. Retention acts only inside the ingest pass, and this command
 
 ## Setup
 
+`~/.local/bin/terminus` below is the path when `TERMINUS_BIN_DIR` is unset. With it set, `doctor`, `install` and `uninstall` use `$TERMINUS_BIN_DIR/terminus` instead ([environment variables](configuration.md#environment-variables)).
+
 ### `terminus doctor`
 
 Reports what is wired into Claude Code and what is not. It checks the binary at `~/.local/bin/terminus` and its version, Claude Code's `settings.json`, each of the four hook entries, the MCP entry, the `claude` command, the transcript roots, the data directory, the store, the last ingest pass, and the two Claude Code settings Terminus [reports and never changes](configuration.md#claude-code-settings-terminus-reports). Each check is `ok`, `note`, `unknown` or `problem`, and where there is something to run, it carries the command that fixes it.
@@ -198,7 +200,9 @@ It writes nothing and repairs nothing. It reads `settings.json` only for the key
 
 ### `terminus install`
 
-Wires Terminus into Claude Code. It stores the running binary as `~/.local/lib/crenshawdev/terminus/versions/<version>/terminus` and points the link at `~/.local/bin/terminus` to it, adds the four hook entries to Claude Code's `settings.json`, registers the MCP server with `claude mcp add-json`, prints a receipt of every file it touched, and starts a backfill. `install.sh` runs it, and `target/release/terminus install` installs a local build the same way.
+Wires Terminus into Claude Code. It stores the running binary as `~/.local/lib/crenshawdev/terminus/versions/<version>/terminus` and points the link at `~/.local/bin/terminus` to it, adds the four hook entries to Claude Code's `settings.json`, registers the MCP server through `claude mcp`, prints a receipt of every file it touched, and starts a backfill. `install.sh` runs it, and `target/release/terminus install` installs a local build the same way.
+
+An MCP entry already current runs no `claude`. A missing entry is added with `claude mcp add-json`, and an entry in any other shape is removed with `claude mcp remove` first ([when `claude` runs](install.md#when-claude-runs-and-when-install-exits-1)).
 
 Before it writes anything, it refuses when a file it did not put there sits at `~/.local/bin/terminus`. The first time it changes `settings.json` it keeps a copy of the file, and a later install never replaces that copy. It writes nothing to a file that is already current, so running it again is safe. It exits 1 when the MCP server could not be registered, after doing the rest and printing the command that finishes it, and when the store is in an older archive format than this build reads.
 
@@ -210,7 +214,7 @@ Removes what `install` added: the four hook entries from `settings.json`, the MC
 
 It keeps the versions folder, because a session already running may be using one of its files, and it keeps the data directory, because the archive is the product. It prints both paths. A step that cannot be done is reported, the rest still happen, and the command exits 1.
 
-- `--purge`: also deletes the data directory, after showing its path and size and asking once. The default answer is no. It takes the ingest lock and deletes nothing while a pass is running. With no answer to read, nothing is deleted and the command exits 1. It never deletes the versions folder.
+- `--purge`: also deletes the whole data directory, its snapshots and the state the hooks keep included, after showing its path and a size and asking once. The size counts only `terminus.db` and its `-wal` and `-shm` files, not the snapshots. With no `terminus.db` in the directory, it prints that there is nothing to purge and deletes nothing. The default answer is no. It takes the ingest lock and deletes nothing while a pass is running. With no answer to read, nothing is deleted and the command exits 1. It never deletes the versions folder.
 - `-y`, `--yes`: answers the `--purge` question yes. Without `--purge` it changes nothing.
 
 ## Run by Claude Code

@@ -23,7 +23,7 @@ $ curl -fsSL https://raw.githubusercontent.com/jcrenshaw-dev/terminus/main/insta
 
 Linux and macOS, on x86_64 and aarch64. It needs `curl`, `ssh-keygen`, `sha256sum` or `shasum`, and Claude Code's `claude` command, which registers the MCP server. The script checks the release's signature before it installs anything, wires Terminus into Claude Code, and archives the transcripts already on disk.
 
-Run the same line again to update. Updating from 0.1.1 keeps your archive. One change breaks scripts: `session_key` in `--json` output and in `recall_search` and `recall_get` is now the transcript's path below its project folder, not an absolute path, so a script that opens it as a file breaks.
+Run the same line again to update.
 
 Each release bumps the middle number of the version, a release with only fixes bumps the last, and the first moves only for a large change. The number does not promise compatibility. The [changelog](CHANGELOG.md) says what each release changes, and `terminus --version` prints the one you have.
 

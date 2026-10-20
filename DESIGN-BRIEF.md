@@ -27,7 +27,7 @@ Terminus inverts all of it: keep the truth, derive everything else, make retriev
 ## 3. Non-goals
 
 - No multi-machine sync, teams, auth, or cloud.
-- No harnesses other than Claude Code in 0.x (Codex, Cursor, OpenCode deferred — each is a parser, not an integration).
+- No harnesses other than Claude Code (Codex, Cursor, OpenCode deferred — each is a parser, not an integration).
 - No web viewer or HTTP server.
 - No telemetry of any kind.
 - No daemon, no port, no long-lived process.
@@ -384,7 +384,7 @@ Prefix match on canonicalized paths, case-insensitive on macOS. A repo-local mar
 
 Secondary: Homebrew, deb/rpm.
 
-**No Claude Code plugin in 0.x.** The plugin system installs into versioned directories, which is the root cause of claude-mem's inline path-resolution script and its version-check hook. Revisit at 1.0; if it ships, it stays a thin bootstrap.
+**No Claude Code plugin.** The plugin system installs into versioned directories, which is the root cause of claude-mem's inline path-resolution script and its version-check hook.
 
 ### Binary layout
 
@@ -496,7 +496,7 @@ No mocking SQLite — real temp databases throughout.
 
 ## 16. Versioning, licensing, repo
 
-- **0.0.1 onward. 1.0 only when the full feature set has landed.** Agile increments.
+- **From 1.0.0 on, each release bumps the middle number of the version.** A release with only fixes bumps the last, and the first moves only for a large change. The number does not promise compatibility, and the changelog says what each release changes, as [docs/release.md](docs/release.md#version-numbers) states.
 - **Store format version is a separate integer** in `meta`. The binary refuses a store whose archive format differs from its own, newer or older, and a derived schema that differs from its own rebuilds the derived tables. A product bump never implies a store rebuild.
 - **MIT.** Source must be public — nobody installs a closed binary that reads every keystroke of their work. AGPL is a documented negative signal in this category and its network clause protects nothing here. All dependencies are permissive (SQLite public domain, rusqlite MIT, zstd BSD, rayon MIT/Apache).
 - **Public OSS** — an explicit override of the private-by-default rule, scoped to this project.
@@ -511,5 +511,5 @@ No mocking SQLite — real temp databases throughout.
 |---|---|
 | Auto-tuner for injection thresholds | Hypothesis. Ship logging + replay; gate the tuner behind evidence it converges |
 | Import of `/data/verbatim-legacy` (801 MB) | Deferred |
-| Other harnesses — Codex, Cursor, OpenCode | Out of scope for 0.x |
+| Other harnesses — Codex, Cursor, OpenCode | Out of scope |
 | Multi-machine sync | Out of scope, stated so it doesn't creep in |
