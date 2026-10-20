@@ -658,7 +658,7 @@ fn an_excluded_transcript_under_no_configured_root_is_still_refused() {
 ///
 /// It is `excludes_path`'s spelling either way, so before normalization this
 /// pass archived the project in full while every read path hid it - the exact
-/// write-then-hide split `.planning/PROJECT.md` names the incumbent for.
+/// write-then-hide split the incumbent gets wrong.
 #[test]
 fn an_exclusion_with_a_trailing_separator_is_honored_before_the_open() {
     let bench = bench();

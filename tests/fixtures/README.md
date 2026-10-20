@@ -2,7 +2,7 @@
 
 Real Claude Code transcripts are private and never enter this repository
 (`DESIGN-BRIEF.md:500`). These files are synthetic, deterministic, and shaped
-to the facts `.planning/phases/1/CONTEXT.md` measured against the real corpus.
+to facts measured against a real corpus.
 They are the CI corpus; the private real-corpus fixture is reached by env var.
 
 The fixtures are byte-load-bearing. Tests assert on their exact bytes, and

@@ -4,7 +4,7 @@
 //! excerpt - a projection, windowed around the match - and a context window
 //! returns projections of its neighbours; this returns the record's **own
 //! bytes**, read at the `stream_offset` and `byte_len` stored on the turn row.
-//! The blob is truth (`.planning/PROJECT.md`, D-13) and this is the one path
+//! The blob is truth (D-13) and this is the one path
 //! that hands the truth back unaltered - unless `[privacy] redact_recall` says
 //! otherwise, and then only for this answer: see [`Record::body`].
 //!

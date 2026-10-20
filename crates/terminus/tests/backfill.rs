@@ -615,7 +615,7 @@ fn a_killed_backfill_converges_on_the_store_an_uninterrupted_one_reaches() {
 }
 
 /// The same two passes over the real corpus, when there is one to measure
-/// against (`.planning/PROJECT.md`'s testing constraint).
+/// against.
 ///
 /// Session and turn counts rather than a full snapshot: the two runs archive
 /// 2,244 sessions and 274,422 turns each, and a blob-for-blob comparison of two

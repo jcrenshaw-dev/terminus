@@ -518,8 +518,8 @@ fn status_reads_while_the_ingest_lock_is_held() {
 /// counting it, without a re-ingest and without the rows leaving the store.
 ///
 /// This is the case a flag written at ingest could never cover, and the
-/// behaviour `.planning/PROJECT.md` names the incumbent for: exclusion honored
-/// on write and ignored on read.
+/// behaviour the incumbent gets wrong: exclusion honored on write and ignored
+/// on read.
 #[test]
 fn status_stops_counting_a_project_excluded_after_it_was_archived() {
     let bench = bench();

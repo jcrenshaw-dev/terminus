@@ -9,7 +9,7 @@
 //! 2 s budget, and process spawn is the 10-30 ms the cold-start budget is made
 //! of; and a rule that resolves independently can disagree with what ingest
 //! wrote, at which point a scoped search inside a worktree returns zero hits -
-//! the identity fragmentation `.planning/PROJECT.md` names the incumbent for.
+//! the identity fragmentation the incumbent suffers from.
 //! Matching against stored keys cannot disagree with them.
 //!
 //! **Exclusion (D-21, D-23).** Applied to `project` and to

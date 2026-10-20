@@ -1,7 +1,7 @@
 //! RCL-01's expansion: the extra tokens that let a query for one component find
 //! the whole.
 //!
-//! The design bars a custom FTS5 tokenizer (`.planning/PROJECT.md`) precisely so
+//! The design bars a custom FTS5 tokenizer precisely so
 //! every rule here stays an ordinary function with an input and an answer.
 //! Normalization happens in Rust at ingest and the table keeps plain
 //! `unicode61`, which means both query shapes hit: the whole token, because it

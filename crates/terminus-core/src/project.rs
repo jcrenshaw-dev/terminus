@@ -3,8 +3,7 @@
 //! This module turns a `cwd` string into a project key and does nothing else.
 //! It never touches the store, knows nothing about ingest, and every rule in it
 //! is a function a unit test can call - which is the point, because project
-//! identity is where the incumbent's four identity bugs live
-//! (`.planning/PROJECT.md`).
+//! identity is where the incumbent's four identity bugs live.
 //!
 //! Two rules and one refusal.
 //!
@@ -180,7 +179,7 @@ pub fn git_available() -> bool {
 ///
 /// An absolute program and no shell: the hook path spawns this, and a bare
 /// program name resolved by the OS is the Windows PATH-probing failure class
-/// the design retires (`.planning/PROJECT.md`).
+/// the design retires.
 fn git_program() -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
@@ -244,8 +243,8 @@ fn git_toplevel_in(program: &Path, dir: &Path) -> Option<String> {
 /// form and all 13 of them are deleted, so git returns nothing for any of them.
 ///
 /// Getting it wrong splits six `cadence`, six `hindsight` and six `assistant`
-/// worktrees into seven project keys each - the identity fragmentation
-/// `.planning/PROJECT.md` cites the incumbent for.
+/// worktrees into seven project keys each - the identity fragmentation the
+/// incumbent suffers from.
 ///
 /// The **last** occurrence of the pair wins, so a worktree checked out inside
 /// another worktree keys to the nearer repository rather than the outermost.

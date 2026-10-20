@@ -1,7 +1,7 @@
 //! The three tools, and nothing else ever (RCL-07 .. RCL-09).
 //!
 //! **Three, by decision.** Every tool description sits in every session's
-//! context forever (`.planning/PROJECT.md`), so `stats`, `usage`, `verify`,
+//! context forever, so `stats`, `usage`, `verify`,
 //! `reindex` and `export` stay CLI-only: they are things a person runs, not
 //! things a model needs a permanent line of context to know about.
 //!

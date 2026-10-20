@@ -9,7 +9,7 @@
 //! Every rule is a pure function over a `serde_json::Value` and is unit-testable
 //! on its own. That is deliberate: the design bars a custom FTS5 tokenizer
 //! precisely so normalization stays in Rust where each rule can be called with
-//! an input and compared against an answer (`.planning/PROJECT.md`).
+//! an input and compared against an answer.
 
 pub mod entity;
 pub mod expand;

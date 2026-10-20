@@ -22,8 +22,8 @@
 //!
 //! **Redaction is for recall, never for ingest.** [`egress`] holds the shape
 //! rules recall applies to a projection on its way into the model's context
-//! when `[privacy] redact_recall` is on. Nothing redacts at ingest:
-//! `.planning/PROJECT.md` bars that outright.
+//! when `[privacy] redact_recall` is on. Nothing redacts at ingest, because
+//! that would make the archive lossy.
 
 pub mod egress;
 pub mod mechanical;

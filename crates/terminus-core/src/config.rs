@@ -4,8 +4,8 @@
 //! The file is `terminus.toml` inside terminus's config directory, and
 //! `config.toml` in that same directory is deliberately never read (D-15). The
 //! legacy tool wrote one - 184 bytes, `base_dir = "/data/verbatim"` - and
-//! adopting it would point the new store at the legacy data directory whose
-//! import `.planning/PROJECT.md` defers.
+//! adopting it would point the new store at the legacy data directory, which
+//! Terminus does not import.
 //!
 //! A missing config file is not an error. It yields the defaults, which is the
 //! state every user starts in.
@@ -263,7 +263,7 @@ pub const REDACTED: &str = "[redacted]";
 /// `toolUseResult` and `attachment` subtrees with a mark saying how many bytes
 /// stood there. That is an ELISION and not a redaction - it drops a whole named
 /// subtree and records that it did, it never rewrites content in place, and
-/// ingest-time redaction stays barred outright (`.planning/PROJECT.md`).
+/// ingest-time redaction stays barred outright.
 ///
 /// Two consequences are worth knowing before choosing one:
 ///
@@ -951,8 +951,8 @@ pub fn encode(path: &str) -> String {
         .collect()
 }
 
-/// Path comparison is case-insensitive on macOS and case-sensitive on Linux
-/// (`.planning/PROJECT.md` constraints).
+/// Path comparison is case-insensitive on macOS and case-sensitive on Linux,
+/// matching each platform's default file system.
 #[cfg(target_os = "macos")]
 fn fold(s: &str) -> String {
     s.to_lowercase()
@@ -1137,8 +1137,8 @@ fn non_empty_var(name: &str) -> Option<std::ffi::OsString> {
 /// the MCP tools all reuse it; a query that reaches past it is how an excluded
 /// project becomes visible again.
 ///
-/// The failure this exists to prevent is named in `.planning/PROJECT.md`: the
-/// incumbent honors exclusion on write and ignores it on read. Terminus honors
+/// The failure this exists to prevent: the incumbent honors exclusion on write
+/// and ignores it on read. Terminus honors
 /// it on both, and honors it **retroactively** - which is why no per-session
 /// flag is written at ingest (D-23). A flag would say what was true when the
 /// session was archived, and the case that matters is precisely the session

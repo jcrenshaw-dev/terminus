@@ -115,8 +115,8 @@
 //!
 //! # Egress only, never ingest
 //!
-//! `.planning/PROJECT.md` bars ingest-time redaction outright - it makes the
-//! store lossy and destroys what it strips - and nothing in this module is
+//! Ingest-time redaction is barred outright - it makes the store lossy and
+//! destroys what it strips - and nothing in this module is
 //! reachable from the ingest write path.
 //! `tests/egress.rs::nothing_in_the_ingest_path_names_the_egress_filter` holds
 //! that shut at the source level.

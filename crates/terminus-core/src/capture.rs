@@ -3,9 +3,9 @@
 //! Two things this module is NOT, because both are easy to read into it and
 //! both are wrong.
 //!
-//! It is not redaction. Ingest-time redaction is barred outright
-//! (`.planning/PROJECT.md`: it makes the store lossy, defeats "verbatim" and
-//! destroys what it strips; redaction is egress-only). What happens here is
+//! It is not redaction. Ingest-time redaction is barred outright: it makes the
+//! store lossy, defeats "verbatim" and destroys what it strips, so redaction is
+//! egress-only. What happens here is
 //! ELISION: a whole named subtree is dropped and a mark is left with its size,
 //! measured as the subtree re-encoded as compact JSON (`serde_json::to_vec`),
 //! not the source bytes it covered. Nothing is rewritten in place, nothing is scanned for
