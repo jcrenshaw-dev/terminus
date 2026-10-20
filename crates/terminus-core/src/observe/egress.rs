@@ -522,8 +522,9 @@ fn is_userinfo_byte(b: u8) -> bool {
 /// carrying until it was fixed. The opening quote is re-emitted before the
 /// marker, so the redacted line stays balanced.
 ///
-/// What goes is BOUNDED - an optional auth scheme word plus one value run -
-/// rather than the rest of the line. One projected line can be a whole text
+/// What goes is BOUNDED - an optional auth scheme word plus one value run, and
+/// the value of any secret header inside what went - rather than the rest of the
+/// line. One projected line can be a whole text
 /// block, so running to end of line would erase the rest of what the turn said
 /// along with the value.
 fn redact_header_lines(text: &str) -> String {
@@ -550,34 +551,34 @@ fn redact_header_lines(text: &str) -> String {
 fn redact_header_spans(line: &str, out: &mut String) {
     let bytes = line.as_bytes();
     let mut copied = 0;
-    let mut at = 0;
-    while at < bytes.len() {
-        if bytes[at] != b':' {
-            at += 1;
+    // The last unquoted value run found. Colons inside one run all have values
+    // ending where it ends, so a run of `a:b:c:...` is scanned once, not once
+    // per colon.
+    let mut run = (0, 0);
+    for colon in 0..bytes.len() {
+        if bytes[colon] != b':' {
             continue;
         }
-        let colon = at;
         let mut name_start = colon;
-        while name_start > copied && is_name_byte(bytes[name_start - 1]) {
+        while name_start > 0 && is_name_byte(bytes[name_start - 1]) {
             name_start -= 1;
         }
         // An empty run (rule 4's `"name": "value"`, whose closing quote ends the
         // run before it starts) or an ordinary word: not a header, and the colon
         // is just punctuation.
         if name_start == colon || !is_secret_name(&line[name_start..colon]) {
-            at = colon + 1;
             continue;
         }
         let value_at = skip_blanks(bytes, colon + 1);
-        let (span_start, first_end) = flag_value_span(bytes, value_at);
-        // `key: Authorization: Bearer <value>` (#93): the value run here opens
-        // the next header. Taking it would step the walk past that header's
-        // colon and leave it untested, so this colon is only punctuation and
-        // the next one gets its own test.
-        if span_start == value_at && opens_a_secret_header(line, span_start, first_end) {
-            at = colon + 1;
-            continue;
-        }
+        let (span_start, first_end) = if run.0 <= value_at && value_at < run.1 {
+            (value_at, run.1)
+        } else {
+            let span = flag_value_span(bytes, value_at);
+            if span.0 == value_at {
+                run = span;
+            }
+            span
+        };
         // `Authorization: Bearer <value>` has to lose the scheme word and the
         // value together, or the shape is still legible enough to say what kind
         // of credential was sent and where the rest of it went.
@@ -593,7 +594,13 @@ fn redact_header_spans(line: &str, out: &mut String) {
             first_end
         };
         if span_end == span_start {
-            at = colon + 1;
+            continue;
+        }
+        // A header inside text already redacted, as in `key: Authorization:
+        // Bearer <value>` (#93): every colon is tested, and when this one's value
+        // runs past what is already gone, the redaction runs on to cover it.
+        if colon < copied {
+            copied = copied.max(span_end);
             continue;
         }
         out.push_str(&line[copied..=colon]);
@@ -603,32 +610,8 @@ fn redact_header_spans(line: &str, out: &mut String) {
         out.push_str(&line[value_at..span_start]);
         out.push_str(REDACTED);
         copied = span_end;
-        at = span_end;
     }
     out.push_str(&line[copied..]);
-}
-
-/// Does the run at `start..end` open a secret header that has a value of its
-/// own, such as `Authorization:` followed by a value, or `Authorization:Bearer`?
-///
-/// A word stuck to the colon counts only when it is an auth scheme, so a value
-/// like `apikey_7Gf2:Zp4` stays one value and is redacted whole. A header with
-/// nothing after it is not deferred to, or the run would go unredacted.
-fn opens_a_secret_header(line: &str, start: usize, end: usize) -> bool {
-    let Some(offset) = line[start..end].find(':') else {
-        return false;
-    };
-    let name = &line[start..start + offset];
-    if name.is_empty() || !name.bytes().all(is_name_byte) || !is_secret_name(name) {
-        return false;
-    }
-    let after = start + offset + 1;
-    if after < end {
-        return is_auth_scheme(&line[after..end]);
-    }
-    let bytes = line.as_bytes();
-    let (value_start, value_end) = flag_value_span(bytes, skip_blanks(bytes, after));
-    value_end > value_start
 }
 
 /// Is this byte part of a header name?
@@ -886,13 +869,10 @@ fn flag_value_span(bytes: &[u8], from: usize) -> (usize, usize) {
         (Some(b'\''), _) => (from + 1, b"'"),
         _ => return (from, value_run_end(bytes, from)),
     };
-    let line_end = bytes[inner_start..]
-        .iter()
-        .position(|&b| b == b'\n')
-        .map(|offset| inner_start + offset)
-        .unwrap_or(bytes.len());
+    // Stops at the line's end as it goes, rather than finding that end first,
+    // which would read the rest of the text again for every quoted value on it.
     let mut at = inner_start;
-    while at + closer.len() <= line_end {
+    while at + closer.len() <= bytes.len() && bytes[at] != b'\n' {
         if &bytes[at..at + closer.len()] == closer && !(at > inner_start && bytes[at - 1] == b'\\')
         {
             return (inner_start, at);
@@ -1491,43 +1471,53 @@ mod tests {
         assert_eq!(for_model_context(prose), prose);
     }
 
-    /// A secret-named word and its colon right before a header must not
-    /// swallow the header's name and leave its credential behind (#93).
+    /// A value run that opens another secret header loses that header's value
+    /// too, and a colon inside a value never leaves part of it behind (#93).
     #[test]
-    fn a_secret_word_before_a_header_does_not_hide_the_header() {
-        for line in [
-            "rotate the vault key: Authorization: Bearer PLANTED-93-tok",
-            "rotate the api secret key: Authorization: Bearer PLANTED-93-tok",
-            "rotate the vault key: Authorization:Bearer PLANTED-93-tok",
+    fn a_value_that_opens_a_header_loses_that_header_s_value_too() {
+        for (line, want) in [
+            // The #93 shape, with and without a space after the inner colon,
+            // and with prose after it that must stay.
+            (
+                "rotate the vault key: Authorization: Bearer PLANTED-93-tok",
+                "rotate the vault key: [redacted]",
+            ),
+            (
+                "rotate the api secret key: Authorization: Bearer PLANTED-93-tok",
+                "rotate the api secret key: [redacted]",
+            ),
+            (
+                "rotate the vault key: Authorization:Bearer PLANTED-93-tok",
+                "rotate the vault key: [redacted]",
+            ),
+            (
+                "rotate the vault key: Authorization: Bearer PLANTED-93-tok and it worked",
+                "rotate the vault key: [redacted] and it worked",
+            ),
+            // A chain of headers, and a header at the end of a longer value.
+            ("key: token: password: PLANTED-chain", "key: [redacted]"),
+            ("key: abc:token: PLANTED-tail", "key: [redacted]"),
+            // A quoted inner value goes; its closing quote stays, so a second
+            // pass reads the same line.
+            ("key: token: \"PLANTED quoted\" then", "key: [redacted]\" then"),
+            // A colon inside a secret is part of the secret.
+            ("password: apikey_7Gf2Lq9:Zp4", "password: [redacted]"),
+            ("token: MyKey2024:summer", "token: [redacted]"),
+            ("token: MyApiKey2024:basic", "token: [redacted]"),
+            ("password: apikey_7Gf2Lq9:Token", "password: [redacted]"),
+            ("Authorization: deploy_key:Bearer", "Authorization: [redacted]"),
+            // A header name with nothing after it is the value itself.
+            ("the vault password: token:", "the vault password: [redacted]"),
+            // A header that is not secret-named opens nothing, and the walk
+            // still finds the secret one after it.
+            (
+                "key: Content-Type: json and token: PLANTED-x",
+                "key: [redacted] json and token: [redacted]",
+            ),
         ] {
             let scrubbed = for_model_context(line);
-            assert!(
-                !scrubbed.contains("PLANTED-93-tok"),
-                "the token survived: {scrubbed}"
-            );
-            assert!(
-                !scrubbed.contains("Bearer"),
-                "the scheme word survived: {scrubbed}"
-            );
-            assert!(
-                scrubbed.contains("Authorization: [redacted]"),
-                "the header rule did not take it: {scrubbed}"
-            );
+            assert_eq!(scrubbed, want, "from {line:?}");
             assert_eq!(for_model_context(&scrubbed), scrubbed);
-        }
-
-        // A header name with nothing after it is the value itself.
-        let bare = for_model_context("the vault password: token:");
-        assert_eq!(bare, "the vault password: [redacted]");
-
-        // A colon inside a value is not a header unless an auth scheme follows.
-        for (line, secret) in [
-            ("password: apikey_7Gf2Lq9:Zp4", "apikey_7Gf2Lq9"),
-            ("token: MyKey2024:summer", "MyKey2024"),
-        ] {
-            let scrubbed = for_model_context(line);
-            assert!(!scrubbed.contains(secret), "part of the value survived: {scrubbed}");
-            assert!(scrubbed.ends_with(": [redacted]"), "{scrubbed}");
         }
     }
 
