@@ -13,7 +13,7 @@ use rusqlite::Connection;
 use terminus_core::store::{
     Store, ARCHIVE_FORMAT, DB_FILE_NAME, DERIVED_SCHEMA, META_ARCHIVE_FORMAT, META_DERIVED_SCHEMA,
 };
-use terminus_core::testkit;
+use terminus_core::testkit::{self, age, schema};
 
 /// Every directory a spawned `terminus` may touch, all of them temporary.
 ///
@@ -1045,52 +1045,6 @@ fn verify_against_a_database_with_no_tables_is_no_store() {
     assert_eq!(tables, 0, "verify created a table");
 }
 
-/// Every `sqlite_master` row and every table's `PRAGMA table_info`.
-fn schema(path: &std::path::Path) -> Vec<String> {
-    let conn =
-        Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
-    let mut rows: Vec<String> = conn
-        .prepare("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
-        .unwrap()
-        .query_map([], |r| {
-            Ok(format!(
-                "{:?}",
-                (
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                    r.get::<_, Option<String>>(3)?,
-                )
-            ))
-        })
-        .unwrap()
-        .map(Result::unwrap)
-        .collect();
-    let tables: Vec<String> = conn
-        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
-        .unwrap()
-        .query_map([], |r| r.get(0))
-        .unwrap()
-        .map(Result::unwrap)
-        .collect();
-    for table in tables {
-        let mut info = conn.prepare("SELECT * FROM pragma_table_info(?1)").unwrap();
-        let columns = info
-            .query_map([&table], |r| {
-                Ok(format!(
-                    "{table}: {:?}",
-                    (0..6)
-                        .map(|i| r.get::<_, rusqlite::types::Value>(i))
-                        .collect::<Result<Vec<_>, _>>()?
-                ))
-            })
-            .unwrap()
-            .map(Result::unwrap);
-        rows.extend(columns);
-    }
-    rows
-}
-
 /// #77: on a format-2 store an older build wrote - `derived_schema` one behind,
 /// `decisions` without the two columns that arrived after it - `verify` says
 /// so in both modes and leaves the schema as it found it. A writable open would
@@ -1099,19 +1053,8 @@ fn schema(path: &std::path::Path) -> Vec<String> {
 fn verify_on_an_older_store_says_so_and_changes_nothing() {
     let bench = bench();
     bench.ingest("session-basic.jsonl");
-    let conn = bench.conn();
-    conn.execute(
-        "UPDATE meta SET value = ?1 WHERE key = ?2",
-        rusqlite::params![(DERIVED_SCHEMA - 1).to_string(), META_DERIVED_SCHEMA],
-    )
-    .unwrap();
-    conn.execute_batch(
-        "ALTER TABLE decisions DROP COLUMN compacted;
-         ALTER TABLE decisions DROP COLUMN dropped;",
-    )
-    .unwrap();
-    drop(conn);
     let path = bench.data_dir.join(DB_FILE_NAME);
+    age(&path);
     let before = schema(&path);
 
     for args in [&["verify"][..], &["verify", "--json"]] {

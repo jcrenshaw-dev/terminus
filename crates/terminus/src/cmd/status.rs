@@ -40,7 +40,10 @@ pub fn run(json: bool) -> Result<(), Failure> {
     // says so and creates nothing, and an older store is reported, not changed.
     let reader = match super::read::open()? {
         Opened::Ready(reader) => reader,
-        Opened::Nothing(reason) => return super::read::empty(nothing(), &reason, json),
+        Opened::Nothing(reason) => {
+            let document = document(None, 0, visible::Counts::default(), None, None);
+            return super::read::empty(document, &reason, json);
+        }
     };
     let (store, config) = (reader.store(), reader.config());
     let data_dir = store.data_dir();
@@ -78,32 +81,14 @@ pub fn run(json: bool) -> Result<(), Failure> {
         // The same numbers the human output prints, and no others: two accounts
         // of one store that could disagree is the failure a shared shape exists
         // to prevent.
-        Document::new("status")
-            .field("store", store.path().display().to_string())
-            .field("size_bytes", size_bytes(data_dir))
-            .field("sessions", counts.sessions)
-            .field("turns", counts.turns)
-            .field("watermarks", counts.watermarks)
-            .field("watermark_bytes", counts.watermark_bytes)
-            .field("excluded", config.exclusions())
-            .field(
-                "last_run",
-                match &last {
-                    None => serde_json::Value::Null,
-                    Some(run) => json!({
-                        "started_at": run.started_at,
-                        "duration_ms": run.duration_ms,
-                        "files_seen": run.files_seen,
-                        "files_committed": run.files_committed,
-                        "files_failed": run.files_failed,
-                        "bytes_read": run.bytes_read,
-                        "turns_added": run.turns_added,
-                        "error": run.error,
-                        "notes": run.notes,
-                    }),
-                },
-            )
-            .emit();
+        document(
+            Some(store.path().display().to_string()),
+            size_bytes(data_dir),
+            counts,
+            Some(config.exclusions()),
+            last.as_ref(),
+        )
+        .emit();
         return Ok(());
     }
 
@@ -162,18 +147,41 @@ pub fn run(json: bool) -> Result<(), Failure> {
     Ok(())
 }
 
-/// The document for a machine with no store: every field the shape carries, at
-/// zero or null.
-fn nothing() -> Document {
+/// The `--json` document. With no store it is called with no path, no
+/// exclusion list and no run, so every field the shape carries is there at zero
+/// or null.
+fn document(
+    store: Option<String>,
+    bytes: u64,
+    counts: visible::Counts,
+    excluded: Option<&[String]>,
+    last: Option<&Run>,
+) -> Document {
     Document::new("status")
-        .field("store", Value::Null)
-        .field("size_bytes", 0)
-        .field("sessions", 0)
-        .field("turns", 0)
-        .field("watermarks", 0)
-        .field("watermark_bytes", 0)
-        .field("excluded", Value::Null)
-        .field("last_run", Value::Null)
+        .field("store", store)
+        .field("size_bytes", bytes)
+        .field("sessions", counts.sessions)
+        .field("turns", counts.turns)
+        .field("watermarks", counts.watermarks)
+        .field("watermark_bytes", counts.watermark_bytes)
+        .field("excluded", excluded)
+        .field(
+            "last_run",
+            match last {
+                None => Value::Null,
+                Some(run) => json!({
+                    "started_at": run.started_at,
+                    "duration_ms": run.duration_ms,
+                    "files_seen": run.files_seen,
+                    "files_committed": run.files_committed,
+                    "files_failed": run.files_failed,
+                    "bytes_read": run.bytes_read,
+                    "turns_added": run.turns_added,
+                    "error": run.error,
+                    "notes": run.notes,
+                }),
+            },
+        )
 }
 
 struct Run {

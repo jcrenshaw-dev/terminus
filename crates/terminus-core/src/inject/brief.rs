@@ -217,14 +217,10 @@ fn render(
     budget: usize,
     redaction: &Redaction,
 ) -> Option<Brief> {
-    let budget = budget.min(MAX_BRIEF_CHARS);
-    if !super::frame_fits(DESCRIPTION, budget)
-        || budget - super::frame_cost(DESCRIPTION) <= chars(excerpt::ELISION)
-    {
-        return None;
-    }
-    let framed = budget;
-    let budget = budget - super::frame_cost(DESCRIPTION);
+    let framed = budget.min(MAX_BRIEF_CHARS);
+    let budget = framed
+        .checked_sub(super::frame_cost(DESCRIPTION))
+        .filter(|&room| room > chars(excerpt::ELISION))?;
     let (continuity, reads) = last_session(conn, scoped, redaction);
     let pointer = index_pointer(conn, scoped);
     if continuity.is_none() && pointer.is_none() {
