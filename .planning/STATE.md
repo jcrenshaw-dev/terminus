@@ -1,6 +1,6 @@
 # State
 
-Phase: 5 of 8 (Brief says when it cuts)
-Status: phase complete
-Next: /cad-context 6
+Phase: 6 of 8 (Simplify the 1.0.0 changes)
+Status: planned
+Next: /cad-execute 6
 Updated: 2026-10-20
