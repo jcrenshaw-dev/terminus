@@ -215,6 +215,17 @@ and the versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   now also reports a database file with no tables at all as no store, since
   that is what a store looks like while another process is still creating it
   (#77).
+- With a long project path and a small `[injection] brief_chars`, the
+  `SessionStart` brief's head line and pointer, which both name the project
+  path, used up the budget. Its quoted prompt and reply were then dropped, or
+  cut to one to three characters, and nothing in the brief said so. A quoted
+  turn the budget leaves no room for now shows as its label and `...`, such as
+  `It last asked: ...`, and is not counted as one the brief quoted, so the
+  per-prompt injection can still offer it. When the head line, the pointer and
+  those marks are over the budget, the end of the pointer is cut and ends in
+  `...`. A budget that leaves no more than three characters inside the
+  `<terminus-recall>` tags now gives no brief. The tests that failed when
+  `TMPDIR` was a long path now pass whatever its length (#46).
 
 ## [0.1.1] - 2026-10-15
 
