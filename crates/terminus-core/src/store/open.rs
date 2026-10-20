@@ -70,6 +70,12 @@ pub const META_DERIVED_SCHEMA: &str = "derived_schema";
 /// so a short overlap with a reader is not an error.
 const BUSY_TIMEOUT_MS: u32 = 5_000;
 
+/// How many prepared statements the writable connection keeps. `derive_turn`
+/// and the archive reads go through `prepare_cached`, and a loop compiles each
+/// statement once only while all of its statements fit. Twice rusqlite's
+/// default of 16, so one ingest or `reindex` loop fits with room to spare.
+const STATEMENT_CACHE_CAPACITY: usize = 32;
+
 /// The store's derived schema differs from this build's and its derived tables
 /// need rebuilding.
 ///
@@ -168,6 +174,7 @@ impl Store {
 
         let conn = Connection::open(&path).map_err(Error::Sqlite)?;
         conn.busy_timeout(std::time::Duration::from_millis(BUSY_TIMEOUT_MS.into()))?;
+        conn.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
         conn.pragma_update(None, "journal_mode", "wal")?;
         conn.pragma_update(None, "synchronous", "normal")?;
 

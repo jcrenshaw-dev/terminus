@@ -75,8 +75,8 @@ impl TurnRow<'_> {
 /// nested transaction here would be a second commit point inside that.
 ///
 /// Every statement here comes from the connection's statement cache, so a loop
-/// compiles each one once. That holds only while a loop's statements fit the
-/// cache's default 16: an ingest walk uses 13 and a `reindex` loop 11.
+/// compiles each one once. That holds while a loop's statements fit the
+/// capacity [`crate::store::Store::open`] sets.
 pub fn derive_turn(tx: &Connection, row: TurnRow<'_>) -> Result<i64> {
     let id = schema::turn_id(row.session_no, row.turn.turn_seq);
 
