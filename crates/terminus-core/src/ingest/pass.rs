@@ -148,28 +148,22 @@ pub fn run_with(data_dir: &Path, config: &Config) -> Result<PassOutcome> {
     // written is a note - failing the pass over it would stop archiving the
     // transcripts the copy exists to protect.
     summary.snapshot = match gate {
-        Gate::NotDue => Snapshotted::default(),
-        Gate::Note(note) => Snapshotted {
-            notes: vec![note],
+        Ok(None) => Snapshotted::default(),
+        Ok(Some(now)) => roll(data_dir, config, now),
+        Err(detail) => Snapshotted {
+            notes: vec![format!("no snapshot was taken: {detail}")],
             ..Snapshotted::default()
         },
-        Gate::Due { now } => roll(data_dir, config, now),
     };
     Ok(PassOutcome::Ran(summary))
 }
 
-/// Whether [`locked`] found a snapshot due, carried out to [`run_with`].
-enum Gate {
-    /// Snapshots are off, or the interval has not elapsed.
-    NotDue,
-    /// Due, as of `now` on SQLite's clock, the reading the stamp records.
-    Due { now: i64 },
-    /// The clock or the stamp could not be read. No snapshot is taken.
-    Note(String),
-}
-
 /// Is a rolling snapshot due (STOR-06, D-15)? Asked of the pass's own store,
 /// inside the lock, after the `runs` row has committed.
+///
+/// `Some(now)` when one is due, as of `now` on SQLite's clock, the reading the
+/// stamp records. `None` when snapshots are off or the interval has not
+/// elapsed.
 ///
 /// **The gate is answered before any expensive work.** The hook spawn is the
 /// scheduler and fires on every prompt; a snapshot of the real store is 1.087 GB
@@ -184,23 +178,22 @@ enum Gate {
 /// between two readings of one clock rather than between SQLite's and the
 /// process's.
 ///
-/// **Nothing here raises.** A failed read is a note; see [`Snapshotted`].
-fn due(store: &crate::store::Store, config: &Config) -> Gate {
+/// **Nothing here raises.** A failed read of the clock or the stamp comes back
+/// as `Err` with its text, and [`run_with`] writes the note; see
+/// [`Snapshotted`].
+fn due(store: &crate::store::Store, config: &Config) -> std::result::Result<Option<i64>, String> {
     if !config.snapshots_enabled() {
-        return Gate::NotDue;
+        return Ok(None);
     }
 
-    let now: i64 = match store
+    let now: i64 = store
         .conn()
         .query_row("SELECT strftime('%s', 'now')", [], |r| {
             r.get::<_, String>(0)
-        }) {
-        Ok(text) => match text.parse() {
-            Ok(seconds) => seconds,
-            Err(e) => return Gate::Note(format!("no snapshot was taken: {e}")),
-        },
-        Err(e) => return Gate::Note(format!("no snapshot was taken: {e}")),
-    };
+        })
+        .map_err(|e| e.to_string())?
+        .parse()
+        .map_err(|e: std::num::ParseIntError| e.to_string())?;
 
     match store.meta_int(META_LAST_SNAPSHOT) {
         // Not yet due. The common case by a wide margin - a machine that fires
@@ -210,11 +203,11 @@ fn due(store: &crate::store::Store, config: &Config) -> Gate {
             if now.saturating_sub(last)
                 < (config.snapshot_interval_hours().saturating_mul(3_600) as i64) =>
         {
-            Gate::NotDue
+            Ok(None)
         }
         // Never taken one, or the interval has elapsed.
-        Ok(_) => Gate::Due { now },
-        Err(e) => Gate::Note(format!("no snapshot was taken: {e}")),
+        Ok(_) => Ok(Some(now)),
+        Err(e) => Err(e.to_string()),
     }
 }
 
@@ -269,7 +262,10 @@ fn roll(data_dir: &Path, config: &Config, now: i64) -> Snapshotted {
 
 /// Everything the ingest lock covers, from taking it to the `runs` row and
 /// the snapshot gate.
-fn locked(data_dir: &Path, config: &Config) -> Result<(PassOutcome, Gate)> {
+fn locked(
+    data_dir: &Path,
+    config: &Config,
+) -> Result<(PassOutcome, std::result::Result<Option<i64>, String>)> {
     let started = Instant::now();
 
     // Once, for the whole walk. A per-file lock would be two thousand syscalls
@@ -277,7 +273,7 @@ fn locked(data_dir: &Path, config: &Config) -> Result<(PassOutcome, Gate)> {
     // the invariant `ingest_locked` rests on: the guard makes this the only
     // writer, so nothing changes the store between its read and its write.
     let _guard = match lock::try_acquire(data_dir)? {
-        Attempt::Held => return Ok((PassOutcome::LockHeld, Gate::NotDue)),
+        Attempt::Held => return Ok((PassOutcome::LockHeld, Ok(None))),
         Attempt::Acquired(guard) => guard,
     };
 
