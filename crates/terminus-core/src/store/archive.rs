@@ -201,7 +201,6 @@ pub struct Row {
 /// Every block row of one session as stored, in `block_no` order, with nothing
 /// checked. `verify` reads through this, because checking the rows is its job.
 pub fn rows(conn: &Connection, session_key: &str) -> Result<Vec<Row>> {
-    block_reads::record_key(conn, session_key);
     let mut statement = conn.prepare_cached(
         "SELECT b.block_no, b.bytes, b.hash
            FROM blocks b JOIN sessions s USING (session_no)
@@ -274,8 +273,8 @@ pub(crate) fn append_state(
         .filter(|size| !uncompressed_len.is_multiple_of(*size))
         .map(|size| (uncompressed_len / size) as i64);
 
+    block_reads::record(conn, session_no);
     if every_row {
-        block_reads::record(conn, session_no);
         let mut statement = conn.prepare_cached(
             "SELECT block_no, bytes, hash FROM blocks WHERE session_no = ?1 ORDER BY block_no",
         )?;
@@ -297,7 +296,6 @@ pub(crate) fn append_state(
         });
     }
 
-    block_reads::record(conn, session_no);
     let mut statement = conn.prepare_cached(
         "SELECT block_no, hash FROM blocks WHERE session_no = ?1 ORDER BY block_no",
     )?;
@@ -305,14 +303,13 @@ pub(crate) fn append_state(
         .query_map([session_no], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<std::result::Result<_, _>>()?;
     let hashes = hash_list(rows.iter().map(|(no, hash)| (*no, hash.as_slice())));
-    if tail_no.is_some() {
-        block_reads::record(conn, session_no);
-    }
     let tail: Option<Vec<u8>> = match tail_no {
-        Some(n) => conn
-            .prepare_cached("SELECT bytes FROM blocks WHERE session_no = ?1 AND block_no = ?2")?
-            .query_row(rusqlite::params![session_no, n], |r| r.get(0))
-            .optional()?,
+        Some(n) => {
+            block_reads::record(conn, session_no);
+            conn.prepare_cached("SELECT bytes FROM blocks WHERE session_no = ?1 AND block_no = ?2")?
+                .query_row(rusqlite::params![session_no, n], |r| r.get(0))
+                .optional()?
+        }
         None => None,
     };
     Ok(AppendState {
@@ -398,7 +395,7 @@ fn numbered_rows(conn: &Connection, session_no: i64) -> Result<Vec<(i64, Vec<u8>
 /// Each entry names the database file the reading connection is on as well as
 /// the `session_no`, because every temp store numbers its sessions from 0 and
 /// the tests in one binary run in parallel. Tests count one session's entries
-/// before and after a pass and never call [`block_reads::reset`] mid-binary.
+/// before and after a pass, and the log is never cleared.
 /// Without the `testkit` feature [`block_reads::record`] compiles to nothing.
 #[cfg(feature = "testkit")]
 pub mod block_reads {
@@ -420,25 +417,8 @@ pub mod block_reads {
         log().push((db, session_no));
     }
 
-    /// For a reader that only has the key. A key with no `sessions` row reads
-    /// no rows, so it records nothing.
-    pub(super) fn record_key(conn: &Connection, session_key: &str) {
-        if let Ok(session_no) = conn.query_row(
-            "SELECT session_no FROM sessions WHERE session_key = ?1",
-            [session_key],
-            |r| r.get(0),
-        ) {
-            record(conn, session_no);
-        }
-    }
-
-    /// Forget every entry.
-    pub fn reset() {
-        log().clear();
-    }
-
-    /// Every entry since the last [`reset`], `(database file, session_no)`,
-    /// in order.
+    /// Every entry the binary has logged, `(database file, session_no)`, in
+    /// order. The log is never cleared.
     pub fn entries() -> Vec<(PathBuf, i64)> {
         log().clone()
     }
@@ -450,9 +430,6 @@ pub mod block_reads {
 
     #[inline(always)]
     pub(super) fn record(_conn: &Connection, _session_no: i64) {}
-
-    #[inline(always)]
-    pub(super) fn record_key(_conn: &Connection, _session_key: &str) {}
 }
 
 /// Hashes numbered `0..n` with no gap, each 32 bytes.
