@@ -570,11 +570,11 @@ fn redact_header_spans(line: &str, out: &mut String) {
         }
         let value_at = skip_blanks(bytes, colon + 1);
         let (span_start, first_end) = flag_value_span(bytes, value_at);
-        // `key: Authorization: Bearer <value>` (#93): the value run here is the
-        // next header's own name and colon. Taking it would step the walk past
-        // that colon and leave the real header untested, so this colon is only
-        // punctuation and the next one gets its own test.
-        if span_start == value_at && is_secret_header_name(&line[span_start..first_end]) {
+        // `key: Authorization: Bearer <value>` (#93): the value run here opens
+        // the next header. Taking it would step the walk past that header's
+        // colon and leave it untested, so this colon is only punctuation and
+        // the next one gets its own test.
+        if span_start == value_at && opens_a_secret_header(line, span_start, first_end) {
             at = colon + 1;
             continue;
         }
@@ -608,11 +608,21 @@ fn redact_header_spans(line: &str, out: &mut String) {
     out.push_str(&line[copied..]);
 }
 
-/// Is this run a secret name and its colon, such as `Authorization:`?
-fn is_secret_header_name(run: &str) -> bool {
-    run.strip_suffix(':').is_some_and(|name| {
-        !name.is_empty() && name.bytes().all(is_name_byte) && is_secret_name(name)
-    })
+/// Does the run at `start..end` open a secret header that has a value of its
+/// own, such as `Authorization:` or `Authorization:Bearer`?
+///
+/// One with nothing after it is not deferred to, or the run would go unredacted.
+fn opens_a_secret_header(line: &str, start: usize, end: usize) -> bool {
+    let Some(offset) = line[start..end].find(':') else {
+        return false;
+    };
+    let name = &line[start..start + offset];
+    if name.is_empty() || !name.bytes().all(is_name_byte) || !is_secret_name(name) {
+        return false;
+    }
+    let bytes = line.as_bytes();
+    let (value_start, value_end) = flag_value_span(bytes, skip_blanks(bytes, start + offset + 1));
+    value_end > value_start
 }
 
 /// Is this byte part of a header name?
@@ -1482,6 +1492,7 @@ mod tests {
         for line in [
             "rotate the vault key: Authorization: Bearer PLANTED-93-tok",
             "rotate the api secret key: Authorization: Bearer PLANTED-93-tok",
+            "rotate the vault key: Authorization:Bearer PLANTED-93-tok",
         ] {
             let scrubbed = for_model_context(line);
             assert!(
@@ -1498,6 +1509,10 @@ mod tests {
             );
             assert_eq!(for_model_context(&scrubbed), scrubbed);
         }
+
+        // A header name with nothing after it is the value itself.
+        let bare = for_model_context("the vault password: token:");
+        assert_eq!(bare, "the vault password: [redacted]");
     }
 
     /// Rules 3 and 5 run first, so a named `sk-` value keeps their marker and
