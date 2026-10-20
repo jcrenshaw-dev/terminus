@@ -1454,3 +1454,41 @@ fn a_pass_over_a_session_whose_file_is_gone_reads_its_block_rows() {
         "the session whose file is gone read no rows"
     );
 }
+
+#[test]
+fn a_pass_over_an_unchanged_file_reads_none_of_its_block_rows() {
+    let bench = bench();
+    let still = bench.place(
+        PROJECT,
+        &format!("{}.jsonl", uuid(33)),
+        "session-basic.jsonl",
+    );
+    let grown = bench.place(
+        PROJECT,
+        &format!("{}.jsonl", uuid(34)),
+        "session-basic.jsonl",
+    );
+    let first = bench.pass(&[]);
+    assert_eq!(first.files_committed, 2, "{first:?}");
+    // `observe_new` reads a session's stream once, on the pass it becomes
+    // final. One more pass settles that, so the counted pass is steady state.
+    bench.pass(&[]);
+
+    append(&grown, &last_line("session-basic.jsonl"));
+    let (still_key, grown_key) = (key_of(&still), key_of(&grown));
+    let still_before = reads_of(&bench, &still_key);
+    let grown_before = reads_of(&bench, &grown_key);
+
+    let summary = bench.pass(&[]);
+    assert_eq!(summary.files_committed, 1, "{summary:?}");
+    assert!(summary.failures.is_empty(), "{:?}", summary.failures);
+    assert_eq!(
+        reads_of(&bench, &still_key) - still_before,
+        0,
+        "the unchanged file read block rows"
+    );
+    assert!(
+        reads_of(&bench, &grown_key) > grown_before,
+        "the grown file read no rows"
+    );
+}

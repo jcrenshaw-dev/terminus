@@ -245,7 +245,7 @@ pub(crate) struct AppendState {
 }
 
 impl AppendState {
-    /// Nothing read: what an evicted session gets, since it has no rows.
+    /// Nothing read: what a session never archived gets, since it has no rows.
     pub(crate) fn empty() -> Self {
         AppendState {
             hashes: Ok(Vec::new()),
