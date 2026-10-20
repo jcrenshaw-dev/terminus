@@ -124,9 +124,11 @@ pub fn run_with(
     // written in another.
     let (mut store, _recovered) = crate::recover::recover(data_dir)?;
 
-    // Which file holds this key in the store is asked in `Existing::read`, the
-    // one place the walk, backfill and this path all go through.
+    // This key's row only, after recovery, which rewrites rows. The walk and
+    // backfill read every row through the same query, and `Existing::read`
+    // asks it which file holds the key on all three paths.
     let session_key = path_key(&canonical)?;
+    let rows = read_rows(store.conn(), Some(&session_key))?;
 
     // One resolver for one invocation: a single file has one `cwd`, so the memo
     // buys nothing here and costs nothing either, and `ingest_locked` takes the
@@ -134,6 +136,7 @@ pub fn run_with(
     let mut projects = Resolver::new();
     ingest_locked(
         &mut store,
+        &rows,
         &canonical,
         session_key,
         started,
@@ -188,11 +191,12 @@ pub(crate) enum Claim {
 /// refused without being opened, because ingest appends from the watermark and
 /// would mix two files into one stream with nothing to detect it.
 ///
-/// The store is asked before the walk is: a file the archived session was not
-/// read from, while that one is still there, never takes the key, so the
-/// session's own file can, whichever of the two sorts first.
+/// The archived session's row, read at pass start, is asked before `taken` is:
+/// a file the archived session was not read from, while that one is still
+/// there, never takes the key, so the session's own file can, whichever of the
+/// two sorts first.
 pub(crate) fn claim(
-    conn: &Connection,
+    rows: &Rows,
     taken: &mut std::collections::HashMap<String, PathBuf>,
     path: &Path,
 ) -> Result<Claim> {
@@ -200,7 +204,9 @@ pub(crate) fn claim(
     let session_key = path_key(&file)?;
     Ok(match taken.get(&session_key) {
         None => {
-            if let Holder::Other(holder) = stored_holder(conn, &session_key, &file)? {
+            let row = rows.get(&session_key);
+            let stored = row.and_then(|r| r.transcript_path.as_deref());
+            if let Holder::Other(holder) = Holder::of(stored, row.is_some(), &file) {
                 return Ok(Claim::Held(key_held(&file, &holder)));
             }
             taken.insert(session_key.clone(), file.clone());
@@ -209,23 +215,6 @@ pub(crate) fn claim(
         Some(holder) if *holder == file => Claim::Same,
         Some(holder) => Claim::Held(key_held(&file, holder)),
     })
-}
-
-/// [`Holder::of`] for one key, read straight off the store.
-fn stored_holder(conn: &Connection, session_key: &str, path: &Path) -> Result<Holder> {
-    let stored: Option<Option<String>> = conn
-        .query_row(
-            "SELECT m.transcript_path FROM sessions s JOIN session_meta m USING (session_key)
-             WHERE s.session_key = ?1",
-            [session_key],
-            |r| r.get(0),
-        )
-        .optional()?;
-    Ok(Holder::of(
-        stored.as_ref().and_then(|s| s.as_deref()),
-        stored.is_some(),
-        path,
-    ))
 }
 
 /// Who owns the `runs` row for this file's transaction.
@@ -253,8 +242,10 @@ pub(crate) enum RunRow {
 /// sidecar files report their parent's sessionId, and keying on that writes a
 /// 3 KB agent transcript over a parent session's archive. The watermark is
 /// keyed on the same value.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn ingest_locked(
     store: &mut Store,
+    rows: &Rows,
     path: &Path,
     session_key: String,
     started: Instant,
@@ -262,7 +253,7 @@ pub(crate) fn ingest_locked(
     projects: &mut Resolver,
     mode: CaptureMode,
 ) -> Result<Outcome> {
-    let existing = Existing::read(store.conn(), &session_key, path)?;
+    let existing = Existing::read(store.conn(), rows.get(&session_key), &session_key, path)?;
     let prepared = prepare(path, session_key, &existing, mode)?;
     apply(store, prepared, started, run_row, projects)
 }
@@ -935,10 +926,10 @@ pub mod fault {
 
 /// What the store already holds for this transcript.
 ///
-/// Read by the writer and handed to [`prepare`], which is what lets prepare run
-/// on a thread with no connection of its own. A file no longer than its
-/// watermark costs three queries and a stat and reads no block row; one that
-/// grew adds the next turn number, every hash and at most the tail row (#85).
+/// Built by the writer from the file's [`Row`] and handed to [`prepare`], which
+/// is what lets prepare run on a thread with no connection of its own. A file
+/// no longer than its watermark costs a stat and no query; one that grew adds
+/// the next turn number, every hash and at most the tail row (#85).
 pub(crate) struct Existing {
     watermark: u64,
     /// Whether `session_meta.agent_meta` already holds this sidecar's meta
@@ -1031,80 +1022,106 @@ struct ExistingSession {
     checksum: [u8; 32],
 }
 
-impl Existing {
-    /// `path` is the file the pass will read under `session_key`.
-    pub(crate) fn read(conn: &Connection, session_key: &str, path: &Path) -> Result<Existing> {
-        let watermark: Option<i64> = conn
-            .query_row(
-                "SELECT byte_offset FROM watermarks WHERE transcript_path = ?1",
-                [session_key],
-                |r| r.get(0),
-            )
-            .optional()?;
-        // All three flags off the one `session_meta` row rather than three
-        // round trips: a pass reads this for every one of two thousand
-        // transcripts.
-        type MetaFlags = (
-            bool,
-            bool,
-            bool,
-            i64,
-            Option<String>,
-            Option<i64>,
-            Option<String>,
-        );
-        let (
-            agent_meta_stored,
-            diverged,
-            evicted,
-            uncompressed_len,
-            stored_capture_mode,
-            block_size,
-            transcript_path,
-        ): MetaFlags = conn
-            .query_row(
-                "SELECT agent_meta IS NOT NULL, coalesce(transcript_diverged, 0) <> 0,
-                        coalesce(is_evicted, 0) <> 0, uncompressed_len, capture_mode,
-                        block_size, transcript_path
-                 FROM session_meta WHERE session_key = ?1",
-                [session_key],
-                |r| {
-                    Ok((
-                        r.get(0)?,
-                        r.get(1)?,
-                        r.get(2)?,
-                        r.get(3)?,
-                        r.get(4)?,
-                        r.get(5)?,
-                        r.get(6)?,
-                    ))
-                },
-            )
-            .optional()?
-            .unwrap_or((false, false, false, 0, None, None, None));
-        let uncompressed_len = uncompressed_len.max(0) as u64;
+/// One archived session's `sessions`, `session_meta` and `watermarks` rows, as
+/// [`read_rows`] found them.
+pub(crate) struct Row {
+    session_no: i64,
+    /// `None` only when the session has no `session_meta` row, since the
+    /// column is `NOT NULL`. Every flag below then reads as unset.
+    checksum: Option<Vec<u8>>,
+    agent_meta_stored: bool,
+    diverged: bool,
+    evicted: bool,
+    uncompressed_len: i64,
+    stored_capture_mode: Option<String>,
+    block_size: Option<i64>,
+    transcript_path: Option<String>,
+    watermark: Option<i64>,
+}
 
-        // LEFT JOIN, and the difference is the archive. An inner join returns
-        // no row in two very different situations - this transcript has never
-        // been ingested, and this transcript IS archived but lost its
-        // `session_meta` row - and the caller reads "no row" as "brand new". A
-        // pass over a grown transcript then wrote the TAIL as the whole
-        // session, destroying every archived byte before it, allocated a second
-        // `session_no` that no longer matched the `sessions` row, and left the
-        // watermark ahead of the committed stream: the one state STOR-02 says a
-        // store must never reach, reached by a pass that exits 0. `verify` then
-        // certified it, because the checksum had been minted over the truncated
-        // stream - so the obvious response to `verify` naming a session (re-run
-        // ingest) was what destroyed it.
-        let session = conn
-            .query_row(
-                "SELECT s.session_no, m.checksum
-                 FROM sessions s LEFT JOIN session_meta m USING (session_key)
-                 WHERE s.session_key = ?1",
-                [session_key],
-                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<Vec<u8>>>(1)?)),
-            )
-            .optional()?;
+/// Every [`Row`] a pass reads, by session key.
+pub(crate) type Rows = std::collections::HashMap<String, Row>;
+
+/// The one definition of a session's row. It runs from `sessions`, so a key
+/// with no row here is a file never archived, and its watermark is 0: recovery
+/// removes every non-zero watermark with no `sessions` row before any file is
+/// read, which is why this is read after `recover::recover` and never before.
+///
+/// LEFT JOIN on `session_meta`, and the difference is the archive. An inner
+/// join returns no row in two very different situations - this transcript has
+/// never been ingested, and this transcript IS archived but lost its
+/// `session_meta` row - and the caller reads "no row" as "brand new". A pass
+/// over a grown transcript then wrote the TAIL as the whole session,
+/// destroying every archived byte before it, allocated a second `session_no`
+/// that no longer matched the `sessions` row, and left the watermark ahead of
+/// the committed stream: the one state STOR-02 says a store must never reach,
+/// reached by a pass that exits 0. `verify` then certified it, because the
+/// checksum had been minted over the truncated stream - so the obvious response
+/// to `verify` naming a session (re-run ingest) was what destroyed it.
+const ROWS: &str = "SELECT s.session_key, s.session_no, m.checksum, m.agent_meta IS NOT NULL,
+        coalesce(m.transcript_diverged, 0) <> 0, coalesce(m.is_evicted, 0) <> 0,
+        coalesce(m.uncompressed_len, 0), m.capture_mode, m.block_size, m.transcript_path,
+        w.byte_offset
+ FROM sessions s
+ LEFT JOIN session_meta m USING (session_key)
+ LEFT JOIN watermarks w ON w.transcript_path = s.session_key";
+
+/// Read every archived session's row in one query, or with `only` just that
+/// key's, so ingesting one named file does not read the whole store.
+///
+/// Read once, at pass start, and never stale inside the pass: `claim` lets a
+/// key through once per walk, so no file's apply changes a row a later file
+/// reads.
+pub(crate) fn read_rows(conn: &Connection, only: Option<&str>) -> Result<Rows> {
+    let one;
+    let (sql, key) = match only {
+        None => (ROWS, None),
+        Some(key) => {
+            one = format!("{ROWS} WHERE s.session_key = ?1");
+            (one.as_str(), Some(key))
+        }
+    };
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(key), |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                Row {
+                    session_no: r.get(1)?,
+                    checksum: r.get(2)?,
+                    agent_meta_stored: r.get(3)?,
+                    diverged: r.get(4)?,
+                    evicted: r.get(5)?,
+                    uncompressed_len: r.get(6)?,
+                    stored_capture_mode: r.get(7)?,
+                    block_size: r.get(8)?,
+                    transcript_path: r.get(9)?,
+                    watermark: r.get(10)?,
+                },
+            ))
+        })?
+        .collect::<rusqlite::Result<Rows>>()?;
+    Ok(rows)
+}
+
+impl Existing {
+    /// `path` is the file the pass will read under `session_key`, and `row`
+    /// is that key's row from [`read_rows`], `None` for a file never archived.
+    pub(crate) fn read(
+        conn: &Connection,
+        row: Option<&Row>,
+        session_key: &str,
+        path: &Path,
+    ) -> Result<Existing> {
+        let watermark = row.and_then(|r| r.watermark);
+        let agent_meta_stored = row.is_some_and(|r| r.agent_meta_stored);
+        let diverged = row.is_some_and(|r| r.diverged);
+        let evicted = row.is_some_and(|r| r.evicted);
+        let uncompressed_len = row.map_or(0, |r| r.uncompressed_len).max(0) as u64;
+        let stored_capture_mode = row.and_then(|r| r.stored_capture_mode.clone());
+        let block_size = row.and_then(|r| r.block_size);
+        let transcript_path = row.and_then(|r| r.transcript_path.clone());
+        let session = row.map(|r| (r.session_no, r.checksum.clone()));
 
         // An archived session with no metadata row is damaged, not absent.
         // Phase 1 refuses rather than guessing: there is no checksum to verify
@@ -1668,7 +1685,8 @@ mod tests {
 
         let mut store = Store::open(&data_dir).unwrap();
         let key = path_key(&path).unwrap();
-        let existing = Existing::read(store.conn(), &key, &path).unwrap();
+        let rows = read_rows(store.conn(), Some(&key)).unwrap();
+        let existing = Existing::read(store.conn(), rows.get(&key), &key, &path).unwrap();
         assert!(existing.fetched.is_none(), "an unchanged file fetched rows");
         let mark = watermark(store.conn(), &key);
         let rows = block_rows(store.conn());
@@ -1694,7 +1712,8 @@ mod tests {
         assert_eq!(watermark(store.conn(), &key), mark);
         assert_eq!(block_rows(store.conn()), rows);
 
-        let existing = Existing::read(store.conn(), &key, &path).unwrap();
+        let rows = read_rows(store.conn(), Some(&key)).unwrap();
+        let existing = Existing::read(store.conn(), rows.get(&key), &key, &path).unwrap();
         let prepared = prepare(&path, key.clone(), &existing, CaptureMode::Full).unwrap();
         let outcome = apply(
             &mut store,

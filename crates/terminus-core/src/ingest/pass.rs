@@ -293,14 +293,21 @@ fn locked(data_dir: &Path, config: &Config) -> Result<PassOutcome> {
     // carry 63 distinct `cwd` values, so the memo is what keeps the git spawns
     // proportional to the projects rather than to the files.
     let mut projects = Resolver::new();
-    let walked = walk(
-        &mut store,
-        data_dir,
-        &found.transcripts,
-        &mut summary,
-        &mut projects,
-        config.capture_mode(),
-    );
+    // Every file's row in one query, after recovery and the drain and before
+    // the walk (#85). Recovery's re-key and twin repair rewrite these rows, so
+    // reading them any earlier would walk a store that no longer exists. A
+    // read that fails is the walk failing, and still leaves its `runs` row.
+    let walked = crate::ingest::read_rows(store.conn(), None).and_then(|rows| {
+        walk(
+            &mut store,
+            &rows,
+            data_dir,
+            &found.transcripts,
+            &mut summary,
+            &mut projects,
+            config.capture_mode(),
+        )
+    });
 
     // FEED-02, AFTER the walk and before the `runs` row. The turns this pass
     // just committed are what a session's idleness is measured from and what a
@@ -358,6 +365,7 @@ fn locked(data_dir: &Path, config: &Config) -> Result<PassOutcome> {
 /// failure of the pass as a whole comes back as `Err`.
 fn walk(
     store: &mut crate::store::Store,
+    rows: &crate::ingest::Rows,
     data_dir: &Path,
     transcripts: &[PathBuf],
     summary: &mut Summary,
@@ -382,7 +390,7 @@ fn walk(
         }
 
         summary.files_walked += 1;
-        let (path, session_key) = match crate::ingest::claim(store.conn(), &mut taken, path) {
+        let (path, session_key) = match crate::ingest::claim(rows, &mut taken, path) {
             Ok(Claim::Ingest { file, session_key }) => (file, session_key),
             Ok(Claim::Same) => continue,
             Ok(Claim::Held(e)) | Err(e) => {
@@ -395,6 +403,7 @@ fn walk(
         // walk's, measured by the caller, not this file's.
         match crate::ingest::ingest_locked(
             store,
+            rows,
             path,
             session_key,
             Instant::now(),

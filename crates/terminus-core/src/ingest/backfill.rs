@@ -55,7 +55,7 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::ingest::lock::{self, Attempt};
 use crate::ingest::pass::{note, PassOutcome, Summary};
-use crate::ingest::{claim, Claim, Existing, Outcome, Prepared, RunRow};
+use crate::ingest::{claim, read_rows, Claim, Existing, Outcome, Prepared, Rows, RunRow};
 use crate::project::Resolver;
 use crate::store::Store;
 
@@ -130,15 +130,21 @@ pub fn run_with(data_dir: &Path, config: &Config, workers: usize) -> Result<Repo
     let mut projects = Resolver::new();
     let mut threads: HashSet<ThreadId> = HashSet::new();
 
-    let walked = pipeline(
-        &mut store,
-        &found.transcripts,
-        &mut summary,
-        &mut projects,
-        workers,
-        &mut threads,
-        config.capture_mode(),
-    );
+    // Every file's row in one query, after recovery and before the pipeline,
+    // exactly as the sequential walk reads them (#85). A read that fails is
+    // the walk failing, and still leaves its `runs` row.
+    let walked = read_rows(store.conn(), None).and_then(|rows| {
+        pipeline(
+            &mut store,
+            &rows,
+            &found.transcripts,
+            &mut summary,
+            &mut projects,
+            workers,
+            &mut threads,
+            config.capture_mode(),
+        )
+    });
     summary.duration = started.elapsed();
 
     // One row, whatever happened (D-10, D-14).
@@ -207,8 +213,10 @@ struct Done {
 /// failure is recorded against its path and skipped (D-12), because the tree is
 /// the unit of work and one damaged transcript is not a reason to archive none
 /// of it.
+#[allow(clippy::too_many_arguments)]
 fn pipeline(
     store: &mut Store,
+    rows: &Rows,
     transcripts: &[PathBuf],
     summary: &mut Summary,
     projects: &mut Resolver,
@@ -284,7 +292,7 @@ fn pipeline(
         let mut outcome = Ok(());
         for batch in transcripts.chunks(round) {
             if let Err(e) = dispatch_round(
-                store, batch, summary, projects, threads, &mut taken, &job_tx, &done_rx,
+                store, rows, batch, summary, projects, threads, &mut taken, &job_tx, &done_rx,
             ) {
                 outcome = Err(e);
                 break;
@@ -297,11 +305,12 @@ fn pipeline(
     })
 }
 
-/// Read one round's `Existing` rows, hand them out, drain the results and apply
+/// Build one round's `Existing`, hand them out, drain the results and apply
 /// them in discovery order.
 #[allow(clippy::too_many_arguments)]
 fn dispatch_round(
     store: &mut Store,
+    rows: &Rows,
     batch: &[PathBuf],
     summary: &mut Summary,
     projects: &mut Resolver,
@@ -311,9 +320,10 @@ fn dispatch_round(
     done_rx: &mpsc::Receiver<Done>,
 ) -> Result<()> {
     // Two paths can share a key (D-01, D-03), and [`claim`] lets only the first
-    // through, so no two jobs in this round share one. That is what makes
-    // reading a whole round's rows before applying any of it safe: no apply in
-    // the round can change a row another job in it already read.
+    // through, across rounds, so no two jobs in this run share one. That is
+    // what makes reading every row once before the run, and building a whole
+    // round's `Existing` before applying any of it, safe: no apply in the run
+    // can change a row another job reads.
     let mut sent = 0usize;
     let mut results: Vec<Option<Result<Prepared>>> = (0..batch.len()).map(|_| None).collect();
     // The file each slot reads, which is a link's target, not the link.
@@ -321,9 +331,9 @@ fn dispatch_round(
 
     for (slot, path) in batch.iter().enumerate() {
         summary.files_walked += 1;
-        let claimed = claim(store.conn(), taken, path).and_then(|claim| match claim {
+        let claimed = claim(rows, taken, path).and_then(|claim| match claim {
             Claim::Ingest { file, session_key } => {
-                read_existing(store, file, session_key).map(Some)
+                read_existing(store, rows, file, session_key).map(Some)
             }
             Claim::Same => Ok(None),
             Claim::Held(e) => Err(e),
@@ -413,12 +423,13 @@ fn commit_one(
     Ok(())
 }
 
-/// What the store already holds for one transcript, read on the writer thread.
+/// What the store already holds for one transcript, built on the writer thread
+/// from the row read at the start of the run.
 ///
 /// `path` is the file [`claim`] resolved, a link's target and never the link,
 /// so the worker reads, and the store records, that file (D-03).
-fn read_existing(store: &Store, path: PathBuf, session_key: String) -> Result<Job> {
-    let existing = Existing::read(store.conn(), &session_key, &path)?;
+fn read_existing(store: &Store, rows: &Rows, path: PathBuf, session_key: String) -> Result<Job> {
+    let existing = Existing::read(store.conn(), rows.get(&session_key), &session_key, &path)?;
     Ok(Job {
         path,
         session_key,
