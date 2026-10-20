@@ -126,18 +126,6 @@ impl Scoped {
         self.project.as_deref()
     }
 
-    /// Distinct `session_meta.project` values the config excludes. Private, so
-    /// a read site reaches the rule through [`Scoped::push_filter`] or
-    /// [`Scoped::admits`] and cannot rebuild it.
-    fn excluded_projects(&self) -> &[String] {
-        &self.excluded_projects
-    }
-
-    /// Distinct `session_meta.project_pre_worktree` values the config excludes.
-    fn excluded_pre_worktree(&self) -> &[String] {
-        &self.excluded_pre_worktree
-    }
-
     /// May a turn whose session carries these two keys be served?
     ///
     /// No when this scope names a project and the turn's is not exactly that
@@ -156,8 +144,8 @@ impl Scoped {
         let hidden = |key: Option<&str>, excluded: &[String]| {
             key.is_some_and(|k| excluded.iter().any(|e| e == k))
         };
-        !hidden(project, self.excluded_projects())
-            && !hidden(pre_worktree, self.excluded_pre_worktree())
+        !hidden(project, &self.excluded_projects)
+            && !hidden(pre_worktree, &self.excluded_pre_worktree)
     }
 
     /// Restrict a query over `session_meta m` to this scope: its project when
@@ -185,8 +173,8 @@ impl Scoped {
             params.push(Box::new(project.to_owned()));
         }
         for (column, excluded) in [
-            ("m.project", self.excluded_projects()),
-            ("m.project_pre_worktree", self.excluded_pre_worktree()),
+            ("m.project", &self.excluded_projects),
+            ("m.project_pre_worktree", &self.excluded_pre_worktree),
         ] {
             if excluded.is_empty() {
                 continue;
