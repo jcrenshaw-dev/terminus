@@ -11,7 +11,7 @@ The archive is the product, so it is built first and everything else is built on
 - [x] **Phase 3: One excluded-project rule** - the rule that keeps an excluded project out of recall lives in one place
 - [x] **Phase 4: Steady-state ingest pass** - a pass over unchanged transcripts stops reading their archive state
 - [x] **Phase 5: Brief says when it cuts** - a brief that drops its quoted turns says so, and the tests stop depending on the temp path's length
-- [ ] **Phase 6: Simplify the 1.0.0 changes** - a simplify pass over the code the 1.0.0 fixes change, with no change in behavior
+- [x] **Phase 6: Simplify the 1.0.0 changes** - a simplify pass over the code the 1.0.0 fixes change, with no change in behavior
 - [ ] **Phase 7: README for 1.0.0** - the README describes 1.0.0 and what versions mean from here
 - [ ] **Phase 8: Doc and comment sweep** - docs and code comments describe the code as it is, with the versioning rule written down
 

@@ -1,0 +1,21 @@
+{
+  "auto_passed": 7,
+  "gaps": 0,
+  "added": 0,
+  "skipped": 0,
+  "rejected": 0,
+  "rejected_entries": [],
+  "skipped_entries": [
+    {
+      "list": "human_checks",
+      "reason": "already-recorded",
+      "item": 8,
+      "status": "pending",
+      "entry": {
+        "name": "Issue #90 is closed by the merged change",
+        "expected": "The landing PR body carries `Fixes #90`, and #90 shows closed on GitHub once that PR merges",
+        "why_human": "Out-of-reach resource: the landing PR does not exist yet (the work sits unmerged on traders), and reading a PR body and an issue's state means querying GitHub over the network, which this pass may not do. Code inspection cannot settle it."
+      }
+    }
+  ]
+}
