@@ -1,0 +1,57 @@
+{
+  "phase": "4",
+  "trigger": "risk_surface",
+  "discriminator": "plan-1",
+  "round": 1,
+  "base": "f21424f",
+  "head": "54ab34f",
+  "base_id": "f21424fd33b3be00367939503e821ca14461a94c",
+  "head_id": "54ab34fe3eb614dd5bd8793df6cf45d11e97bca8",
+  "voices": [
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol"
+    }
+  ],
+  "citations": {
+    "checked": true
+  },
+  "entries": [
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol",
+      "file": "crates/terminus-core/src/ingest/mod.rs",
+      "line": 413,
+      "severity": "high",
+      "claim": "The length-based fetch gate does not protect the append from a truncate-and-regrow race between validation and the tail read, so a file that was shrunk can be appended instead of refused.",
+      "failure_scenario": "`Existing::read` stats a file longer than the watermark and fetches the stored hashes. `prepare` then opens/checks it at or above the watermark. Immediately after that length check, another process truncates the same inode and rewrites it with different prefix bytes plus a newline-terminated tail extending beyond the old watermark. The tail read starts at the old watermark and `consumed > 0`; because `fetched` is present, this branch proceeds without revalidating the archived prefix. It appends the rewritten file's tail to hashes for the old prefix and later advances the watermark, rather than reporting the intervening shrink/divergence.",
+      "ruling": "refuted",
+      "convergent": false,
+      "counter_evidence": {
+        "file": "crates/terminus-core/src/ingest/mod.rs",
+        "line": 1372,
+        "note": "Pre-existing, not introduced by f21424f..54ab34f. read_tail and open_at_least (ingest/mod.rs:1372-1397) are unchanged by the range, and at f21424f the same unflagged path read the tail from the old watermark with no prefix check after Existing::read had fetched the hashes, so the same truncate-and-regrow window existed. The length-only test for an unflagged session is the documented D-13 design (ingest/mod.rs:375-383). The new stat gate only decides whether rows are fetched; it widens no window."
+      },
+      "base_id": "f21424fd33b3be00367939503e821ca14461a94c",
+      "head_id": "54ab34fe3eb614dd5bd8793df6cf45d11e97bca8"
+    },
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol",
+      "file": "crates/terminus-core/src/ingest/mod.rs",
+      "line": 512,
+      "severity": "high",
+      "claim": "The watermark is derived solely from bytes already read and can be committed after the source is concurrently truncated, leaving it beyond the current file and archiving bytes the transcript no longer contains.",
+      "failure_scenario": "A grown file passes the length check and its complete tail is read. Before `apply` commits, another process truncates or replaces the transcript with a shorter file. The pass still archives the stale tail and commits `existing.watermark + consumed`; that watermark is now past unread/current file bytes. A later pass may flag the shrink, but the current pass has already persisted ghost tail data and an invalid watermark. There is no final identity/length check or file lock spanning tail read through commit.",
+      "ruling": "refuted",
+      "convergent": false,
+      "counter_evidence": {
+        "file": "crates/terminus-core/src/ingest/mod.rs",
+        "line": 1372,
+        "note": "Pre-existing, not introduced by f21424f..54ab34f. At f21424f the watermark was file_scan.resume_offset, the same value as existing.watermark + consumed (the byte past the tail last newline), computed from the same bytes read_tail returned, with no lock spanning read to commit. The range changes how that offset is computed, not when or from what."
+      },
+      "base_id": "f21424fd33b3be00367939503e821ca14461a94c",
+      "head_id": "54ab34fe3eb614dd5bd8793df6cf45d11e97bca8"
+    }
+  ]
+}
