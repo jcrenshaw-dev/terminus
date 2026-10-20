@@ -609,9 +609,11 @@ fn redact_header_spans(line: &str, out: &mut String) {
 }
 
 /// Does the run at `start..end` open a secret header that has a value of its
-/// own, such as `Authorization:` or `Authorization:Bearer`?
+/// own, such as `Authorization:` followed by a value, or `Authorization:Bearer`?
 ///
-/// One with nothing after it is not deferred to, or the run would go unredacted.
+/// A word stuck to the colon counts only when it is an auth scheme, so a value
+/// like `apikey_7Gf2:Zp4` stays one value and is redacted whole. A header with
+/// nothing after it is not deferred to, or the run would go unredacted.
 fn opens_a_secret_header(line: &str, start: usize, end: usize) -> bool {
     let Some(offset) = line[start..end].find(':') else {
         return false;
@@ -620,8 +622,12 @@ fn opens_a_secret_header(line: &str, start: usize, end: usize) -> bool {
     if name.is_empty() || !name.bytes().all(is_name_byte) || !is_secret_name(name) {
         return false;
     }
+    let after = start + offset + 1;
+    if after < end {
+        return is_auth_scheme(&line[after..end]);
+    }
     let bytes = line.as_bytes();
-    let (value_start, value_end) = flag_value_span(bytes, skip_blanks(bytes, start + offset + 1));
+    let (value_start, value_end) = flag_value_span(bytes, skip_blanks(bytes, after));
     value_end > value_start
 }
 
@@ -1513,6 +1519,16 @@ mod tests {
         // A header name with nothing after it is the value itself.
         let bare = for_model_context("the vault password: token:");
         assert_eq!(bare, "the vault password: [redacted]");
+
+        // A colon inside a value is not a header unless an auth scheme follows.
+        for (line, secret) in [
+            ("password: apikey_7Gf2Lq9:Zp4", "apikey_7Gf2Lq9"),
+            ("token: MyKey2024:summer", "MyKey2024"),
+        ] {
+            let scrubbed = for_model_context(line);
+            assert!(!scrubbed.contains(secret), "part of the value survived: {scrubbed}");
+            assert!(scrubbed.ends_with(": [redacted]"), "{scrubbed}");
+        }
     }
 
     /// Rules 3 and 5 run first, so a named `sk-` value keeps their marker and
