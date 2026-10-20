@@ -102,14 +102,14 @@ Options are in [commands.md](../commands.md#setup), and `doctor`'s `--json` fiel
 ### Pushing a version tag
 
 - **Inputs:** a tag `v<X.Y.Z>` pushed to the repository. Nothing else starts `release.yml`.
-- **Outputs:** four build jobs, one per platform on its own runner: `ubuntu-24.04` for `x86_64-unknown-linux-musl`, `ubuntu-24.04-arm` for `aarch64-unknown-linux-musl`, `macos-15-intel` for `x86_64-apple-darwin` and `macos-15` for `aarch64-apple-darwin`. Each builds with `cargo build --release --locked -p terminus` and no features, checks that `--version` matches the tag, that a Linux binary is statically linked and a macOS binary links nothing outside `/usr/lib/`, and that the binary carries the marker read from `install.sh`, then writes the manifest. When all four pass, the draft job checks it holds exactly the eight files and creates the release as a draft.
-- **Refusals:** any failed check fails its job, and one failed build leaves no draft. The workflow has `contents: read`, and only the draft job has `contents: write`, with the workflow's own token. No workflow names a signing key.
+- **Outputs:** four build jobs, one per platform on its own runner: `ubuntu-24.04` for `x86_64-unknown-linux-musl`, `ubuntu-24.04-arm` for `aarch64-unknown-linux-musl`, `macos-15-intel` for `x86_64-apple-darwin` and `macos-15` for `aarch64-apple-darwin`. Each builds with `cargo build --release --locked -p terminus` and no features, checks that `--version` matches the tag, that a Linux binary is statically linked and a macOS binary links nothing outside `/usr/lib/`, and that the binary carries the marker read from `install.sh`, then writes the manifest and attests the binary with `actions/attest`. When all four pass, the draft job checks it holds exactly the eight files and creates the release as a draft.
+- **Refusals:** any failed check fails its job, and one failed build leaves no draft. The workflow has `contents: read`. The build jobs add `id-token: write` and `attestations: write` for the attestation, and only the draft job has `contents: write`, with the workflow's own token. No workflow names a signing key.
 
 ### `scripts/sign-release.sh v<X.Y.Z>`
 
 - **Inputs:** the tag, the owner's `gh` login, `~/.ssh/crenshawdev-release`, and `install.sh`'s one `release_key` line and one `valid_version` function.
-- **Outputs:** it checks the tag's version with `install.sh`'s `valid_version`, so it refuses exactly the versions the installer refuses, then downloads the draft, checks every binary against its manifest and every manifest's exact two lines before it signs anything, signs each manifest with `ssh-keygen -Y sign -n terminus-release` and verifies its signature with the command `install.sh` runs before it signs the next, uploads the four `.sig` files, and publishes the release as latest. Publishing with the owner's own login is what starts `release-check.yml`, because a release published with a workflow's token starts no other workflow.
-- **Refusals:** a tag that does not start with `v` or whose version `valid_version` rejects, a release that is not a draft, a draft missing any of the eight files, a binary whose SHA-256 is not its manifest's, a manifest not exactly the two lines, a signature that does not verify, and a failed upload or publish all stop it, and the release stays a draft.
+- **Outputs:** it checks the tag's version with `install.sh`'s `valid_version`, so it refuses exactly the versions the installer refuses, then downloads the draft, checks every binary against its manifest, every manifest's exact two lines, and every binary's attestation from `release.yml` at the tag on a GitHub-hosted runner before it signs anything, signs each manifest with `ssh-keygen -Y sign -n terminus-release` and verifies its signature with the command `install.sh` runs before it signs the next, uploads the four `.sig` files, and publishes the release as latest. Publishing with the owner's own login is what starts `release-check.yml`, because a release published with a workflow's token starts no other workflow.
+- **Refusals:** a tag that does not start with `v` or whose version `valid_version` rejects, a release that is not a draft, a draft missing any of the eight files, a binary whose SHA-256 is not its manifest's, a manifest not exactly the two lines, a binary with no such attestation, a signature that does not verify, and a failed upload or publish all stop it, and the release stays a draft.
 
 ### The CI runs
 
@@ -134,6 +134,7 @@ sequenceDiagram
   Note over B: ubuntu-24.04, ubuntu-24.04-arm, macos-15-intel, macos-15
   B->>B: cargo build --release --locked, no features
   B->>B: version matches the tag, linkage, marker, then the manifest
+  B->>GH: attest each binary, signed as release.yml at the tag
   alt every build passes
     B->>D: four binaries and four manifests
     D->>D: exactly eight files
@@ -144,6 +145,7 @@ sequenceDiagram
   O->>S: sh scripts/sign-release.sh vX.Y.Z, on his own machine
   S->>GH: is it a draft, download it
   S->>S: each binary against its manifest, each manifest exactly two lines
+  S->>GH: gh attestation verify each binary against release.yml at the tag
   S->>S: for each manifest, sign it with crenshawdev-release, namespace terminus-release, then verify it as install.sh does
   S->>GH: upload four .sig files, publish as latest
   GH->>RC: release published

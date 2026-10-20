@@ -34,6 +34,12 @@ jobs:
             target: aarch64-apple-darwin
             asset: terminus-macos-aarch64
     runs-on: ${{ matrix.runner }}
+    # id-token and attestations are for the attestation step alone: they let
+    # this run say it built the binary, and nothing else.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     env:
       TARGET: ${{ matrix.target }}
       ASSET: ${{ matrix.asset }}
@@ -109,9 +115,9 @@ jobs:
             fi
           fi
 
-      # 0.1.0's aarch64 binaries shipped without the marker and refused to
-      # install themselves. The marker comes from install.sh, so there is no
-      # third copy, and an empty read fails rather than matching everything.
+      # A binary without the marker refuses to install itself. The marker
+      # comes from install.sh, so there is no third copy, and an empty read
+      # fails rather than matching everything.
       - name: Check the marker
         run: |
           set -euo pipefail
@@ -140,6 +146,13 @@ jobs:
           fi
           printf 'version %s\nsha256 %s\n' "$version" "${sum%% *}" > "dist/$ASSET.manifest"
           cat "dist/$ASSET.manifest"
+
+      # sign-release.sh refuses a binary without this, so a binary swapped into
+      # the draft after this run is never signed.
+      - name: Attest the binary
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/${{ matrix.asset }}
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

@@ -2,9 +2,10 @@
 # Sign and publish a draft release of Terminus, on the owner's machine:
 #   sh scripts/sign-release.sh v<X.Y.Z>
 # It refuses a release that is not a draft, downloads the draft's four binaries and four manifests, checks each binary
-# against its manifest, signs each manifest with ~/.ssh/crenshawdev-release and
-# verifies each signature the way install.sh does. Only when all four pass does it
-# upload the .sig files and publish the release as latest.
+# against its manifest and against the attestation release.yml made when it built it,
+# signs each manifest with ~/.ssh/crenshawdev-release and verifies each signature the
+# way install.sh does. Only when all four pass does it upload the .sig files and
+# publish the release as latest.
 # The public key and the version check are read from install.sh's release_key line
 # and valid_version function; this script keeps no copy of either.
 set -eu
@@ -97,6 +98,17 @@ for platform in $platforms; do
         fail "$binary: SHA-256 mismatch, the binary is $actual and its manifest names another value"
     [ "$(digest < "$work/$binary.manifest")" = "$(printf 'version %s\nsha256 %s\n' "$version" "$actual" | digest)" ] ||
         fail "$binary.manifest: not exactly the lines version $version and sha256 $actual"
+done
+
+# A binary and manifest swapped into the draft agree with each other, so each
+# binary must also carry the attestation release.yml made for this tag on a
+# GitHub-hosted runner. Only that workflow can make one.
+for platform in $platforms; do
+    binary=terminus-$platform
+    gh attestation verify "$work/$binary" --repo "$repo" \
+        --signer-workflow "$repo/.github/workflows/release.yml" \
+        --source-ref "refs/tags/$tag" --deny-self-hosted-runners > /dev/null ||
+        fail "$binary: no attestation from release.yml at $tag, so it is not the binary CI built"
 done
 
 printf 'crenshawdev-release %s\n' "$key" > "$work/allowed_signers"
