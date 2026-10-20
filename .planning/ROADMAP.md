@@ -11,8 +11,9 @@ The archive is the product, so it is built first and everything else is built on
 - [ ] **Phase 3: One excluded-project rule** - the rule that keeps an excluded project out of recall lives in one place
 - [ ] **Phase 4: Steady-state ingest pass** - a pass over unchanged transcripts stops reading their archive state
 - [ ] **Phase 5: Brief says when it cuts** - a brief that drops its quoted turns says so, and the tests stop depending on the temp path's length
-- [ ] **Phase 6: README for 1.0.0** - the README describes 1.0.0 and what versions mean from here
-- [ ] **Phase 7: Doc and comment sweep** - docs and code comments describe the code as it is, with the versioning rule written down
+- [ ] **Phase 6: Simplify the 1.0.0 changes** - a simplify pass over the code the 1.0.0 fixes change, with no change in behavior
+- [ ] **Phase 7: README for 1.0.0** - the README describes 1.0.0 and what versions mean from here
+- [ ] **Phase 8: Doc and comment sweep** - docs and code comments describe the code as it is, with the versioning rule written down
 
 ## Phase Details
 
@@ -66,9 +67,19 @@ The archive is the product, so it is built first and everything else is built on
 3. A regression test with a long project path fails before the change and passes after.
 4. Issue #46 is closed by the change.
 
-### Phase 6: README for 1.0.0
+### Phase 6: Simplify the 1.0.0 changes
+**Goal:** A simplify pass over the code the 1.0.0 fixes change, before the README and the docs sweep describe it (#90). It looks for code that reinvents something the codebase already has, code that can be simpler, and wasted work, and it changes no behavior.
+**Depends on:** Phases 1 to 5
+**Requirements:** None; delivered against #90
+**Success Criteria:**
+1. `/simplify` has run over the changes delivered against #86, #77, #80, #85 and #46. Every finding it applied is committed, and every one it skipped is listed with the reason.
+2. No behavior changes: the full suite passes unchanged.
+3. Code outside those changes is untouched.
+4. Issue #90 is closed by the change.
+
+### Phase 7: README for 1.0.0
 **Goal:** The README still speaks for 0.1.1 (#87). It describes 1.0.0, what changed that a user sees, and what version numbers mean from 1.0.0 on.
-**Depends on:** Phases 1 to 5, so it describes the code that ships
+**Depends on:** Phases 1 to 6, so it describes the code that ships
 **Requirements:** None; delivered against #87
 **Success Criteria:**
 1. The status line, install section and command list match 1.0.0.
@@ -76,9 +87,9 @@ The archive is the product, so it is built first and everything else is built on
 3. The README says what a version number means from 1.0.0 on.
 4. Issue #87 is closed by the change.
 
-### Phase 7: Doc and comment sweep
+### Phase 8: Doc and comment sweep
 **Goal:** Docs and code comments describe the code as it is (#88): the versioning rule in `CHANGELOG.md` and `docs/release.md`, the 1.0 rule gone from `DESIGN-BRIEF.md`, comments that still point at `.planning/phases/`, overlong and wrong comments trimmed to their reason, and `docs/` checked against the code.
-**Depends on:** Phases 1 to 5
+**Depends on:** Phases 1 to 6
 **Requirements:** None; delivered against #88
 **Success Criteria:**
 1. `CHANGELOG.md` and `docs/release.md` state the versioning rule, and `DESIGN-BRIEF.md` no longer gates 1.0 on a full feature set.
