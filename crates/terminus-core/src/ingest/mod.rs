@@ -396,15 +396,14 @@ pub(crate) fn prepare(
     };
     let clear_divergence = existing.diverged;
 
-    // Where this pass stops in the FILE: just past the tail's last `\n`, never
-    // at end of file, which is the resume rule `parse`'s module comment states
-    // and its scan applies. A search and not a parse, because nothing else
+    // Where this pass stops in the FILE: `parse::complete_len`, the resume rule
+    // its scan applies too. A search and not a parse, because nothing else
     // from the raw tail is used. The watermark is a file offset - the tail read
     // seeks by it and `open_at_least` refuses a file shorter than it - so it
     // has to keep being measured against the file, whatever the capture mode
     // does to the bytes afterwards. `consumed` is likewise file bytes, and is
     // what `runs.bytes_read` and `status` report.
-    let consumed = tail.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
+    let consumed = parse::complete_len(&tail);
     // No complete record past the watermark, which is where a rerun on an
     // unchanged file lands. Or there is one, and the file grew after
     // `Existing::read` found it no longer than the watermark, so nothing an

@@ -39,11 +39,13 @@ impl Scan {
     pub fn turn_count(&self) -> usize {
         self.records.iter().filter(|r| r.is_turn()).count()
     }
+}
 
-    /// Bytes of `buffer` this scan consumed: everything up to the resume point.
-    pub fn consumed(&self, start_offset: u64) -> usize {
-        (self.resume_offset - start_offset) as usize
-    }
+/// How many leading bytes of `bytes` end at its last `\n`, or 0 when it holds
+/// none. This is the resume rule (D-14): a pass stops just past the last
+/// newline, never at end of file.
+pub fn complete_len(bytes: &[u8]) -> usize {
+    bytes.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1)
 }
 
 /// Scan a whole transcript from its beginning.
@@ -62,7 +64,6 @@ pub fn scan_from(bytes: &[u8], start_offset: u64, first_turn_seq: i64) -> Scan {
     let mut records = Vec::new();
     let mut turn_seq = first_turn_seq;
     let mut line_start = 0usize;
-    let mut resume = 0usize;
 
     for (index, byte) in bytes.iter().enumerate() {
         if *byte != b'\n' {
@@ -79,11 +80,10 @@ pub fn scan_from(bytes: &[u8], start_offset: u64, first_turn_seq: i64) -> Scan {
             records.push(record);
         }
         line_start = index + 1;
-        resume = index + 1;
     }
 
     Scan {
         records,
-        resume_offset: start_offset + resume as u64,
+        resume_offset: start_offset + complete_len(bytes) as u64,
     }
 }
