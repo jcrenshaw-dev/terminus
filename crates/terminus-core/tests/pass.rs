@@ -1381,3 +1381,76 @@ fn an_unchanged_file_in_a_moved_project_folder_has_its_path_updated() {
         );
     }
 }
+
+// #85, D-10. The block-read log, counted for one session in one store before
+// and after a pass. The log is shared by every test in this binary and they run
+// in parallel, so it is never reset: an entry counts here only when it names
+// this bench's database and this session's number.
+
+fn reads_of(bench: &Bench, key: &str) -> usize {
+    let db = bench.data_dir.join(DB_FILE_NAME).canonicalize().unwrap();
+    let session_no = session_no_of(&bench.conn(), key).expect("an archived session");
+    terminus_core::store::archive::block_reads::entries()
+        .iter()
+        .filter(|(path, no)| *no == session_no && path.canonicalize().ok().as_ref() == Some(&db))
+        .count()
+}
+
+#[test]
+fn a_pass_over_a_grown_file_reads_its_block_rows() {
+    let bench = bench();
+    let path = archived(&bench, PROJECT, &format!("{}.jsonl", uuid(30)));
+    let key = key_of(&path);
+    append(&path, &last_line("session-basic.jsonl"));
+
+    let before = reads_of(&bench, &key);
+    let summary = bench.pass(&[]);
+    assert_eq!(summary.files_committed, 1, "{summary:?}");
+    assert!(
+        reads_of(&bench, &key) > before,
+        "the grown file read no rows"
+    );
+}
+
+#[test]
+fn a_pass_over_a_diverged_session_reads_its_block_rows() {
+    let bench = bench();
+    let path = archived(&bench, PROJECT, &format!("{}.jsonl", uuid(31)));
+    let key = key_of(&path);
+    bench
+        .conn()
+        .execute(
+            "UPDATE session_meta SET transcript_diverged = 1 WHERE session_key = ?1",
+            [&key],
+        )
+        .unwrap();
+
+    let before = reads_of(&bench, &key);
+    let summary = bench.pass(&[]);
+    assert!(summary.failures.is_empty(), "{:?}", summary.failures);
+    assert!(
+        reads_of(&bench, &key) > before,
+        "the flagged session read no rows"
+    );
+}
+
+#[test]
+fn a_pass_over_a_session_whose_file_is_gone_reads_its_block_rows() {
+    let bench = bench();
+    let name = format!("{}.jsonl", uuid(32));
+    let path = archived(&bench, "-code-zzz", &name);
+    let key = key_of(&path);
+    std::fs::rename(
+        bench.projects().join("-code-zzz"),
+        bench.projects().join("-code-yyy"),
+    )
+    .unwrap();
+
+    let before = reads_of(&bench, &key);
+    let summary = bench.pass(&[]);
+    assert!(summary.failures.is_empty(), "{:?}", summary.failures);
+    assert!(
+        reads_of(&bench, &key) > before,
+        "the session whose file is gone read no rows"
+    );
+}
