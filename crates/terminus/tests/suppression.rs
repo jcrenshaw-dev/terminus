@@ -355,11 +355,18 @@ fn says(role: &str, text: &str) -> Value {
 }
 
 /// An `Edit` of one file: the `path` entity a prompt can reach structurally.
+///
+/// The prose block naming `beaconWaver` sits ahead of the `Edit` because the
+/// excerpt window starts at the first query token, and behind the absolute path
+/// it falls out of the window once the temp directory's path is long (#46).
 fn edits(file: &str) -> Value {
     serde_json::json!({
         "role": "assistant",
         "model": "claude-opus-5",
         "content": [{
+            "type": "text",
+            "text": "replacing beaconWaver with the steady helper",
+        }, {
             "type": "tool_use",
             "id": "toolu_supp01",
             "name": "Edit",

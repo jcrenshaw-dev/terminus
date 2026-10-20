@@ -233,6 +233,9 @@ something to fire on. Its third turn names that same absolute path in **prose**
 and emits no entity at all, so "matched structurally" and "mentions the words"
 stay two different answers about one file, the way `session-recall.jsonl`
 already does for the relative case.
+The `Edit` turn opens with a short prose block naming `lanternFlicker`, ahead of
+the `tool_use`, so the excerpt window reaches the asserted text whatever the
+length of the temp directory's path. Moving it behind the path brings back #46.
 
 **`session-secrets.jsonl`** is the v0.1.1 phase 2 egress fixture: ten turns
 that exist to be *sent*, not to be found. Each of the seven shapes the widened
