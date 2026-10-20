@@ -234,8 +234,8 @@ impl Store {
     /// [`Store::missing_columns`] - the D-18 degraded read - rather than left to
     /// surface as a SQLite error from the middle of a search.
     ///
-    /// A missing data directory or database file is
-    /// [`Error::StoreNotFound`] and any other failure to open is
+    /// A missing data directory or database file, or a database with no
+    /// tables, is [`Error::StoreNotFound`] and any other failure to open is
     /// [`Error::StoreUnreadable`]: both are variants and neither is a panic,
     /// because RCL-10 renders them as an empty result with a reason and a
     /// caller must not have to match on message text to tell them apart.
@@ -273,13 +273,23 @@ impl Store {
         // whose shared-memory index cannot be created actually fails. Mapping it
         // here is what keeps that case an empty result with a reason rather than
         // a bare `unable to open database file` out of the query layer.
-        conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
-            r.get::<_, i64>(0)
-        })
-        .map_err(|source| Error::StoreUnreadable {
-            path: path.clone(),
-            detail: source.to_string(),
-        })?;
+        let tables = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'table'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .map_err(|source| Error::StoreUnreadable {
+                path: path.clone(),
+                detail: source.to_string(),
+            })?;
+        // `Store::open` stamps `journal_mode=wal` before `initialize` commits,
+        // so a non-empty file with no tables is a store another process is still
+        // creating: no store yet. Tables but no `meta` is somebody else's file,
+        // and `read_versions` says so (phase 2 D-03).
+        if tables == 0 {
+            return Err(Error::StoreNotFound { path });
+        }
 
         let rebuild = read_versions(&conn, &path)?;
         let missing = missing_columns(&conn)?;
@@ -414,31 +424,6 @@ impl Store {
         )?;
         Ok(())
     }
-}
-
-/// Does the database file in `data_dir` hold no tables at all?
-///
-/// For a read command whose [`Store::open_read_only`] came back `NotAStore`.
-/// `Store::open` stamps `journal_mode=wal` on a new file before `initialize`
-/// commits, so a store another process is creating is a non-empty file with no
-/// tables, and that is no store yet rather than a broken one. A file holding
-/// tables but no `meta` is somebody else's SQLite file and gets `false` here.
-///
-/// The same read-only flags and busy timeout as [`Store::open_read_only`]. It
-/// creates no table and writes nothing to the database, so a hot journal is an
-/// error here, not a rollback. Like any read-only open of a WAL file, it can
-/// leave `-shm` and an empty `-wal` behind.
-pub fn holds_no_tables(data_dir: &Path) -> Result<bool> {
-    let path = data_dir.join(DB_FILE_NAME);
-    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-    let conn = Connection::open_with_flags(&path, flags)?;
-    conn.busy_timeout(std::time::Duration::from_millis(BUSY_TIMEOUT_MS.into()))?;
-    let tables: i64 = conn.query_row(
-        "SELECT count(*) FROM sqlite_master WHERE type = 'table'",
-        [],
-        |r| r.get(0),
-    )?;
-    Ok(tables == 0)
 }
 
 /// Narrow a store an earlier build left readable by group or world (PRIV-02).

@@ -105,15 +105,6 @@ pub fn open_in(data_dir: &Path, config: Config) -> Result<Opened, Failure> {
         // The ordinary state of a machine that has never ingested. Nothing is
         // created here, and that includes the data directory itself.
         Err(Error::StoreNotFound { path }) => return Ok(Opened::Nothing(no_store(&path))),
-        // A database with no tables is a store another process is still
-        // creating. Asked only here, so an ordinary open pays for no second
-        // connection. Tables but no `meta`, or a check that fails, is the
-        // original error.
-        Err(Error::NotAStore { path, .. })
-            if matches!(terminus_core::store::holds_no_tables(data_dir), Ok(true)) =>
-        {
-            return Ok(Opened::Nothing(no_store(&path)))
-        }
         Err(other) => return Err(Failure::Operational(other.to_string())),
     };
 
