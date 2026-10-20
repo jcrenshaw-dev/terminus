@@ -1,0 +1,114 @@
+{
+  "status": "needs_human",
+  "score": "8/9",
+  "truths": [
+    {
+      "n": 1,
+      "truth": "For a session whose quoted turns are each under 240 characters, every budget from 0 to the uncut brief's length gives no brief, the uncut brief byte for byte, or a brief that contains `...`.",
+      "status": "VERIFIED",
+      "uat_item": 1,
+      "evidence": "crates/terminus-core/tests/inject_brief.rs:908 asserts the premise (uncut brief holds no ELISION); :936 sweeps every budget `0..=length` (not a sample) asserting `brief == uncut || brief.contains(ellipsis)`. Test `a_budget_that_leaves_a_quoted_turn_no_room_marks_it_and_does_not_record_it` passes with TMPDIR unset (/tmp) and with a 130-char TMPDIR (full-suite run). Code agrees: brief.rs:220-224 guarantees a room of at least 4 so the `frame` backstop's `clip` (inject/mod.rs:173-184, :454-460) always appends `...`; brief.rs:405-412 makes every share either whole, a marked `clip`, or ELISION alone."
+    },
+    {
+      "n": 2,
+      "truth": "At a budget that leaves a quoted turn no room, that turn's line reads its label followed by `...`, one mark per turn, and the turn is not among the briefed turns in the session's state file.",
+      "status": "VERIFIED",
+      "uat_item": 2,
+      "evidence": "brief.rs:405 `let shown = given >= chars(&quote.text) || given > chars(excerpt::ELISION);` with ELISION as the text when not shown (:407-412); brief.rs:286 `.filter(|quote| quote.shown)` in `quoted`, which feeds `Brief::turns` and so `remember`. No string comparison against ELISION (grep of brief.rs: only the length compare at :222 and :405). Traced end to end: turn ids enter at `last_exchange` with `shown: true` (brief.rs:586) and land in the state file. The regression test asserts `asked_line == \"It last asked: ...\"` (inject_brief.rs:921), the `It last answered:` line == `...`, and `State::load(...).brief.is_empty()` (:931), and it passes at both TMPDIRs. The positive side still records shown turns: suppression `a_turn_the_brief_already_quoted_is_not_injected_again` passes at both TMPDIRs."
+    },
+    {
+      "n": 3,
+      "truth": "A budget whose room after the frame cannot hold more than the mark (room of 1 to 3) gives no brief and writes nothing.",
+      "status": "VERIFIED",
+      "uat_item": null,
+      "evidence": "brief.rs:220-224 returns None when `budget - frame_cost(DESCRIPTION) <= chars(ELISION)`, after `frame_fits` (so no underflow) and before `last_session` or `remember`. Exercised: without the guard, rooms 1-3 would render 1-3 raw body characters with no `...`, and the new sweep (inject_brief.rs:936) would fail. It passes. `every_brief_budget_gives_nothing_or_a_framed_brief_that_fits` (inject_brief.rs:836, None arm :859) asserts nothing was recorded as briefed and passes unchanged."
+    },
+    {
+      "n": 4,
+      "truth": "A new test with a long project path fails against `brief.rs` as it was at `de82912` and passes after the change.",
+      "status": "VERIFIED",
+      "uat_item": 3,
+      "evidence": "Spot-check: HEAD exported to the scratchpad with only crates/terminus-core/src/inject/brief.rs replaced by `git show de82912:` (diff-confirmed), then `cargo test -p terminus-core --all-features --test inject_brief a_budget_that_leaves_a_quoted_turn_no_room_marks_it_and_does_not_record_it` printed FAILED, panicked at inject_brief.rs:1035 \"the brief quotes no prompt between the tags\", exit 101. The printed brief had the head line and pointer, with both quoted turns and their labels gone and no `...`, which is #46's symptom. At HEAD the same test passes at the default and 130-char TMPDIR. The project name is 155 chars (`project-with-a-long-name-` + 130 digits), never created on disk. The budget is measured off the rendered uncut brief (inject_brief.rs:911-914)."
+    },
+    {
+      "n": 5,
+      "truth": "`cargo test --workspace --all-features` passes with the default `TMPDIR` and with `TMPDIR` set to an existing 130-character directory.",
+      "status": "VERIFIED",
+      "uat_item": 4,
+      "evidence": "130-char TMPDIR (realpath length 130, outside any git repo): `cargo test --workspace --all-features --no-fail-fast` gave 68 binaries, 1015 passed, 0 failed, exit 0. The long TMPDIR provably reaches the tests: the old-code binary rerun under it printed a project path inside that directory. All 11 assertion-bearing tests the plan names pass in that run. Default TMPDIR (unset, /tmp): the one-full-suite cap was spent on the 130-char run, so I ran by name every binary that reads `session-edits.jsonl` or sets a brief budget: terminus-core inject_brief 19, recall_golden 2, fixtures 18, redacted_recall 10, inject_prompt 12, observe 7, retention 16, feedback 21, schema 19, config 45; terminus prompt 5, suppression 7, decisions 1, brief 5, replay 9, hook 8. All had 0 failed. The executor's default full run reported 1015/0 (reports/plan-1.md)."
+    },
+    {
+      "n": 6,
+      "truth": "No line inside an `assert!`, `assert_eq!` or `assert_ne!` call is removed or changed in the crates' test directories since `de82912`, and no golden file changes.",
+      "status": "VERIFIED",
+      "uat_item": 5,
+      "evidence": "`git diff -U0 de82912 -- crates/terminus-core/tests crates/terminus/tests` removes exactly 4 lines: 3 comment lines and `let budget = 500 + frame_cost(&uncut);` (setup), all in inject_brief.rs. Additions in redacted_recall.rs and suppression.rs are inside `json!` records and doc comments. `git diff --stat de82912 -- crates/terminus-core/tests/goldens` and `git status --short crates/terminus-core/tests/goldens` are both empty, and recall_golden passes. Note for the walk: the literal pathspec `'crates/*/tests'` in the AC (and `'crates/*/tests/goldens'` cited in SUMMARY's goal check) matches no path in git and prints nothing whatever changed. Use explicit directories."
+    },
+    {
+      "n": 7,
+      "truth": "An uncut brief is unchanged: no golden moves and the golden and byte-identity tests pass.",
+      "status": "VERIFIED",
+      "uat_item": null,
+      "evidence": "The uncut early return (brief.rs:233-239) is untouched apart from quotes carrying `shown: true`. The last_session head-line formats, `index_pointer` text and the split arithmetic in `shares` show no diff hunks. `git diff d2f0a39 -- inject/mod.rs inject/prompt.rs recall/excerpt.rs` is empty. recall_golden 2/2 and inject_brief 19/19 pass at both TMPDIRs. Goldens show no diff (truth 6)."
+    },
+    {
+      "n": 8,
+      "truth": "Neither `docs/design/0007-injection.md` nor the `brief.rs` doc comments still say a quotation with no share is dropped, and `CHANGELOG.md` has a Fixed entry for #46 under `[Unreleased]`.",
+      "status": "VERIFIED",
+      "uat_item": 6,
+      "evidence": "grep for \"share is nothing is dropped\", \"cut down to nothing is dropped\", \"never an under-count\" and \"and the pointer alone are over\" in brief.rs: no match. grep for \"share is nothing is dropped\" and \"no room for a single character between the tags, the brief renders nothing\" in 0007: no match. The prompt arm's \"nothing is handed over\" sentence is still present (1 match). CHANGELOG.md:218-228 holds the #46 entry, between `### Fixed` (:35) under `## [Unreleased]` (:10) and `## [0.1.1]` (:230). I checked the rewritten 0007 paragraph (line 92) and the entry against the code: room up to 3 gives nothing (brief.rs:220-224), a mark-only turn is not added to `brief` (:286, :405), and the backstop cuts the pointer's tail with `...` (mod.rs:454-460, pointer last in `assemble`)."
+    },
+    {
+      "n": 9,
+      "truth": "Issue #46 is closed by the merged change.",
+      "status": "UNCERTAIN",
+      "uat_item": 7,
+      "evidence": "Not checkable here: the phase PR is not merged, and GitHub issue state needs the network, which this pass may not use. PLAN notes say the orchestrator writes `Closes #46` into the PR."
+    }
+  ],
+  "passes": [
+    {
+      "k": 1,
+      "name": "Every budget gives no brief, the uncut brief, or a marked brief",
+      "evidence": "inject_brief.rs:936 sweeps every budget 0..=uncut length with the no-`...` premise asserted at :908. `a_budget_that_leaves_a_quoted_turn_no_room_marks_it_and_does_not_record_it` passes at the default TMPDIR and at a 130-char TMPDIR. brief.rs:220-224 plus clip's marked branch mean no rendered cut can lack `...`."
+    },
+    {
+      "k": 2,
+      "name": "A turn with no room shows its label and the mark and is not briefed",
+      "evidence": "brief.rs:405-412 renders the label and ELISION alone with `shown: false`; brief.rs:286 filters those out of `Brief::turns`. The test asserts both lines exactly (inject_brief.rs:921 and the answered line) and an empty `State::load(...).brief` (:931), and passes at both TMPDIRs."
+    },
+    {
+      "k": 3,
+      "name": "The long-path regression test fails before the fix and passes after",
+      "evidence": "Run against de82912's brief.rs in a scratch copy of HEAD: FAILED at inject_brief.rs:1035 \"the brief quotes no prompt between the tags\", with both turns dropped and no mark. Passes at HEAD at both TMPDIRs. Project name is 155 chars."
+    },
+    {
+      "k": 4,
+      "name": "The workspace suite passes at the default and a 130-character TMPDIR",
+      "evidence": "130-char TMPDIR full workspace run: 68 binaries, 1015 passed, 0 failed. Default TMPDIR: every binary that reads the edited fixture or sets a brief budget (16 binaries) passes by name. The executor's default full run was 1015/0."
+    },
+    {
+      "k": 5,
+      "name": "No assertion or golden changed",
+      "evidence": "With explicit paths, the only removed lines under crates/*/tests since de82912 are 3 comments and the `let budget` setup line in inject_brief.rs. Goldens show no diff and no status, and recall_golden passes. The AC's literal `'crates/*/tests'` pathspec matches nothing in git, so the check needs explicit directories."
+    },
+    {
+      "k": 6,
+      "name": "The docs no longer say a quotation with no share is dropped, and the changelog has #46",
+      "evidence": "Stale-phrase greps on brief.rs and 0007 return nothing, and the prompt-arm sentence is kept. The CHANGELOG #46 entry is at :218-228 under [Unreleased] ### Fixed. The 0007 paragraph and the entry match brief.rs:220-224, :286, :405 and mod.rs:454-460."
+    }
+  ],
+  "gaps": [],
+  "human_checks": [
+    {
+      "name": "Issue #46 is closed by the merged change",
+      "expected": "After the phase PR (carrying `Closes #46`) merges into crenshawdev/terminus, issue #46 shows as closed by that PR.",
+      "why_human": "Out-of-reach resource: the PR is not merged yet, and GitHub issue state lives on the network, which this verifier may not touch. Nothing in the local checkout can show it."
+    },
+    {
+      "name": "John reads the changed docs and comments",
+      "expected": "The budget paragraph at docs/design/0007-injection.md:92, the #46 entry at CHANGELOG.md:218-228, and the brief.rs comments (the `render` doc and the comment above the backstop, `quoted`, `Quote::shown`, `Continuity::bare`, `Continuity::within`, and the comment in `shares`) read correctly to John.",
+      "why_human": "Whether the prose reads right and sounds like John is his own judgment, which no probe can stand in for. Each statement's factual accuracy against the code was checked (truth 8). This read is about the wording, which John reviews himself."
+    }
+  ]
+}

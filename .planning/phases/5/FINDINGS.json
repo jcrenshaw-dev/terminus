@@ -1,0 +1,32 @@
+{
+  "auto_passed": 6,
+  "gaps": 0,
+  "added": 0,
+  "skipped": 0,
+  "rejected": 0,
+  "rejected_entries": [],
+  "skipped_entries": [
+    {
+      "list": "human_checks",
+      "reason": "already-recorded",
+      "item": 7,
+      "status": "pending",
+      "entry": {
+        "name": "Issue #46 is closed by the merged change",
+        "expected": "After the phase PR (carrying `Closes #46`) merges into crenshawdev/terminus, issue #46 shows as closed by that PR.",
+        "why_human": "Out-of-reach resource: the PR is not merged yet, and GitHub issue state lives on the network, which this verifier may not touch. Nothing in the local checkout can show it."
+      }
+    },
+    {
+      "list": "human_checks",
+      "reason": "already-recorded",
+      "item": 8,
+      "status": "pending",
+      "entry": {
+        "name": "John reads the changed docs and comments",
+        "expected": "The budget paragraph at docs/design/0007-injection.md:92, the #46 entry at CHANGELOG.md:218-228, and the brief.rs comments (the `render` doc and the comment above the backstop, `quoted`, `Quote::shown`, `Continuity::bare`, `Continuity::within`, and the comment in `shares`) read correctly to John.",
+        "why_human": "Whether the prose reads right and sounds like John is his own judgment, which no probe can stand in for. Each statement's factual accuracy against the code was checked (truth 8). This read is about the wording, which John reviews himself."
+      }
+    }
+  ]
+}
