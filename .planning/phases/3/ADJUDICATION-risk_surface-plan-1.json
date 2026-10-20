@@ -1,0 +1,39 @@
+{
+  "phase": "3",
+  "trigger": "risk_surface",
+  "discriminator": "plan-1",
+  "round": 1,
+  "base": "3d7bbc6",
+  "head": "3f0154c",
+  "base_id": "3d7bbc60155512e446b098c8a3ff0d182000b9af",
+  "head_id": "3f0154c0e43091938d030ad7ba29c025c5ee7d0f",
+  "voices": [
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol"
+    }
+  ],
+  "citations": {
+    "checked": true
+  },
+  "entries": [
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol",
+      "file": "crates/terminus-core/src/recall/scope.rs",
+      "line": 153,
+      "severity": "blocker",
+      "claim": "The new `Scoped::admits` closure has invalid Rust syntax: `|<redacted>&str>, excluded: &[String]|`.",
+      "failure_scenario": "Any build of `terminus-core` fails during parsing before the exclusion logic or its tests can run, so no search, context, get, brief, or prompt behavior ships.",
+      "ruling": "refuted",
+      "convergent": false,
+      "counter_evidence": {
+        "file": "crates/terminus-core/src/recall/scope.rs",
+        "line": 155,
+        "note": "The line reads `let hidden = |key: Option<&str>, excluded: &[String]| {`, valid Rust, and `cargo build -p terminus-core` finishes clean at 3f0154c. The <redacted> span is the review seam outbound credential fence (redactions: 3) blanking `key: Option<`, so the reviewer read text the source does not hold."
+      },
+      "base_id": "3d7bbc60155512e446b098c8a3ff0d182000b9af",
+      "head_id": "3f0154c0e43091938d030ad7ba29c025c5ee7d0f"
+    }
+  ]
+}
