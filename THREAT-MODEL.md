@@ -4,8 +4,8 @@ The sentinel audit reads this file before every review of Terminus. Everything h
 
 Paths below are relative to the repo root. `core/` is `crates/terminus-core/src/` and `bin/` is `crates/terminus/src/`.
 
-Version or commit this describes: v0.1.1-28-g6a72ff4 (`6a72ff4`)
-Last reviewed: 2026-10-15
+Version or commit this describes: v0.1.1-291-g6605500 (`6605500`)
+Last reviewed: 2026-10-20
 
 ## What this tool reads
 
@@ -16,9 +16,9 @@ Last reviewed: 2026-10-15
 - A transcript is chosen by file name only: `<uuid>.jsonl` directly in a project directory, or `agent-*.jsonl` at any depth.
 - A symlinked transcript file is followed to its target wherever that is. The only check on the target is the `exclude` list (`keep_transcript` in `core/discover.rs`). The session is keyed by the file the link points at, so a link and its target are one session.
 - For a sidecar transcript, the sibling `agent-<x>.meta.json` is read whole, through symlinks, with no size limit (`core/ingest/mod.rs`).
-- Each transcript is opened read-only with `File::open` (`open_transcript` in `core/discover.rs`) and read from the stored byte offset to end of file in one buffer (`read_tail` in `core/ingest/mod.rs`).
+- Each transcript is opened read-only with `File::open` (`open_transcript` in `core/discover.rs`) and read from the stored byte offset to end of file in one buffer (`read_tail` in `core/ingest/mod.rs`). A session flagged diverged, or one whose stored file is gone, is read from byte 0 instead, the prefix and the tail through one handle (`read_flagged`).
 
-**`terminus ingest <path>`.** Reads any file the user names. The path is canonicalized and checked against `exclude`, with no check on its name or location (`core/ingest/mod.rs`). Its session key is its path below its project folder, whichever root and project folder it sits under, as in a walk. When the store holds that key for a different file that still exists, the named file is refused unread.
+**`terminus ingest <path>`.** Reads any file the user names. The path is canonicalized and checked against `exclude`, with no check on its name or location (`core/ingest/mod.rs`). Its session key is its path below its project folder, whichever root and project folder it sits under, as in a walk. When the store holds that key for a different file that still exists, the named file is refused unread. When the stored file is gone, the named file is appended only if it begins with every archived byte.
 
 **Config directory.** `$TERMINUS_CONFIG_DIR`, otherwise `$XDG_CONFIG_HOME/terminus`, otherwise `$HOME/.config/terminus`, on Linux and macOS alike (`core/config.rs`).
 
@@ -36,7 +36,7 @@ Last reviewed: 2026-10-15
 
 **Binaries.** The stable path `$TERMINUS_BIN_DIR/terminus`, otherwise `$HOME/.local/bin/terminus`, is scanned whole for a marker string (`bin/cmd/install/binary.rs`). The versions folder is `$HOME/.local/lib/crenshawdev/terminus/versions`. The running executable is found with `current_exe()`, which reads `/proc/self/exe` on Linux.
 
-**Outside the transcript tree during ingest.** For each session, the first `cwd` value in the transcript is checked with `is_dir()`. If it exists, `git rev-parse --show-toplevel` runs in that directory, and git reads that repository's config (`core/project.rs`). When a project name is ambiguous against an `exclude` entry, the exclusion check lists up to 4,096 entries under the excluded project's real path (`core/config.rs`).
+**Outside the transcript tree during ingest.** For each session, the first `cwd` value in the transcript is checked with `is_dir()`. If it exists, `git rev-parse --show-toplevel` runs in that directory, and git reads that repository's config (`core/project.rs`). When a project name is ambiguous against an `exclude` entry, the exclusion check lists up to 4,096 entries under the excluded project's real path (`core/config.rs`). Every load of `terminus.toml` canonicalizes the deepest existing part of each `exclude` entry, following symlinks (`resolved` in `core/config.rs`).
 
 **Environment variables.**
 
@@ -47,12 +47,12 @@ Last reviewed: 2026-10-15
 | `XDG_DATA_HOME` | Data directory, Linux only |
 | `TERMINUS_CONFIG_DIR` | Config directory, and where the `data-location` pointer lives |
 | `TERMINUS_DATA_DIR` | Data directory, ahead of the pointer |
-| `TERMINUS_BIN_DIR` | Directory of the stable binary path |
+| `TERMINUS_BIN_DIR` | Directory of the stable binary path for `install`, `uninstall` and `doctor`. `install.sh` refuses to run while it is set |
 | `CLAUDE_CONFIG_DIR` | Transcript root when `roots` is unset; location of `settings.json` and `.claude.json` |
 | `PATH` | Where `git` and `claude` are found |
 | `DISABLE_AUTO_COMPACT` | Reported by `doctor`, nothing else |
 
-`TERMINUS_FAULT_AT`, `TERMINUS_FAULT_READY`, `TERMINUS_FAULT_SPLIT_WATERMARK` and `TERMINUS_FAULT_AFTER_FILES` are read only when the `testkit` feature is on. Every function that reads them has a no-op stub for builds without it (`core/ingest/mod.rs`), and the release workflow builds `-p terminus` with no features (`.github/workflows/release.yml`). Every variable except the pointer and the versions folder accepts a relative value, which resolves against the process's working directory. The environment variables read by the bundled SQLite and by mimalloc on musl builds are not listed here [VERIFY].
+`TERMINUS_FAULT_AT`, `TERMINUS_FAULT_READY`, `TERMINUS_FAULT_SPLIT_WATERMARK`, `TERMINUS_FAULT_AFTER_FILES`, `TERMINUS_TEST_INJECT_DEADLINE_MS`, `TERMINUS_TEST_DRAIN_DEADLINE_MS`, `TERMINUS_TEST_CORPUS` and `TERMINUS_TEST_SEED` are read only when the `testkit` feature is on. Every function that reads them has a stub that reads nothing for builds without it (`core/ingest/mod.rs`, `bin/cmd/hook.rs`), or sits in `core/testkit.rs`, which only that feature compiles, and the release workflow builds `-p terminus` with no features (`.github/workflows/release.yml`). Every variable except the pointer and the versions folder accepts a relative value, which resolves against the process's working directory. A relative `TERMINUS_BIN_DIR` makes a relative stable path, and install writes it into the hook entries and the MCP entry as it is; how Claude Code resolves a relative hook command has not been checked [VERIFY]. The environment variables read by the bundled SQLite and by mimalloc on musl builds are not listed here [VERIFY].
 
 **stdin.** The hook payload is one line, at most 1 MiB, abandoned after 500 ms (`bin/cmd/hook.rs`). The MCP server reads newline-delimited JSON-RPC with no size limit (`bin/cmd/mcp/mod.rs`). `install`, `uninstall --purge` and `data move` read a y/n answer.
 
@@ -73,11 +73,11 @@ Last reviewed: 2026-10-15
 | `<data>/` | 0700 | Created by the lock, by `Store::open` and by the injection state save |
 | `LOCK` | 0600 | `flock` target for ingest, `compact`, `reindex`, `observations regenerate`, `data move` and `uninstall --purge` |
 | `terminus.db` | 0600 | Pre-created with `create_new` before SQLite opens it. Only a writable open creates it, with the data directory, when none exists: ingest (the hook-spawned pass and the backfill included), `reindex` and `observations regenerate`. `compact` exits first when there is no store. `status`, `verify` and the other read commands open it read-only and never create it |
-| `terminus.db-wal`, `-shm` | Created by SQLite; the code expects SQLite to copy the main file's mode [VERIFY] | WAL mode is set on every writable open |
-| `snapshots/terminus-<UTC stamp>.db` | 0600 | A full copy of the database made with `VACUUM INTO`, every 24 hours by default, 3 kept by default (`core/store/snapshot.rs`) |
+| `terminus.db-wal`, `-shm` | Created by SQLite; the code expects SQLite to copy the main file's mode [VERIFY] | WAL mode is set on every writable open. A read-only open such as `status` leaves both on disk when it exits |
+| `snapshots/terminus-<UTC stamp>.db` | 0600 | A full copy of the database made with `VACUUM INTO`, every 24 hours by default, 3 kept by default (`core/store/snapshot.rs`). The pass decides inside the lock that one is due, then takes it after releasing the lock, on a writable open of its own (`core/ingest/pass.rs`) |
 | `injection/<session_id>.json` | 0600 | Turn ids already injected and a compaction flag. Never pruned |
-| `decisions/<session_id>-<pid>-<ms>-<n>.json` | 0600 | The full prompt text, the cwd and the candidate turns for one prompt. Written only if the data directory exists. Ingest moves them into the `decisions` table and deletes the files |
-| `.inject-*.tmp`, `.decision-*.tmp` | 0600 | Temporary files. A hook killed at its deadline can leave one, and nothing sweeps them |
+| `decisions/<session_id>-<pid>-<ms>-<n>.json` | 0600 | The full prompt text, the cwd and the candidate turns for one prompt. Written only if the data directory exists. The name is reserved empty with `create_new`, then the record is renamed over it. Ingest moves them into the `decisions` table and deletes the files |
+| `.inject-*.tmp`, `.decision-*.tmp` | 0600 | Temporary files. A hook killed at its deadline can leave one, and an empty reserved `.json` beside it. The decisions drain deletes both once they are more than 10 minutes old (`core/feedback/mod.rs`) |
 
 `compact` runs a plain `VACUUM`. Terminus sets no `temp_store` pragma, so SQLite's own temporary files go wherever SQLite puts them, with whatever mode it gives them [VERIFY]. Terminus sets no `secure_delete` pragma, so deleted rows stay in free pages until `compact` and stay in snapshots until those are pruned.
 
@@ -114,8 +114,10 @@ Last reviewed: 2026-10-15
 | `uninstall --purge` | `remove_dir_all` on the data directory | Only that `<data>/terminus.db` exists, then a confirmation or `--yes`, then the lock. No check that the directory is where Terminus would put it |
 | `data move` | `remove_dir_all` on the source data directory after the copy | The lock and a confirmation. No `terminus.db` check. The destination must not be the source or inside it, and must be absent or an empty directory the user owns, not a symlink, with no group or world bit, checked before the question and again after the answer and the lock. The not-the-source and not-inside-it checks compare paths as text, so a destination that does not exist yet and is reached through a symlinked parent of the source passes them |
 | Retention | Database rows only, never files | `delete` acts only once Claude Code has deleted the transcript. It never deletes `decisions` or `labels` rows (`core/retention/`) |
+| Recovery's twin merge | A session that reduces to the same key as an older one: its rows go through retention's `delete_session`, including its `observations` rows, after the older session takes its stream. When the twin's stream is longer, the older session's block rows are deleted and the twin's moved under its `session_no` (`core/recover.rs`) | One transaction. Both are evicted with equal length, checksum and block size, or neither is and their block sizes match. Two streams of one length need equal checksums. Otherwise every full block of the shorter stream has the same stored hash as the longer's, and its last partial block, decompressed, is a prefix of the longer's block. Stored hashes are not recomputed from the bytes. A twin that fails is kept and reported on every run |
 | Snapshot prune | `snapshots/terminus-*.db` beyond `keep` | Name prefix and suffix, regular files only |
-| Decisions drain | Every regular `*.json` in `decisions/`, unparseable ones included | Regular files only, deleted after the database commit |
+| Decisions drain | Every regular `*.json` in `decisions/`, unparseable ones included, except an empty one under 10 minutes old | Regular files only, deleted after the database commit |
+| Drain sweep | `.decision-*.tmp` in `decisions/` and `.inject-*.tmp` in `injection/` more than 10 minutes old | Name prefix and suffix, and `symlink_metadata` says a regular file (`sweep` in `core/feedback/mod.rs`) |
 
 `uninstall` never removes the versions folder, the `data-location` pointer, `terminus.toml` or the backup of `.claude.json`.
 
@@ -124,7 +126,7 @@ Last reviewed: 2026-10-15
 - **Hooks.** `SessionStart` and `UserPromptSubmit` print one line, `{"hookSpecificOutput":{"hookEventName":"<event>","additionalContext":"<text>"}}`, built with serde_json, or nothing. Claude Code 2.1.302 (`~/.local/share/claude/versions/2.1.302`, read 2026-10-18) hands that text to the model as a user-role message marked as meta, `return{type:"user",message:{role:"user",content:e||gu},isMeta:n`. It puts the hook's name and `hook additional context: ` in front of the text, so the model reads `SessionStart hook additional context: <text>` or `UserPromptSubmit hook additional context: <text>`, with the texts of several hooks on the same event joined by newlines, and wraps the whole of it in its own tag pair, `gF="<system-reminder>",RGe="</system-reminder>"`. Before wrapping it rewrites two things and nothing else. A `<` that opens a `system-reminder` or `/system-reminder` tag, in any case and with whitespace allowed, becomes `&lt;`, `replaceAll(/<(?=\s*(?:\/\s*)?system-reminder\b)/gi,"&lt;")`, and so does a `<` or `</` at the very end of the text, `replace(/<(?=\s*(?:\/\s*)?$)/,"&lt;")`. Whether the user sees the text is still open [VERIFY]: the bundle builds it as a meta message, and a search for where the interface renders a `hook_additional_context` attachment found nothing that settles it. `SessionEnd` and `PostCompact` print nothing. stderr gets one fixed line naming the event and an OS error. Every known event exits 0.
 - **The detached ingest** each hook starts has stdin, stdout and stderr all on `/dev/null`. Its errors go to the `runs.error` column.
 - **MCP server.** stdout carries JSON-RPC only, and tool results go into the model's context. A failed call's `reason` can contain absolute paths, raw SQLite error text, and a TOML parse excerpt (withheld only when it contains `api_key`).
-- **CLI.** Data goes to stdout and diagnostics to stderr. That reaches a terminal, or the model's context when Claude runs the command through Bash. The human output of `terminus search`, the header and `--before`/`--after` window of `terminus show`, and `terminus observations` print every C0 control other than tab and newline, DEL, and every C1 control in archived text as its lowercase `\u00XX` escape, such as `\u001b` for ESC, with or without `--raw` (`bin/escape.rs`). The record body `terminus show` prints is still the archived line byte for byte. JSON escapes every C0 control, so ESC and BEL cannot reach the terminal through the body, but DEL and C1 controls can, because JSON does not require escaping them. `--json` output from all three commands passes DEL and C1 through raw as well, because serde_json escapes only U+0000 to U+001F, the quote and the backslash. What a given terminal does with a UTF-8 C1 control, an OSC 52 clipboard write or an OSC 8 link depends on the terminal and has not been checked [VERIFY].
+- **CLI.** Data goes to stdout and diagnostics to stderr. That reaches a terminal, or the model's context when Claude runs the command through Bash. The human output of `terminus search`, the header and `--before`/`--after` window of `terminus show`, and `terminus observations` print every C0 control other than tab and newline, DEL, and every C1 control in archived text as its lowercase `\u00XX` escape, such as `\u001b` for ESC, with or without `--raw` (`bin/escape.rs`). The record body `terminus show` prints is still the archived line byte for byte. JSON escapes every C0 control, so ESC and BEL cannot reach the terminal through the body, but DEL and C1 controls can, because JSON does not require escaping them. `--json` output from all three commands passes DEL and C1 through raw as well, because serde_json escapes only U+0000 to U+001F, the quote and the backslash. Every other command that prints archived text prints it raw, as open issue #72 lists: `sessions`, `usage`, `retention`, `reindex`, `verify`, `status`, `doctor`, `ingest` and `backfill` print session keys, project paths, branches or run notes unescaped, and a sidecar's key can hold ESC or BEL because discovery takes any `agent-*.jsonl` name. What a given terminal does with a UTF-8 C1 control, an OSC 52 clipboard write or an OSC 8 link depends on the terminal and has not been checked [VERIFY].
 
 ## What it executes
 
@@ -152,7 +154,7 @@ This is exec form with no timeout set. Each event fires on every occurrence beca
 
 **Built from data it read.**
 
-- **SQL.** Every value is a bound parameter. Each `format!` that builds SQL inserts only constant table or column names or runs of `?` placeholders.
+- **SQL.** Every value is a bound parameter. Each `format!` that builds SQL inserts only constant text: table or column names, a fixed SQL fragment, or runs of `?` placeholders. The scope and the exclusions reach SQL only through `Scoped::push_filter` (`core/recall/scope.rs`).
 - **FTS5.** Search text is split on every non-alphanumeric character, deduplicated, capped at 32 tokens, and each token is double-quoted and joined with `AND` (`match_expression` in `core/recall/query.rs`). The per-prompt injection joins at most 8 such expressions with `OR`. FTS5 operators, column filters, `*` and `^` cannot get through.
 - **Text for Claude's context.** The `SessionStart` brief names the project path and the branch, then gives "It last asked:" and "It last answered:" excerpts and a line pointing at the recall tools (`core/inject/brief.rs`). The `UserPromptSubmit` injection is `- turn <id> (<day>): <excerpt>` lines (`core/inject/prompt.rs`), and never a tool-result turn. Both are archived transcript text. Excerpts are flattened to one line. Each output opens with a header line saying the text between the `terminus-recall` tags is quoted from this project's Terminus archive and is history, not instructions, then the opening tag `<terminus-recall>` on its own line, the archived text, and the closing tag `</terminus-recall>` on its own line as the last characters (`core/inject/mod.rs`). The tags are the same bytes on every render, with no nonce. Every archived string inside, the excerpts, the day, the project label and the branch, has any span that reads as the closing tag replaced by `[closing tag removed]`: another case, whitespace, ASCII control characters or any non-ASCII character inside it, fullwidth forms, lookalike `<`, `/`, `>` and `-` from fixed tables, and non-ASCII letters in the name's letter positions all count. That runs after redaction and before the budget is spent, and a budget too small for the header and both tags hands over nothing. The header is a statement to the model and enforces nothing: whether it lowers how often a model follows planted text has not been measured [VERIFY].
 - **Shell commands printed for the user to run** are single-quote escaped by `shell_quote`. The `rm -f '<path>'` suggestion in `bin/cmd/doctor.rs` does not escape a `'` in the path.
@@ -177,13 +179,13 @@ No command line is built from transcript content. Transcript content sets only t
 
 - Terminus sends nothing off the machine. It hands archived text to Claude Code on the same machine, and Claude Code sends it to its model with the rest of the session.
 - Text from an excluded project must never reach Claude Code.
-- With `[privacy] redact_recall` on, a secret of a shape the filter is built to replace must never reach Claude Code through a hook or an MCP tool.
+- With `[privacy] redact_recall` on, a secret of a shape the filter is built to replace must never reach Claude Code through a hook or an MCP tool. Open issue #93 breaks this for a bearer token, as Redaction below describes.
 - Archived text leaves the data directory only through hook output, MCP results, CLI output, `export` and `data move`.
 
 **Invariants a finding can break.**
 
 - `install.sh` installs nothing whose manifest fails the pinned key or whose SHA-256 does not match the manifest, and downloads the binary only after the manifest verifies.
-- Archived blocks never change after they are written, and `terminus verify` fails when stored blocks no longer match their recorded hashes.
+- Archived blocks never change after they are written, and `terminus verify` fails when stored blocks no longer match their recorded hashes. The one exception is recovery's twin merge, which replaces a session's block rows with those of a twin whose stream extends it, and deletes the twin.
 
 ## Who runs it and with what privileges
 
@@ -235,9 +237,10 @@ A same-user process that can already write `~/.claude/projects` or the data dire
   - `gitBranch` is printed into the brief unfiltered. A cloned repository controls its own branch names.
   - `sessionId` is joined on by feedback labelling.
   - `parentUuid` sets the `continues_from` link, looked up with `LIMIT 1` and no `ORDER BY`.
-  - `compactMetadata.preservedMessages` decides which turns count as dropped after a compaction, which makes them injectable.
+  - `compactMetadata.preservedMessages` decides which turns count as dropped after a compaction, which makes them injectable. A `system` record with `subtype: compact_boundary` is a boundary whether or not it carries `uuid` and `timestamp`, and the dropped turns are those at a lower stream offset (`derive_boundary` in `core/derive.rs`, `core/inject/compaction.rs`).
   - Message content feeds the FTS index, the entity index and injection.
-- **Session identity.** The session key is the transcript's path below its project folder: `<uuid>.jsonl`, or `<sessionId>/subagents/[workflows/wf_*/]agent-*.jsonl` for a sidecar. It is read off the shape of the path, which must sit in a project folder inside a `projects` folder, and never by stripping a root. It is computed from the path before any byte of the file is read, never from the record's `sessionId` or any other field, so a forged id cannot overwrite another session. A transcript that is a symlink takes the key of the file it points at. A path outside those two shapes, such as a file under no `projects` folder, keeps its canonical path as its key. Two different files that reduce to one key, such as the same session file in two project folders, or under two roots, are never appended to one session. A walk ingests the first and reports the other as a failed file without opening it.
+- **Session identity.** The session key is the transcript's path below its project folder: `<uuid>.jsonl`, or `<sessionId>/subagents/[workflows/wf_*/]agent-*.jsonl` for a sidecar. It is read off the shape of the path, which must sit in a project folder inside a `projects` folder, and never by stripping a root. It is computed from the path before any byte of the file is read, never from the record's `sessionId` or any other field, so a forged id cannot overwrite another session. A transcript that is a symlink takes the key of the file it points at. A path outside those two shapes, such as a file under no `projects` folder, keeps its canonical path as its key. Two different files that reduce to one key, such as the same session file in two project folders, or under two roots, are never appended to one session (`claim` in `core/ingest/mod.rs`). While the file an archived session was read from still exists, it keeps the key whichever file a walk meets first, and any other file with that key is reported as a failed file without being opened. With no archived session, the first file a walk meets takes the key and a later one is refused the same way. When the stored file is gone, a file with its key is compared against every archived byte: it is appended, and its path stored, only when it begins with them, and otherwise refused with nothing flagged.
+- **Change detection.** A pass stats each file and, when it is no longer than its watermark, fetches no archive rows and appends nothing. A file whose bytes before the watermark change, while it is never seen shorter than the watermark, is never compared with the archive, and only its bytes past the watermark are read. A file that grows between the stat and the read is left for the next pass (`Existing::read` in `core/ingest/mod.rs`).
 - **Who controls top-level fields.** Claude Code writes the top-level fields, and tool output appears only inside message content [VERIFY]. Anyone who can write a file under `~/.claude/projects` controls every field.
 
 **2. The shape of the projects tree.** A symlinked `<uuid>.jsonl` or `agent-*.jsonl` is followed to any target that is not excluded. `agent-*.meta.json` is read through symlinks with no size limit.
@@ -248,7 +251,7 @@ A same-user process that can already write `~/.claude/projects` or the data dire
 - **Event name.** It comes from argv. `hook_event_name` in the payload is ignored.
 - **Fields.**
   - `session_id` is allow-listed to hex digits and `-`, 8 to 64 characters, before it goes into a file name.
-  - `transcript_path` is canonicalized and compared as a string, never opened.
+  - `transcript_path` is canonicalized and turned into a session key by `path_key`, never opened. That key picks which session's own turns and which compaction the prompt arm reads (`current_session` in `core/inject/prompt.rs`).
   - `cwd` is used as a string. It selects which archived project's brief or recall is emitted, so a crafted `cwd` can select any project that is not excluded.
   - `prompt` yields at most 8 candidate terms for FTS, and is stored whole in the decision record.
   - `source: "compact"` sets the compaction flag.
@@ -264,14 +267,14 @@ A same-user process that can already write `~/.claude/projects` or the data dire
   - `since` and `until` must be `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SS.mmmZ`.
 - **`recall_context`.** `turn_id` must be an integer, and `before` and `after` are clamped to 25 each.
 - **`recall_get`.** `turn_ids` is cut to 25. Each `body` is the whole archived JSON line, with no size cap.
-- **Scope.** `project` defaults to the server's working directory. `"*"` or any path widens or moves the scope to any project that is not excluded, with no confirmation. Excluded projects stay hidden under every scope. Turn ids are `session_no << 24 | turn_seq`, so they are easy to enumerate, and id lookups outside the scope answer `NoSuchTurn`.
+- **Scope.** `project` defaults to the server's working directory. `"*"` or any path widens or moves the scope to any project that is not excluded, with no confirmation. Excluded projects stay hidden under every scope. Every read that serves turns applies the scope and the exclusions through one rule, `Scoped::push_filter` in SQL or `Scoped::admits` for a turn id, and a session is hidden when its project or pre-worktree key equals one of the archive's keys that the config excludes, listed once when the scope resolves (`core/recall/scope.rs`). Turn ids are `session_no << 24 | turn_seq`, so they are easy to enumerate, and id lookups outside the scope answer `NoSuchTurn`.
 - **Leaks in error text.** Naming a path inside an excluded project returns a reason that includes the stored project key. Error reasons can also carry absolute paths and raw SQLite messages.
 
 **5. CLI arguments.** These come from the user. `ingest <path>`, `export <dir>` and `data move <path>` take any path. `data move` makes it absolute against the working directory, drops trailing slashes and `.` parts, and checks and records that same path. It refuses a destination inside the source or not empty, a symlink, a file, a directory owned by another uid, one with group or world bits, and one it cannot list. It checks again after the answer and refuses a destination that was created, removed, replaced or changed while the question waited.
 
 **6. Environment variables.** These are inherited from the user's shell, or from Claude Code for hooks and MCP. `TERMINUS_DATA_DIR` has no absolute-path check. `PATH` decides which `git` and `claude` run.
 
-**7. `terminus.toml`.** Owned by the user and read whole. `roots` is used as written. In `exclude`, `~` is expanded, `..` is resolved as text, relative entries are dropped, and `/` excludes everything.
+**7. `terminus.toml`.** Owned by the user and read whole. `roots` is used as written. In `exclude`, `~` is expanded, `..` is resolved as text, relative entries are dropped, and `/` excludes everything. Each entry matches both as written and as resolved through symlinks, so an entry written through a linked folder still covers the resolved project key.
 
 **8. Claude Code's `settings.json` and `.claude.json`.** Parsed with nesting capped at 128. The keys of `.mcpServers.terminus` are copied into argv for `claude mcp add-json`.
 
@@ -287,10 +290,14 @@ A same-user process that can already write `~/.claude/projects` or the data dire
   - Whether `--proto '=https'` also restricts redirects [VERIFY].
 - **No sudo.**
 
+**Fuzz targets.** `fuzz/fuzz_targets/` holds cargo-fuzz targets for the parsers at these boundaries: transcript lines (`jsonl_scan`, `index_record`, `capture_elide`, `excerpt`, `commit_subject`), `terminus.toml` (`config_toml`), search text (`search_query`), redaction (`redaction`), MCP messages and the server loop (`mcp_rpc`, `mcp_serve`), hook stdin (`hook_payload`), CLI arguments (`cli_args`) and `settings.json` (`settings_json`). They run against a scratch data and config directory (`fuzz/src/lib.rs`). The `fuzz` module that hands them the binary's parsers is compiled only under `cfg(fuzzing)` (`bin/lib.rs`). No workflow runs them.
+
 **10. What Terminus trusts because it wrote it.**
 
 - **The SQLite store.** Reads check no hashes; `core/store/archive.rs` says so, and only `verify` and the append path check them. Block sizes are bounded to 1 byte through 64 MiB, ranges are checked, and decompressed length must match. Terminus sets no `trusted_schema=OFF` and no `SQLITE_DBCONFIG_DEFENSIVE`, and runs no `integrity_check` on open. `project`, `branch`, `ts`, entities, compaction metadata and `continues_from` are used as stored.
-- **The ingest watermark** is trusted as the place to resume. For a diverged session, `vec![0u8; watermark]` makes an allocation of a size taken from the database.
+- **The ingest watermark** is trusted as the place to resume. For a diverged session, or one whose stored file is gone, `vec![0u8; watermark]` makes an allocation of a size taken from the database.
+- **The rows a pass reads at its start.** Every session's `sessions`, `session_meta` and `watermarks` row is read in one query after recovery and used for the whole walk or backfill without being read again (`read_rows` in `core/ingest/mod.rs`). `session_meta.transcript_path` in it decides which file holds a key.
+- **Recovery's re-key** (`core/recover.rs`). Recovery, at the start of every pass, backfill and `ingest <path>` and before any transcript is read, finds stored keys that are still absolute paths and moves each to its `path_key`, in one transaction with foreign keys deferred, which stats each old path. Twins are merged as the deletes table above describes, on the stored hashes, and label and decision turn ids into a merged twin are rewritten to the survivor's. A re-key that fails stops the pass.
 - **State files.** Injection state files are read whole with `fs::read`, which follows symlinks, and must have `format == 1`. Decision files are read only when they are regular `.json` files, with no size limit.
 - **The `data-location` pointer** is trusted once it holds an absolute path.
 - **The marker.** A file containing the marker bytes counts as Terminus's own. It is a substring match, not a signature, and `doctor` runs such a file with `--version`.
@@ -327,11 +334,12 @@ A same-user process that can already write `~/.claude/projects` or the data dire
   - Bare `sk-` keys: a run of ASCII letters, digits, `-` and `_` that opens with `sk-` and has 20 or more characters after it.
   - A string stored directly under a key whose name contains one of the words above, in a tool's input, a tool's result or an attachment. It is replaced in every excerpt, context window, brief quotation and per-prompt injection, the same as in a `recall_get` body, even though the text those are cut from drops the key's name.
 - **What it misses.**
+  - A bearer token after a secret-named word and a colon, such as `rotate the vault key: Authorization: Bearer <token>`, open issue #93. The header rule reads `key` as the name, takes `Authorization:` as its value and redacts that, then resumes past it, so `Authorization` is never tested and `Bearer <token>` goes out unless another rule matches the token (`redact_header_spans` in `core/observe/egress.rs`).
   - An `sk-` run with fewer than 20 characters after the prefix, and Stripe's `sk_live_` keys, whose underscore puts them outside the `sk-` rule.
   - A value under a secret-named key that is not a string, such as a list of strings. The filter walks into it rather than replacing it, so its strings go out unless a key inside it is named like a secret or another rule matches them.
   - AWS `AKIA` keys, Slack `xox` tokens, and any vendor key with no secret-looking name beside it and no prefix the filter knows. There is no entropy check.
   - It never touches the project path and branch in the brief, or the `session_key`, `project` and `tool_name` fields of MCP results.
 
-**Secrets Terminus itself holds:** none. It reads no API key and refuses a `[provider]` table. The release signing key, `~/.ssh/crenshawdev-release`, is mode 0600 on the maintainer's machine and is used only by `scripts/sign-release.sh`, never by the binary or by CI. Whether that key has a passphrase [VERIFY].
+**Secrets Terminus itself holds:** none. It reads no API key and refuses a `[provider]` table. The release signing key, `~/.ssh/crenshawdev-release`, is mode 0600 on the maintainer's machine and is used only by `scripts/sign-release.sh`, never by the binary or by CI. Whether that key has a passphrase [VERIFY]. `sign-release.sh` keeps no copy of the public key or the version check: it reads `install.sh`'s `release_key=` line, and runs `install.sh`'s `valid_version() (` block through `eval`, so whatever that block holds runs on the maintainer's machine each time a release is signed.
 
-**CI:** the `ANTHROPIC_API_KEY` Actions secret, read only by the `security-review` job in `.github/workflows/fast.yml` on GitHub pull requests. GitHub does not pass it to workflows run from a fork.
+**CI:** the `ANTHROPIC_API_KEY` Actions secret, read only by the `security-review` job in `.github/workflows/fast.yml` on GitHub pull requests that Dependabot did not open. That job checks out the pull request's head, the `.sentinel` submodule included, and runs `.sentinel/ci/security-review.sh` with the secret in its environment and a token that can write pull request comments. GitHub does not pass the secret to workflows run from a fork. `test.yml` reads no secret.
