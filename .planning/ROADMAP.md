@@ -8,7 +8,7 @@ The archive is the product, so it is built first and everything else is built on
 
 - [x] **Phase 1: Signer version check** - `sign-release.sh` refuses every version `install.sh` refuses
 - [x] **Phase 2: Read-only status and verify** - `status` and `verify` open the store read-only, like every other read command
-- [ ] **Phase 3: One excluded-project rule** - the rule that keeps an excluded project out of recall lives in one place
+- [x] **Phase 3: One excluded-project rule** - the rule that keeps an excluded project out of recall lives in one place
 - [ ] **Phase 4: Steady-state ingest pass** - a pass over unchanged transcripts stops reading their archive state
 - [ ] **Phase 5: Brief says when it cuts** - a brief that drops its quoted turns says so, and the tests stop depending on the temp path's length
 - [ ] **Phase 6: Simplify the 1.0.0 changes** - a simplify pass over the code the 1.0.0 fixes change, with no change in behavior

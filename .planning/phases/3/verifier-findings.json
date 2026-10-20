@@ -1,0 +1,92 @@
+{
+  "status": "needs_human",
+  "score": "7/7",
+  "truths": [
+    {
+      "n": 1,
+      "truth": "Scoped holds the one SQL filter (push_filter) and the one Rust check (admits), and the two exclusion lists can only be reached through them",
+      "status": "VERIFIED",
+      "uat_item": 1,
+      "evidence": "crates/terminus-core/src/recall/scope.rs:152 `pub(crate) fn admits` covers the scope check and both exact-match exclusion checks; :182 `pub(crate) fn push_filter` writes ` AND m.project = ?` and then the `m.project` and `m.project_pre_worktree` clauses, skipping each one when its own list is empty. The struct fields are private (:115-120), and `fn excluded_projects` (:132) and `fn excluded_pre_worktree` (:137) have no `pub`. A grep for `excluded_projects()|excluded_pre_worktree()` over crates/ matches only scope.rs:159-160 and :188-189. The workspace builds, so no caller outside scope.rs remains."
+    },
+    {
+      "n": 2,
+      "truth": "Search, the brief, inject::count (the brief's count line) and the prompt line reach push_filter, get and context reach admits, and no read site writes the exclusion itself",
+      "status": "VERIFIED",
+      "uat_item": 1,
+      "evidence": "Call sites: recall/search.rs:348, inject/brief.rs:476 (last_session_row), inject/mod.rs:470 (count, which now writes ` WHERE 1 = 1` and then push_filter), recall/get.rs:153, recall/context.rs:142. The prompt line runs search::run (inject/prompt.rs:430). A grep for `m.project = ?` and `NOT IN (` in crates/*/src matches only scope.rs. I traced values end to end with mutations in a scratch worktree at HEAD. With the pre-worktree entry removed from push_filter, both exclusion.rs a_worktree_session_is_hidden_from_search_under_either_key (search) and inject_brief.rs a_session_excluded_under_its_worktree_key_is_neither_quoted_nor_counted (brief and count) failed. With admits ignoring the pre-worktree list, recall.rs a_turn_excluded_only_by_its_worktree_key_is_refused_by_get_and_context failed at recall.rs:2349. One method controls each door. The only other scope checks are sessions.rs:72 and observations.rs:106, which check scope only. D-11 leaves them out of scope, and they take their exclusion from visible::sessions."
+    },
+    {
+      "n": 3,
+      "truth": "Both push_exclusion functions, both hidden closures in get and context, and ProjectKeys::excluded are gone",
+      "status": "VERIFIED",
+      "uat_item": 1,
+      "evidence": "`grep -rn \"push_exclusion\\|fn excluded(\\|\\.excluded()\\|ProjectKeys::excluded\" crates` printed nothing. `grep -n hidden` on recall/get.rs and recall/context.rs printed nothing. git diff 3d7bbc6 HEAD removes push_exclusion from search.rs and inject/mod.rs and the `impl ProjectKeys { fn excluded }` block from config.rs. The fields project_excluded and pre_worktree_excluded stay (config.rs:1299-1301) because scope.rs:237 and :245 read them."
+    },
+    {
+      "n": 4,
+      "truth": "retention::is_excluded only calls visible::is_excluded, and retention still skips excluded sessions through it",
+      "status": "VERIFIED",
+      "uat_item": 2,
+      "evidence": "The body of crates/terminus-core/src/retention/mod.rs:236-242 is a single `visible::is_excluded(config, row.project.as_deref(), row.project_pre_worktree.as_deref())`, with no iterator and no excludes_path call. config.rs:1366 `visible::is_excluded(config, project, pre_worktree)` keeps the old body, and its one other caller is visible::sessions (config.rs:1270). Behavior check: in a scratch copy I made visible::is_excluded always return false, and tests/retention.rs a_session_in_an_excluded_project_is_passed_over_and_counted failed at retention.rs:284 because the excluded transcript was selected. Retention therefore decides through the visible check. On HEAD that test passes."
+    },
+    {
+      "n": 5,
+      "truth": "The three new tests pass on the pre-plan code at 3d7bbc6 and on HEAD, and each one pins the path it names",
+      "status": "VERIFIED",
+      "uat_item": 3,
+      "evidence": "b74b8bb is 3d7bbc6 plus added lines only: one hunk at the end of inject/brief.rs (the cfg(all(test, feature = \"testkit\")) predating_store module) and new tests in tests/inject_brief.rs and tests/recall.rs. `git diff b74b8bb HEAD` under both tests dirs is empty, and the module is identical at HEAD. b74b8bb still has push_exclusion in search.rs and inject/mod.rs. I ran the tests in a scratch worktree at b74b8bb with `cargo test -p terminus-core --all-features --test inject_brief --test recall --lib -- ...`. All three passed: inject::brief::predating_store::search_and_the_brief_still_answer_and_hide_an_excluded_project, a_session_excluded_under_its_worktree_key_is_neither_quoted_nor_counted, and a_turn_excluded_only_by_its_worktree_key_is_refused_by_get_and_context. All three also pass in the HEAD full-suite run. Pinning, from mutations at HEAD: with push_filter's empty-list skip removed, (c) fails with 'no such column: m.project_pre_worktree'. With the pre-worktree clause dropped, (a) fails. With admits ignoring the pre-worktree list, (b) fails. I removed the worktree and its build dir afterwards."
+    },
+    {
+      "n": 6,
+      "truth": "No existing test or golden file is edited by the phase, and cargo test --workspace --all-features passes",
+      "status": "VERIFIED",
+      "uat_item": 4,
+      "evidence": "`git diff 3d7bbc6 HEAD -- crates/terminus-core/tests crates/terminus/tests` shows +96 in inject_brief.rs and +100 in recall.rs, and no line starting with '-' (0 removed or changed). `git diff 3d7bbc6 HEAD --stat -- crates/terminus-core/tests/goldens` is empty. On the literal `git diff main` wording: against main there are 32 removed test lines (schema.rs, cli.rs, sign_release.rs, status.rs, tighten.rs, uninstall.rs). `git diff main 3d7bbc6` shows the same 32, so phases 1 and 2 removed them and phase 3 removed none. PLAN.md Notes moves the check to the start commit for this reason. Full suite, run once in /code/terminus: `cargo test --workspace --all-features` exited 0 with 1004 passed, 0 failed, 0 ignored across 68 test binaries, and no compiler warning in the log. Saved output: /tmp/claude-1000/-code-terminus/e9b9ab58-07bc-4fc2-a0c7-ea370de6b9b0/scratchpad/full-suite.log"
+    },
+    {
+      "n": 7,
+      "truth": "Every read command answers exactly as before (a refactor with no change in behavior)",
+      "status": "VERIFIED",
+      "uat_item": 4,
+      "evidence": "The clause text in push_filter (scope.rs:184-199) matches the deleted push_exclusion bodies character for character. The only differences are the dropped trailing '\\n' after ` AND m.project = ?` and after '))'. Every clause appended after it starts with a space: Filters::push_onto at search.rs:595-626, ` AND t.id < ?`, TAIL, and ` ORDER BY`. admits is logically equal to the old if-let plus hidden closures: `self.project.is_some() && project != self.project()` is the old `project.as_deref() != Some(wanted)`, and the hidden check is the same exact-string match. inject::count's ` WHERE 1 = 1` + ` AND m.project = ?` is equivalent to the old ` WHERE m.project = ?`. recall_golden the_four_projections_are_what_the_golden_says and the_golden_carries_an_unfiltered_sentinel pass with recall-projections.txt unchanged. These existing tests pass unchanged: a_search_is_scoped_to_the_project_the_caller_stands_in, a_get_is_scoped_like_a_search_is, a_context_window_is_scoped_like_a_search_is, a_get_of_an_excluded_projects_turn_is_absent_with_a_reason, a_window_into_an_excluded_project_is_empty_with_a_reason, a_worktree_session_is_hidden_under_either_of_its_two_keys, a_session_with_a_null_project_stays_visible, and mcp.rs an_excluded_project_is_never_named_to_a_client_at_the_default_scope."
+    },
+    {
+      "n": 8,
+      "truth": "Issue #80 is closed by the merged change",
+      "status": "UNCERTAIN",
+      "uat_item": 5,
+      "evidence": "The phase commits are on branch traders, ahead of main (merge-base e63162d), so no merged PR exists yet. GitHub's issue state is not visible from the repository, and this verification makes no network calls."
+    }
+  ],
+  "passes": [
+    {
+      "k": 1,
+      "name": "Every read site calls the one rule on Scoped",
+      "evidence": "push_filter (scope.rs:182) is called at search.rs:348, brief.rs:476 and inject/mod.rs:470, and the prompt line reaches it through search::run (prompt.rs:430). admits (scope.rs:152) is called at get.rs:153 and context.rs:142. excluded_projects (:132) and excluded_pre_worktree (:137) have no pub. Greps for push_exclusion, fn excluded(, .excluded() and ProjectKeys::excluded over crates/ find nothing, and get.rs and context.rs contain no `hidden`. Mutations show the wiring is real: breaking push_filter's pre-worktree clause failed the search and brief tests, and breaking admits' pre-worktree check failed the get/context test."
+    },
+    {
+      "k": 2,
+      "name": "Retention uses the visible check",
+      "evidence": "The body of retention/mod.rs:236-242 is only `visible::is_excluded(config, row.project.as_deref(), row.project_pre_worktree.as_deref())`. With visible::is_excluded forced to false in a scratch copy, retention.rs a_session_in_an_excluded_project_is_passed_over_and_counted failed (retention.rs:284). It passes at HEAD."
+    },
+    {
+      "k": 3,
+      "name": "Three new tests pin the uncovered exclusion paths",
+      "evidence": "In a scratch worktree at b74b8bb, which is 3d7bbc6 plus added test lines only (tests identical to HEAD's), predating_store::search_and_the_brief_still_answer_and_hide_an_excluded_project, a_session_excluded_under_its_worktree_key_is_neither_quoted_nor_counted and a_turn_excluded_only_by_its_worktree_key_is_refused_by_get_and_context all passed. All three also pass at HEAD in the full suite. Each one failed under the mutation it is meant to catch: the empty-list skip, the pre-worktree SQL clause, and admits' pre-worktree check."
+    },
+    {
+      "k": 4,
+      "name": "No existing test or golden edited, full suite passes",
+      "evidence": "The phase's test diff from 3d7bbc6 is +196 lines and 0 removed (inject_brief.rs, recall.rs), and the goldens are unchanged. The 32 removed lines that `git diff main` shows all come from main..3d7bbc6, which is phases 1 and 2. PLAN.md Notes moves the check to the start commit for this reason. `cargo test --workspace --all-features` exited 0 with 1004 passed and 0 failed, recall_golden included."
+    }
+  ],
+  "gaps": [],
+  "human_checks": [
+    {
+      "name": "Confirm issue #80 is closed by the merged phase 3 PR on GitHub (crenshawdev/terminus)",
+      "expected": "Issue #80 shows as closed, and the closing reference is the merged PR that carries commits b74b8bb, c12b625, 9dd14cc and 3f0154c",
+      "why_human": "The resource is out of reach. The change is still on branch traders and not merged, so the PR that would close #80 does not exist yet. GitHub's issue state cannot be read from the repository, and this verification is barred from the network."
+    }
+  ]
+}
