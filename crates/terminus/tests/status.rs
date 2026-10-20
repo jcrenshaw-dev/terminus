@@ -434,7 +434,7 @@ fn assert_no_store_document(out: &Output) {
 /// A `terminus.db` with no tables is a store another process is still
 /// creating, and gets the no-store answer. The file is left with no tables.
 #[test]
-fn status_on_a_database_with_no_tables_says_no_store_and_creates_nothing() {
+fn status_on_a_database_with_no_tables_says_no_store_and_adds_no_table() {
     let bench = bench();
     std::fs::create_dir_all(&bench.data_dir).unwrap();
     bench

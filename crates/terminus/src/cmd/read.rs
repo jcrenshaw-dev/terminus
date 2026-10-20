@@ -303,9 +303,9 @@ mod tests {
 
     /// A database with no tables is what `Store::open` leaves between stamping
     /// `journal_mode=wal` and committing `initialize`. A read in that moment
-    /// gets the missing-store answer, and the file is left as it was.
+    /// gets the missing-store answer, and the file still holds no tables.
     #[test]
-    fn a_database_with_no_tables_is_a_reason_and_creates_nothing() {
+    fn a_database_with_no_tables_is_a_reason_and_still_holds_no_tables() {
         let dir = tempfile::tempdir().unwrap();
         let path = database(dir.path(), "");
         assert!(std::fs::metadata(&path).unwrap().len() > 0);

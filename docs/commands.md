@@ -107,7 +107,7 @@ Recomputes the observations already recorded, from the archive. It is the only w
 
 ### `terminus verify`
 
-Checks every session's archived blocks against the hash recorded for each. The sessions that fail are printed, and the count goes to stderr. It exits 1 when any session fails. With no store, it says so and exits 0, and creates nothing. On a store older than the binary, it says so on stderr, runs the check, and changes nothing.
+Checks every session's archived blocks against the hash recorded for each. The sessions that fail are printed, and the count goes to stderr. It exits 1 when any session fails. With no store, it says so and exits 0, and creates no store. On a store older than the binary, it says so on stderr, runs the check, and changes nothing.
 
 - `--json`
 
@@ -119,7 +119,7 @@ Rebuilds every table derived from the archive, the search index among them. Turn
 
 ### `terminus status`
 
-Prints the store's path and size, the number of sessions and turns, how far into the transcripts the archive has read, the excluded projects, and the last ingest pass: when it started, how long it took, the files walked, archived and failed, the bytes read, the turns added, and its notes and errors. A pass's failures are recorded here and nowhere else, since there is no log file. It takes no lock, so it works while a pass runs. With no store, it says so and exits 0, and creates nothing. On a store older than the binary, it says so on stderr, reports what is there, and changes nothing.
+Prints the store's path and size, the number of sessions and turns, how far into the transcripts the archive has read, the excluded projects, and the last ingest pass: when it started, how long it took, the files walked, archived and failed, the bytes read, the turns added, and its notes and errors. A pass's failures are recorded here and nowhere else, since there is no log file. It takes no lock, so it works while a pass runs. With no store, it says so and exits 0, and creates no store. On a store older than the binary, it says so on stderr, reports what is there, and changes nothing.
 
 - `--json`
 

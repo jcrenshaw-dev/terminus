@@ -418,8 +418,9 @@ impl Store {
 /// tables but no `meta` is somebody else's SQLite file and gets `false` here.
 ///
 /// The same read-only flags and busy timeout as [`Store::open_read_only`]. It
-/// creates, writes and repairs nothing, so a hot journal is an error here, not
-/// a rollback.
+/// creates no table and writes nothing to the database, so a hot journal is an
+/// error here, not a rollback. Like any read-only open of a WAL file, it can
+/// leave `-shm` and an empty `-wal` behind.
 pub fn holds_no_tables(data_dir: &Path) -> Result<bool> {
     let path = data_dir.join(DB_FILE_NAME);
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
