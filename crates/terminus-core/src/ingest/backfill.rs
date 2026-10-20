@@ -429,7 +429,7 @@ fn commit_one(
 /// `path` is the file [`claim`] resolved, a link's target and never the link,
 /// so the worker reads, and the store records, that file (D-03).
 fn read_existing(store: &Store, rows: &Rows, path: PathBuf, session_key: String) -> Result<Job> {
-    let existing = Existing::read(store.conn(), rows.get(&session_key), &session_key, &path)?;
+    let existing = Existing::read(store.conn(), rows, &session_key, &path)?;
     Ok(Job {
         path,
         session_key,

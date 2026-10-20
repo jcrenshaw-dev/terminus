@@ -204,9 +204,7 @@ pub(crate) fn claim(
     let session_key = path_key(&file)?;
     Ok(match taken.get(&session_key) {
         None => {
-            let row = rows.get(&session_key);
-            let stored = row.and_then(|r| r.transcript_path.as_deref());
-            if let Holder::Other(holder) = Holder::of(stored, row.is_some(), &file) {
+            if let Holder::Other(holder) = Holder::of(rows.get(&session_key), &file) {
                 return Ok(Claim::Held(key_held(&file, &holder)));
             }
             taken.insert(session_key.clone(), file.clone());
@@ -253,7 +251,7 @@ pub(crate) fn ingest_locked(
     projects: &mut Resolver,
     mode: CaptureMode,
 ) -> Result<Outcome> {
-    let existing = Existing::read(store.conn(), rows.get(&session_key), &session_key, path)?;
+    let existing = Existing::read(store.conn(), rows, &session_key, path)?;
     let prepared = prepare(path, session_key, &existing, mode)?;
     apply(store, prepared, started, run_row, projects)
 }
@@ -1003,8 +1001,11 @@ enum Holder {
 }
 
 impl Holder {
-    fn of(stored: Option<&str>, archived: bool, path: &Path) -> Holder {
-        let Some(stored) = stored.filter(|s| archived && *s != &*path.to_string_lossy()) else {
+    fn of(row: Option<&Row>, path: &Path) -> Holder {
+        let Some(stored) = row
+            .and_then(|r| r.transcript_path.as_deref())
+            .filter(|s| *s != &*path.to_string_lossy())
+        else {
             return Holder::This;
         };
         let held = PathBuf::from(stored);
@@ -1023,6 +1024,7 @@ struct ExistingSession {
 
 /// One archived session's `sessions`, `session_meta` and `watermarks` rows, as
 /// [`read_rows`] found them.
+#[derive(Default)]
 pub(crate) struct Row {
     session_no: i64,
     /// `None` only when the session has no `session_meta` row, since the
@@ -1073,16 +1075,16 @@ const ROWS: &str = "SELECT s.session_key, s.session_no, m.checksum, m.agent_meta
 /// reads.
 pub(crate) fn read_rows(conn: &Connection, only: Option<&str>) -> Result<Rows> {
     let one;
-    let (sql, key) = match only {
-        None => (ROWS, None),
-        Some(key) => {
+    let sql = match only {
+        None => ROWS,
+        Some(_) => {
             one = format!("{ROWS} WHERE s.session_key = ?1");
-            (one.as_str(), Some(key))
+            one.as_str()
         }
     };
     let mut stmt = conn.prepare(sql)?;
     let rows = stmt
-        .query_map(rusqlite::params_from_iter(key), |r| {
+        .query_map(rusqlite::params_from_iter(only), |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 Row {
@@ -1104,49 +1106,37 @@ pub(crate) fn read_rows(conn: &Connection, only: Option<&str>) -> Result<Rows> {
 }
 
 impl Existing {
-    /// `path` is the file the pass will read under `session_key`, and `row`
-    /// is that key's row from [`read_rows`], `None` for a file never archived.
+    /// `path` is the file the pass will read under `session_key`, and `rows`
+    /// is the pass's [`read_rows`] map, which holds no row for a file never
+    /// archived.
     pub(crate) fn read(
         conn: &Connection,
-        row: Option<&Row>,
+        rows: &Rows,
         session_key: &str,
         path: &Path,
     ) -> Result<Existing> {
-        let watermark = row.and_then(|r| r.watermark);
-        let agent_meta_stored = row.is_some_and(|r| r.agent_meta_stored);
-        let diverged = row.is_some_and(|r| r.diverged);
-        let evicted = row.is_some_and(|r| r.evicted);
-        let uncompressed_len = row.map_or(0, |r| r.uncompressed_len).max(0) as u64;
-        let stored_capture_mode = row.and_then(|r| r.stored_capture_mode.clone());
-        let block_size = row.and_then(|r| r.block_size);
-        let transcript_path = row.and_then(|r| r.transcript_path.clone());
-        let session = row.map(|r| (r.session_no, r.checksum.clone()));
+        let row = rows.get(session_key);
 
         // An archived session with no metadata row is damaged, not absent.
         // Phase 1 refuses rather than guessing: there is no checksum to verify
         // the stored hashes against, and an append requires one precisely so
         // that a growing session cannot have corruption written into it.
-        let session = match session {
-            Some((_, None)) => {
-                return Err(Error::NotAStore {
-                    path: session_key.into(),
-                    detail: "session is archived but has no session_meta row; \
-                             run `terminus verify` - refusing to overwrite its archive"
-                        .into(),
-                })
-            }
-            Some((session_no, Some(checksum))) => Some((session_no, checksum)),
-            None => None,
-        };
-
-        let holder = Holder::of(transcript_path.as_deref(), session.is_some(), path);
-        // A file standing in for a gone one is compared against every archived
-        // byte, the way a flagged one is.
-        let whole = diverged || matches!(holder, Holder::Gone(_));
-
         let session =
-            match session {
-                Some((session_no, checksum)) => {
+            match row {
+                None => None,
+                Some(Row { checksum: None, .. }) => {
+                    return Err(Error::NotAStore {
+                        path: session_key.into(),
+                        detail: "session is archived but has no session_meta row; \
+                             run `terminus verify` - refusing to overwrite its archive"
+                            .into(),
+                    })
+                }
+                Some(Row {
+                    session_no,
+                    checksum: Some(checksum),
+                    ..
+                }) => {
                     let checksum = checksum.as_slice().try_into().map_err(|_| {
                         Error::BlobChecksumMismatch {
                             expected: "32 bytes".into(),
@@ -1154,12 +1144,28 @@ impl Existing {
                         }
                     })?;
                     Some(ExistingSession {
-                        session_no,
+                        session_no: *session_no,
                         checksum,
                     })
                 }
-                None => None,
             };
+
+        // A file never archived reads every field as unset.
+        let fallback = Row::default();
+        let r = row.unwrap_or(&fallback);
+        let watermark = r.watermark;
+        let agent_meta_stored = r.agent_meta_stored;
+        let diverged = r.diverged;
+        let evicted = r.evicted;
+        let uncompressed_len = r.uncompressed_len.max(0) as u64;
+        let stored_capture_mode = r.stored_capture_mode.clone();
+        let block_size = r.block_size;
+        let transcript_path = r.transcript_path.clone();
+
+        let holder = Holder::of(row, path);
+        // A file standing in for a gone one is compared against every archived
+        // byte, the way a flagged one is.
+        let whole = diverged || matches!(holder, Holder::Gone(_));
 
         // D-08, after every refusal above so an unchanged file still gets each
         // one. A stat and not an open: the pass's opens are counted, and the
@@ -1688,7 +1694,7 @@ mod tests {
         let mut store = Store::open(&data_dir).unwrap();
         let key = path_key(&path).unwrap();
         let rows = read_rows(store.conn(), Some(&key)).unwrap();
-        let existing = Existing::read(store.conn(), rows.get(&key), &key, &path).unwrap();
+        let existing = Existing::read(store.conn(), &rows, &key, &path).unwrap();
         assert!(existing.fetched.is_none(), "an unchanged file fetched rows");
         let mark = watermark(store.conn(), &key);
         let rows = block_rows(store.conn());
@@ -1715,7 +1721,7 @@ mod tests {
         assert_eq!(block_rows(store.conn()), rows);
 
         let rows = read_rows(store.conn(), Some(&key)).unwrap();
-        let existing = Existing::read(store.conn(), rows.get(&key), &key, &path).unwrap();
+        let existing = Existing::read(store.conn(), &rows, &key, &path).unwrap();
         let prepared = prepare(&path, key.clone(), &existing, CaptureMode::Full).unwrap();
         let outcome = apply(
             &mut store,
