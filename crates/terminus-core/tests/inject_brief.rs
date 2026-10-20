@@ -732,11 +732,16 @@ fn a_configured_budget_cuts_the_quoted_turns_and_keeps_the_date_branch_and_count
         ..LATE
     });
 
-    // 500 characters of brief, as before the frame, plus what the frame costs:
-    // without that, the frame leaves the quoted turns no room at all and the
-    // backstop cuts the pointer instead.
+    // The frame, the body's fixed text and 200 characters for the two quoted
+    // turns. The fixed text is measured off the uncut brief because the head
+    // line and the pointer name the project path, which sits under the temp
+    // directory. 200 gives each turn a cut that ends in the mark, and is well
+    // short of the two windowed quotations whole.
     let uncut = bench.brief("project-alpha").expect("a brief");
-    let budget = 500 + frame_cost(&uncut);
+    let quotations = quoted_after(&uncut, "It last asked: ").chars().count()
+        + quoted_after(&uncut, "It last answered: ").chars().count();
+    let fixed = between_tags(&uncut).chars().count() - 2 - quotations;
+    let budget = frame_cost(&uncut) + fixed + 200;
     let brief = bench
         .brief_with("project-alpha", &bench.config(budget))
         .expect("a brief");
