@@ -206,8 +206,11 @@ struct Brief {
 ///
 /// **All of it goes inside the frame (D-02, D-06).** The header and both tags
 /// are a fixed cost that comes off first; a budget they do not fit renders no
-/// brief at all, so [`remember`] writes nothing. The pointer goes inside with
-/// the rest because it repeats the project label, which is archived text.
+/// brief at all, so [`remember`] writes nothing. Nor does a budget whose room
+/// after the frame cannot hold more than [`excerpt::ELISION`]: any cut there
+/// would be a few raw characters with nothing saying so (#46). The pointer goes
+/// inside with the rest because it repeats the project label, which is
+/// archived text.
 fn render(
     conn: &Connection,
     scoped: &Scoped,
@@ -215,7 +218,9 @@ fn render(
     redaction: &Redaction,
 ) -> Option<Brief> {
     let budget = budget.min(MAX_BRIEF_CHARS);
-    if !super::frame_fits(DESCRIPTION, budget) {
+    if !super::frame_fits(DESCRIPTION, budget)
+        || budget - super::frame_cost(DESCRIPTION) <= chars(excerpt::ELISION)
+    {
         return None;
     }
     let framed = budget;
@@ -245,9 +250,10 @@ fn render(
         pointer.as_deref(),
     ));
     let cut = continuity.map(|continuity| continuity.within(budget.saturating_sub(spent)));
-    // The backstop inside `frame`, and only that: it fires when the head line
-    // and the pointer alone are over what the frame left, which no cut to the
-    // quoted turns can fix. It cuts inside the frame, never the closing tag.
+    // The backstop inside `frame`, and only that: it fires when the head line,
+    // the pointer and the marks of turns cut to nothing are over what the frame
+    // left, which no cut to the quoted turns can fix. It cuts the pointer's tail
+    // with a mark of its own, inside the frame, never the closing tag.
     Some(Brief {
         turns: quoted(cut.as_ref()),
         text: super::frame(
@@ -267,9 +273,9 @@ const DESCRIPTION: &str =
 /// The turns a rendered continuity block quotes.
 ///
 /// Read off the block that was actually assembled, never off the one that was
-/// selected: a quotation the budget cut down to nothing is dropped from the
-/// text (see [`Continuity::within`]), and a turn the model was not shown is a
-/// turn the prompt arm must still be free to inject.
+/// selected: a quotation the budget left no room for shows as its label and
+/// [`excerpt::ELISION`] alone (see [`Continuity::within`]), and a turn the model
+/// was not shown is a turn the prompt arm must still be free to inject.
 fn quoted(continuity: Option<&Continuity>) -> Vec<i64> {
     let Some(continuity) = continuity else {
         return Vec::new();
@@ -277,6 +283,7 @@ fn quoted(continuity: Option<&Continuity>) -> Vec<i64> {
     [continuity.prompt.as_ref(), continuity.reply.as_ref()]
         .into_iter()
         .flatten()
+        .filter(|quote| quote.shown)
         .map(|quote| quote.turn_id)
         .collect()
 }
@@ -312,6 +319,9 @@ struct Continuity {
 struct Quote {
     turn_id: i64,
     text: String,
+    /// Whether any of the turn's own text is in [`Quote::text`]. False for a
+    /// turn the budget cut to the mark alone, which the brief did not carry.
+    shown: bool,
 }
 
 impl Continuity {
@@ -327,13 +337,16 @@ impl Continuity {
     }
 
     /// The same block with both quoted turns emptied, for measuring what the
-    /// fixed parts cost. It keeps the labels, so the measurement is an upper
-    /// bound on the fixed cost and never an under-count.
+    /// fixed parts cost. It keeps the labels, which every cut renders, and not
+    /// the marks: a turn cut to the mark alone costs at most the mark's length
+    /// over its share, and the backstop in [`super::frame`] takes that from the
+    /// pointer's tail.
     fn bare(&self) -> Continuity {
         let empty = |quote: &Option<Quote>| {
             quote.as_ref().map(|quote| Quote {
                 turn_id: quote.turn_id,
                 text: String::new(),
+                shown: quote.shown,
             })
         };
         Continuity {
@@ -348,8 +361,9 @@ impl Continuity {
     /// Even shares, except that a turn shorter than its half hands the
     /// remainder to the other rather than wasting it - a one-line prompt
     /// against a long reply is the ordinary shape of a session. A turn whose
-    /// share is nothing is dropped rather than rendered as a label with an
-    /// empty quotation.
+    /// share cannot hold a marked cut renders as its label and
+    /// [`excerpt::ELISION`] alone, so the brief says it cut the turn, and is
+    /// not recorded as briefed (#46).
     fn within(self, allowance: usize) -> Continuity {
         let (prompt, reply) = shares(self.prompt.as_ref(), self.reply.as_ref(), allowance);
         Continuity {
@@ -383,11 +397,20 @@ fn shares(
         spare -= extra;
     }
 
+    // A share smaller than the text and no larger than the mark cannot hold a
+    // marked cut: `clip` would hand back a few raw characters, and a share of
+    // nothing would drop the turn. Either way the turn is shown as the mark.
     let cut = |quote: Option<&Quote>, given: usize| -> Option<Quote> {
         let quote = quote?;
-        (given > 0).then(|| Quote {
+        let shown = given >= chars(&quote.text) || given > chars(excerpt::ELISION);
+        Some(Quote {
             turn_id: quote.turn_id,
-            text: clip(&quote.text, given),
+            text: if shown {
+                clip(&quote.text, given)
+            } else {
+                excerpt::ELISION.to_owned()
+            },
+            shown,
         })
     };
     (cut(prompt, given_prompt), cut(reply, given_reply))
@@ -557,7 +580,11 @@ fn last_exchange(
         let (turn_id, _, _) = coordinates?;
         let bytes = bytes.next()?.ok()?;
         let text = excerpt::of_record_scrubbed(&query, &bytes, redaction, super::neutralize);
-        (!text.trim().is_empty()).then_some(Quote { turn_id, text })
+        (!text.trim().is_empty()).then_some(Quote {
+            turn_id,
+            text,
+            shown: true,
+        })
     };
     let [prompt, reply] = pair;
     (cut(prompt), cut(reply), reads)

@@ -871,6 +871,74 @@ fn every_brief_budget_gives_nothing_or_a_framed_brief_that_fits() {
     assert!(spoke > 0, "no budget was large enough to render");
 }
 
+/// The text after `label` on the line between the tags that starts with it.
+fn quoted_after<'a>(brief: &'a str, label: &str) -> &'a str {
+    between_tags(brief)
+        .lines()
+        .find_map(|line| line.strip_prefix(label))
+        .unwrap_or_else(|| panic!("no {label:?} line between the tags:\n{brief}"))
+}
+
+/// #46: a long project path and a small budget leave the quoted turns no room,
+/// and the brief has to say it cut them rather than drop them without a word.
+///
+/// The project is never created, so its key is the long path itself, as in
+/// `no_brief_exceeds_the_ceiling_whatever_the_config_says`. The budget that
+/// leaves the quotations no room is measured off the rendered uncut brief, so it
+/// follows whatever the temp path makes the project label.
+#[test]
+fn a_budget_that_leaves_a_quoted_turn_no_room_marks_it_and_does_not_record_it() {
+    let bench = bench();
+    let long = format!("project-with-a-long-name-{}", "0123456789".repeat(13));
+    bench.archive(&Session {
+        file: "long.jsonl",
+        project: &long,
+        ..LATE
+    });
+
+    let uncut = bench.brief(&long).expect("a brief");
+    let ellipsis = terminus_core::recall::excerpt::ELISION;
+    assert!(
+        !uncut.contains(ellipsis),
+        "the premise: the uncut brief holds no mark, or the sweep proves nothing: {uncut}"
+    );
+    let length = uncut.chars().count();
+    let quotations = quoted_after(&uncut, "It last asked: ").chars().count()
+        + quoted_after(&uncut, "It last answered: ").chars().count();
+    let budget = length - quotations;
+
+    let session = "46464646-0000-4000-8000-000000000046";
+    let brief = bench
+        .brief_as(session, &long, &bench.config(budget))
+        .expect("a brief");
+    assert_eq!(
+        asked_line(&brief),
+        format!("It last asked: {ellipsis}"),
+        "{brief}"
+    );
+    assert_eq!(
+        quoted_after(&brief, "It last answered: "),
+        ellipsis,
+        "{brief}"
+    );
+    let state = inject::state::State::load(&bench.data_dir, Some(session));
+    assert!(
+        state.brief.is_empty(),
+        "a turn shown only as the mark was recorded as briefed: {:?}",
+        state.brief
+    );
+
+    for budget in 0..=length {
+        let session = format!("46464646-1111-4000-8000-{budget:012}");
+        if let Some(brief) = bench.brief_as(&session, &long, &bench.config(budget)) {
+            assert!(
+                brief == uncut || brief.contains(ellipsis),
+                "budget {budget} cut the brief without saying so: {brief}"
+            );
+        }
+    }
+}
+
 /// AC3 for the brief: a closing tag planted in any archived string it carries
 /// comes out neutralized, and the real one is there exactly once, at the end.
 ///
