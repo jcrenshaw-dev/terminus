@@ -979,3 +979,70 @@ pub fn copy_fixture_into(name: &str, dir: &Path) -> PathBuf {
         .unwrap_or_else(|e| panic!("copy {name} to {}: {e}", dest.display()));
     dest
 }
+
+/// Every `sqlite_master` row and every table's `PRAGMA table_info`.
+pub fn schema(path: &std::path::Path) -> Vec<String> {
+    let conn =
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap();
+    let mut rows: Vec<String> = conn
+        .prepare("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .unwrap()
+        .query_map([], |r| {
+            Ok(format!(
+                "{:?}",
+                (
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                )
+            ))
+        })
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let tables: Vec<String> = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    for table in tables {
+        let mut info = conn.prepare("SELECT * FROM pragma_table_info(?1)").unwrap();
+        let columns = info
+            .query_map([&table], |r| {
+                Ok(format!(
+                    "{table}: {:?}",
+                    (0..6)
+                        .map(|i| r.get::<_, rusqlite::types::Value>(i))
+                        .collect::<Result<Vec<_>, _>>()?
+                ))
+            })
+            .unwrap()
+            .map(Result::unwrap);
+        rows.extend(columns);
+    }
+    rows
+}
+
+/// A format-2 store an older build wrote: `derived_schema` one behind, and
+/// `decisions` without the two columns that arrived after it. A writable open
+/// would add them back.
+pub fn age(path: &std::path::Path) {
+    let conn = rusqlite::Connection::open(path).unwrap();
+    conn.execute(
+        "UPDATE meta SET value = ?1 WHERE key = ?2",
+        [
+            (crate::DERIVED_SCHEMA - 1).to_string(),
+            crate::store::META_DERIVED_SCHEMA.to_owned(),
+        ],
+    )
+    .unwrap();
+    conn.execute_batch(
+        "ALTER TABLE decisions DROP COLUMN compacted;
+         ALTER TABLE decisions DROP COLUMN dropped;",
+    )
+    .unwrap();
+}
