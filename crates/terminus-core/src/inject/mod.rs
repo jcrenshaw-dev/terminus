@@ -154,34 +154,6 @@ pub(crate) fn scoped(conn: &Connection, config: &Config, payload: &Payload) -> O
     Some(scoped)
 }
 
-/// The `NOT IN` clause that keeps an excluded session out of a count.
-///
-/// ING-08 is enforced on the read path as well as on ingest, and
-/// `scope::resolve` only rejects a scope whose own project is excluded - a
-/// session of a visible project whose *pre-worktree* key is excluded is still
-/// in the table and must not be counted. Written with the null guard because
-/// SQL's `NULL NOT IN (...)` is NULL rather than true, which would drop every
-/// session whose key is null: the one session nothing can say is excluded.
-pub(crate) fn push_exclusion(
-    sql: &mut String,
-    params: &mut Vec<Box<dyn rusqlite::ToSql>>,
-    column: &str,
-    excluded: &[String],
-) {
-    if excluded.is_empty() {
-        return;
-    }
-    sql.push_str(&format!(" AND ({column} IS NULL OR {column} NOT IN ("));
-    for (index, value) in excluded.iter().enumerate() {
-        if index > 0 {
-            sql.push(',');
-        }
-        sql.push('?');
-        params.push(Box::new(value.clone()));
-    }
-    sql.push_str("))");
-}
-
 /// How many characters a string is, which is what an injection budget counts
 /// (D-16).
 ///
@@ -493,28 +465,9 @@ fn framed(description: &str, body: &str) -> String {
 
 /// One count over the visible rows of a scoped project.
 pub(crate) fn count(conn: &Connection, head: &str, scoped: &Scoped) -> Result<i64> {
-    let mut sql = String::from(head);
+    let mut sql = format!("{head} WHERE 1 = 1");
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-
-    match scoped.project() {
-        Some(project) => {
-            sql.push_str(" WHERE m.project = ?");
-            params.push(Box::new(project.to_owned()));
-        }
-        None => sql.push_str(" WHERE 1 = 1"),
-    }
-    push_exclusion(
-        &mut sql,
-        &mut params,
-        "m.project",
-        scoped.excluded_projects(),
-    );
-    push_exclusion(
-        &mut sql,
-        &mut params,
-        "m.project_pre_worktree",
-        scoped.excluded_pre_worktree(),
-    );
+    scoped.push_filter(&mut sql, &mut params);
 
     let count = conn.query_row(&sql, rusqlite::params_from_iter(params.iter()), |r| {
         r.get(0)

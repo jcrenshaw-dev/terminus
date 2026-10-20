@@ -136,6 +136,49 @@ impl Scoped {
         &self.excluded_pre_worktree
     }
 
+    /// Restrict a query over `session_meta m` to this scope: its project when
+    /// it names one, and never a session an exclusion covers.
+    ///
+    /// Writes only `AND` clauses, each starting with a space, so the caller's
+    /// SQL is already inside a `WHERE`.
+    ///
+    /// Both exclusions are written even under a project. ING-08 holds on the
+    /// read path as well as on ingest, and [`resolve`] only rejects a scope
+    /// whose own project is excluded: a session of a visible project whose
+    /// pre-worktree key is excluded is still in the table and is filtered here.
+    ///
+    /// `NOT IN` carries the null guard because SQL's `NULL NOT IN (...)` is
+    /// NULL, which is not true, so an unguarded clause would drop every session
+    /// whose key is null - the one session nothing can say is excluded.
+    ///
+    /// Nothing is written for an empty list, because `NOT IN ()` is not SQL.
+    /// The skip is per list, and that is what keeps `m.project_pre_worktree`
+    /// out of the SQL on a store older than that column, where its list is
+    /// always empty.
+    pub(crate) fn push_filter(&self, sql: &mut String, params: &mut Vec<Box<dyn rusqlite::ToSql>>) {
+        if let Some(project) = self.project() {
+            sql.push_str(" AND m.project = ?");
+            params.push(Box::new(project.to_owned()));
+        }
+        for (column, excluded) in [
+            ("m.project", self.excluded_projects()),
+            ("m.project_pre_worktree", self.excluded_pre_worktree()),
+        ] {
+            if excluded.is_empty() {
+                continue;
+            }
+            sql.push_str(&format!(" AND ({column} IS NULL OR {column} NOT IN ("));
+            for (index, value) in excluded.iter().enumerate() {
+                if index > 0 {
+                    sql.push(',');
+                }
+                sql.push('?');
+                params.push(Box::new(value.clone()));
+            }
+            sql.push_str("))");
+        }
+    }
+
     /// Set when this scope can match nothing at all, whatever the query is.
     pub fn reason(&self) -> Option<&Reason> {
         self.reason.as_ref()

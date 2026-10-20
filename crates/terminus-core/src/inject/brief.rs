@@ -473,23 +473,7 @@ fn last_session_row(
          WHERE m.parent_session_key IS NULL",
     );
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-
-    if let Some(project) = scoped.project() {
-        sql.push_str(" AND m.project = ?");
-        params.push(Box::new(project.to_owned()));
-    }
-    super::push_exclusion(
-        &mut sql,
-        &mut params,
-        "m.project",
-        scoped.excluded_projects(),
-    );
-    super::push_exclusion(
-        &mut sql,
-        &mut params,
-        "m.project_pre_worktree",
-        scoped.excluded_pre_worktree(),
-    );
+    scoped.push_filter(&mut sql, &mut params);
     sql.push_str(" ORDER BY m.last_turn_at DESC, m.session_key DESC LIMIT 1");
 
     let row = conn
