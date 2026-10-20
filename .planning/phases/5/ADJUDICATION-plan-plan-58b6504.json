@@ -1,0 +1,42 @@
+{
+  "phase": "5",
+  "trigger": "plan",
+  "discriminator": "plan-58b6504",
+  "round": 1,
+  "base": "58b6504",
+  "head": "58b6504",
+  "base_id": "58b6504a97c99cd50667f19fbf4021679201bca5",
+  "head_id": "58b6504a97c99cd50667f19fbf4021679201bca5",
+  "voices": [
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol"
+    }
+  ],
+  "citations": {
+    "checked": true
+  },
+  "entries": [
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol",
+      "file": ".planning/phases/5/PLAN.md",
+      "line": 47,
+      "severity": "high",
+      "claim": "Task 1 directly contradicts locked decision D-03 by explicitly keeping `bare` measured with empty quotations and declining to measure the marks as fixed cost with the head line and pointer.",
+      "failure_scenario": "The implementation can follow this task exactly by allocating shares without reserving the two elision marks and relying on `frame` to repair the resulting overflow. Although this may produce marks in common cases, it does not implement D-03's locked accounting rule that the marks are measured up front as fixed cost; the phase would be declared complete with a contradicted locked decision.",
+      "ruling": "downgraded",
+      "convergent": false,
+      "counter_evidence": [
+        {
+          "file": "crates/terminus-core/src/inject/brief.rs",
+          "line": 364,
+          "note": "Confirmed as text, overstated as severity: high to medium. The plan keeps bare() measuring the labels with empty quotations (PLAN.md:47), so it does not literally measure the marks up front. The behaviour D-03 locks is delivered: shares() only changes outcome for a share of 3 or fewer, where the mark renders at most 3 characters over the share and the existing frame backstop cuts the pointer tail. The mark always renders and no cut brief is silent, which Task 1 sweeps over every budget. Measuring marks in bare() would shrink every share and move every existing cut brief unless the mark were added back, which renders the same text. The plan discloses the divergence; it is a wording mismatch with D-03 for John to rule on."
+        }
+      ],
+      "citation_missing": true,
+      "base_id": "58b6504a97c99cd50667f19fbf4021679201bca5",
+      "head_id": "58b6504a97c99cd50667f19fbf4021679201bca5"
+    }
+  ]
+}
