@@ -514,12 +514,10 @@ fn answered(data_dir: &Path, yes: bool) -> Result<bool, Failure> {
 /// The store's footprint on disk: the database and its two sidecars.
 ///
 /// The same three files and the same rule as `cmd::status`'s `size_bytes`, and
-/// deliberately so - but not always the same number. `status` measures while
-/// its own connection is open, and SQLite's `-shm` and `-wal` exist only for
-/// the life of a connection, so `status` counts them and this, which opens
-/// nothing, does not. Measured 2026-08-18 against a one-session store:
-/// `status --json` reports 159,744 and the directory holds 126,976, the
-/// difference being the 32 KiB `-shm` that goes when the connection does.
+/// deliberately so. `status` measures while its own connection is open, and
+/// this opens nothing. `status`'s read-only open leaves the 32 KiB `-shm` and
+/// an empty `-wal` on disk when it exits, so after a `status` run this counts
+/// them too, while a writable open that closes cleanly removes both.
 ///
 /// What `--purge` shows is therefore what is on disk at that moment, which is
 /// the number that is about to go.

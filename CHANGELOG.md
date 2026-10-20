@@ -53,8 +53,10 @@ and the versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `terminus status` could fail with "database is locked" when it opened a data
   directory another Terminus process was creating at the same moment. Both
   processes read the directory as new, and the one that lost the race failed at
-  once instead of waiting for the other to finish. It now waits for the other
-  process's write lock and then opens the store that process made.
+  once instead of waiting for the other to finish. A writable open that loses
+  that race now waits for the other process's write lock and then opens the
+  store that process made. `status` no longer opens the store for writing at
+  all, and in that moment it reports that there is no store yet (#77).
 - After `terminus ingest <path>` on one transcript, `terminus status` showed 1
   walked and 0 committed for that run, because the `runs` row a single-file
   ingest writes left `files_committed` at 0. It now records 1 committed and 0
@@ -202,6 +204,17 @@ and the versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   controls included, as a `\u00XX` escape such as `\u001b`, with or without
   `--raw`. The record body `terminus show` prints is still the archived line
   byte for byte, and `--json` output is unchanged (#63, #65, #66).
+- On a machine with no store, `terminus status` and `terminus verify` created
+  the data directory and an empty store. On a store older than the binary,
+  they added its missing tables and columns without taking the ingest lock.
+  Both now open the store read-only. With no store they print the reason on
+  stderr, print nothing on stdout and exit 0, so `status` no longer prints
+  zeroes. With `--json` they print the document with its numbers at zero and
+  its other fields null or empty. On an older store they print the line saying
+  its derived tables predate this build, and change nothing. Every read command
+  now also reports a database file with no tables at all as no store, since
+  that is what a store looks like while another process is still creating it
+  (#77).
 
 ## [0.1.1] - 2026-10-15
 

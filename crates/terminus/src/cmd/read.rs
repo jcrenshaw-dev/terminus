@@ -1,8 +1,11 @@
-//! The one place `search`, `show` and `sessions` open the store.
+//! The one place the read commands open the store: `search`, `show`,
+//! `sessions`, `status`, `verify`, `observations`, `stats`, `replay`, `usage`,
+//! `export`, `retention --dry-run`, `doctor`, `backfill`'s estimate and the MCP
+//! tools.
 //!
-//! Three commands opening a store three times is three chances to drift on the
-//! two behaviours D-10 and D-18 fix, and neither of them is visible in a test
-//! that only checks the command answered.
+//! Each of them opening a store its own way is that many chances to drift on
+//! the two behaviours D-10 and D-18 fix, and neither of them is visible in a
+//! test that only checks the command answered.
 //!
 //! **Read-only, always (D-10).** [`terminus_core::Store::open_read_only`] and
 //! never `Store::open`: opening a store is a read, and `Store::open` would
@@ -13,9 +16,12 @@
 //!
 //! **A missing store is an answer, not a failure.** A machine that has installed
 //! terminus and not yet run an ingest is the ordinary starting state, so it gets
-//! an empty result carrying a reason and exit 0. A store that is *there* and
-//! cannot be read is the other thing: that is operational (exit 1), because a
-//! script told "no results" about an unreadable database would carry on.
+//! an empty result carrying a reason and exit 0. A database file with no tables
+//! at all is the same answer: it is a store another process is still creating,
+//! between `Store::open` stamping `journal_mode=wal` and `initialize`
+//! committing. A store that is *there* and cannot be read is the other thing:
+//! that is operational (exit 1), because a script told "no results" about an
+//! unreadable database would carry on.
 //!
 //! **A store older than this build says so and is not repaired (D-18).**
 //! `reindex::open_up_to_date` stays the only caller that rebuilds. A read that

@@ -205,6 +205,9 @@ file it points at, and a path outside those two shapes, such as a file under no
   watermark repaired, a step that could not run. `notes` holds what a healthy
   pass did worth saying, such as labels written and sessions retention evicted.
   Each is null when there is nothing to say, and `doctor` flags only `error`.
+- A machine with no store is an ordinary empty answer: exit 0, `ok` true, a
+  `reason`, `store`, `excluded` and `last_run` null, every number zero, and no
+  data directory created by the asking.
 
 ### `verify`
 
@@ -218,6 +221,9 @@ file it points at, and a path outside those two shapes, such as a file under no
 - Without `--json`, each failure is one line on stdout,
   `<session_key>: block N: <detail>`, or `<session_key>: <detail>` when `block`
   is `null`.
+- A machine with no store is an ordinary empty answer: exit 0, `ok` true, a
+  `reason`, `checked` 0, `failures` empty, and no data directory created by the
+  asking.
 
 Exits 1 when `failures` is non-empty, with the document still written.
 

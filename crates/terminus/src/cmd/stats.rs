@@ -7,9 +7,7 @@
 //!
 //! It reads through the shared read path, so a machine that has never ingested
 //! gets an empty answer with a reason and exit 0 rather than a store created as
-//! the side effect of a question (D-15). Unlike `status` - which opens for
-//! write because it reports on the store itself - this is a report about a log,
-//! and nothing about it needs a writable connection.
+//! the side effect of a question (D-15).
 //!
 //! The numbers are characters, never tokens (D-12), and the output says so.
 

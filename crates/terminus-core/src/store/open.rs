@@ -190,14 +190,15 @@ impl Store {
             store.initialize()?;
         } else {
             // Every open of an existing store, and deliberately NOT gated on
-            // `rebuild_required`. `reindex::open_up_to_date` is the only caller
-            // that acts on that outcome, while `status`, `verify` and every
-            // phase 3 reader open through here alone - so gating the column
-            // bring-forward on it would leave a user who upgraded the binary
-            // and ran `status` before any ingest hitting `no such column` on a
-            // perfectly healthy store. Adding a missing column is safe on any
-            // opener; the destructive derived-table rebuild stays exactly where
-            // it is, outside this function and inside the ingest lock.
+            // `rebuild_required`. `reindex` and the recovery at the top of an
+            // ingest pass act on that outcome through `reindex::up_to_date`,
+            // while `compact`, `observations regenerate` and the snapshot taken
+            // after a pass open through here alone - so gating the column
+            // bring-forward on it would leave them naming columns an older
+            // store does not have. Adding a missing column is safe on any
+            // writable opener; the destructive derived-table rebuild stays
+            // exactly where it is, outside this function and inside the ingest
+            // lock.
             bring_forward(&store.conn)?;
             drop_summary_columns(&store.conn)?;
         }

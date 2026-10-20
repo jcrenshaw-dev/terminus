@@ -72,7 +72,7 @@ Last reviewed: 2026-10-15
 |---|---|---|
 | `<data>/` | 0700 | Created by the lock, by `Store::open` and by the injection state save |
 | `LOCK` | 0600 | `flock` target for ingest, `compact`, `reindex`, `observations regenerate`, `data move` and `uninstall --purge` |
-| `terminus.db` | 0600 | Pre-created with `create_new` before SQLite opens it. `status` and `verify` open the store writable, so they create the data directory and an empty database if none exists |
+| `terminus.db` | 0600 | Pre-created with `create_new` before SQLite opens it. Only a writable open creates it, with the data directory, when none exists: ingest (the hook-spawned pass and the backfill included), `reindex` and `observations regenerate`. `compact` exits first when there is no store. `status`, `verify` and the other read commands open it read-only and create nothing |
 | `terminus.db-wal`, `-shm` | Created by SQLite; the code expects SQLite to copy the main file's mode [VERIFY] | WAL mode is set on every writable open |
 | `snapshots/terminus-<UTC stamp>.db` | 0600 | A full copy of the database made with `VACUUM INTO`, every 24 hours by default, 3 kept by default (`core/store/snapshot.rs`) |
 | `injection/<session_id>.json` | 0600 | Turn ids already injected and a compaction flag. Never pruned |
