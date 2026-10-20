@@ -130,11 +130,14 @@ pub fn run(data_dir: &Path) -> Result<PassOutcome> {
 /// The seam tests use, so a test never has to resolve a real transcript root.
 ///
 /// Two halves. [`locked`] is everything that touches the archive, under the
-/// ingest lock, ending with the `runs` row. The snapshot comes after it
-/// returns, once the guard and the store are dropped and that row has
-/// committed, so a snapshot that failed is a note and never a failed pass.
+/// ingest lock, ending with the `runs` row and with whether a snapshot is due,
+/// asked of the pass's own store. The snapshot itself comes after it returns,
+/// once the guard and the store are dropped and that row has committed, so a
+/// snapshot that failed is a note and never a failed pass. When none is due,
+/// nothing here opens the store a second time.
 pub fn run_with(data_dir: &Path, config: &Config) -> Result<PassOutcome> {
-    let mut summary = match locked(data_dir, config)? {
+    let (outcome, gate) = locked(data_dir, config)?;
+    let mut summary = match outcome {
         PassOutcome::LockHeld => return Ok(PassOutcome::LockHeld),
         PassOutcome::Ran(summary) => summary,
     };
@@ -144,38 +147,48 @@ pub fn run_with(data_dir: &Path, config: &Config) -> Result<PassOutcome> {
     // copy of what is already safely archived, so one that could not be
     // written is a note - failing the pass over it would stop archiving the
     // transcripts the copy exists to protect.
-    summary.snapshot = roll(data_dir, config);
+    summary.snapshot = match gate {
+        Gate::NotDue => Snapshotted::default(),
+        Gate::Note(note) => Snapshotted {
+            notes: vec![note],
+            ..Snapshotted::default()
+        },
+        Gate::Due { now } => roll(data_dir, config, now),
+    };
     Ok(PassOutcome::Ran(summary))
 }
 
-/// Take a rolling snapshot, if one is due (STOR-06, D-15).
+/// Whether [`locked`] found a snapshot due, carried out to [`run_with`].
+enum Gate {
+    /// Snapshots are off, or the interval has not elapsed.
+    NotDue,
+    /// Due, as of `now` on SQLite's clock, the reading the stamp records.
+    Due { now: i64 },
+    /// The clock or the stamp could not be read. No snapshot is taken.
+    Note(String),
+}
+
+/// Is a rolling snapshot due (STOR-06, D-15)? Asked of the pass's own store,
+/// inside the lock, after the `runs` row has committed.
 ///
 /// **The gate is answered before any expensive work.** The hook spawn is the
 /// scheduler and fires on every prompt; a snapshot of the real store is 1.087 GB
 /// and 0.56 s, so an ungated step writes a gigabyte per prompt and the first
 /// user to notice is one whose disk fills. The interval is what makes STOR-06's
-/// "on by default" affordable, and this is where it is enforced.
+/// "on by default" affordable, and this is where it is enforced. Asking it here
+/// rather than after the lock drops is what keeps a pass with nothing due to
+/// one writable open of the store.
 ///
 /// **One clock.** `now` comes from SQLite, the same source every stored
 /// timestamp and every snapshot file name comes from, so the comparison is
 /// between two readings of one clock rather than between SQLite's and the
 /// process's.
 ///
-/// **Nothing here raises.** Every failure is a note; see [`Snapshotted`].
-fn roll(data_dir: &Path, config: &Config) -> Snapshotted {
-    let mut out = Snapshotted::default();
+/// **Nothing here raises.** A failed read is a note; see [`Snapshotted`].
+fn due(store: &crate::store::Store, config: &Config) -> Gate {
     if !config.snapshots_enabled() {
-        return out;
+        return Gate::NotDue;
     }
-
-    // Its own handle, because the pass's is gone with the lock.
-    let store = match crate::store::Store::open(data_dir) {
-        Ok(store) => store,
-        Err(e) => {
-            out.notes.push(format!("no snapshot was taken: {e}"));
-            return out;
-        }
-    };
 
     let now: i64 = match store
         .conn()
@@ -184,15 +197,9 @@ fn roll(data_dir: &Path, config: &Config) -> Snapshotted {
         }) {
         Ok(text) => match text.parse() {
             Ok(seconds) => seconds,
-            Err(e) => {
-                out.notes.push(format!("no snapshot was taken: {e}"));
-                return out;
-            }
+            Err(e) => return Gate::Note(format!("no snapshot was taken: {e}")),
         },
-        Err(e) => {
-            out.notes.push(format!("no snapshot was taken: {e}"));
-            return out;
-        }
+        Err(e) => return Gate::Note(format!("no snapshot was taken: {e}")),
     };
 
     match store.meta_int(META_LAST_SNAPSHOT) {
@@ -203,15 +210,32 @@ fn roll(data_dir: &Path, config: &Config) -> Snapshotted {
             if now.saturating_sub(last)
                 < (config.snapshot_interval_hours().saturating_mul(3_600) as i64) =>
         {
-            return out
+            Gate::NotDue
         }
         // Never taken one, or the interval has elapsed.
-        Ok(_) => {}
+        Ok(_) => Gate::Due { now },
+        Err(e) => Gate::Note(format!("no snapshot was taken: {e}")),
+    }
+}
+
+/// Take the rolling snapshot [`due`] found due, as of `now` (STOR-06, D-15).
+///
+/// Runs after the lock is released, on a handle of its own, because the pass's
+/// is gone with the lock. Holding the lock through a `VACUUM INTO` of a 3 GB
+/// store would make every hook in that window lose the race for nothing, and a
+/// copy taken while another pass holds the lock is still a valid store.
+///
+/// **Nothing here raises.** Every failure is a note; see [`Snapshotted`].
+fn roll(data_dir: &Path, config: &Config, now: i64) -> Snapshotted {
+    let mut out = Snapshotted::default();
+
+    let store = match crate::store::Store::open(data_dir) {
+        Ok(store) => store,
         Err(e) => {
             out.notes.push(format!("no snapshot was taken: {e}"));
             return out;
         }
-    }
+    };
 
     match crate::store::snapshot::take(data_dir) {
         Ok(path) => out.taken = Some(path),
@@ -243,8 +267,9 @@ fn roll(data_dir: &Path, config: &Config) -> Snapshotted {
     out
 }
 
-/// Everything the ingest lock covers, from taking it to the `runs` row.
-fn locked(data_dir: &Path, config: &Config) -> Result<PassOutcome> {
+/// Everything the ingest lock covers, from taking it to the `runs` row and
+/// the snapshot gate.
+fn locked(data_dir: &Path, config: &Config) -> Result<(PassOutcome, Gate)> {
     let started = Instant::now();
 
     // Once, for the whole walk. A per-file lock would be two thousand syscalls
@@ -252,7 +277,7 @@ fn locked(data_dir: &Path, config: &Config) -> Result<PassOutcome> {
     // the invariant `ingest_locked` rests on: the guard makes this the only
     // writer, so nothing changes the store between its read and its write.
     let _guard = match lock::try_acquire(data_dir)? {
-        Attempt::Held => return Ok(PassOutcome::LockHeld),
+        Attempt::Held => return Ok((PassOutcome::LockHeld, Gate::NotDue)),
         Attempt::Acquired(guard) => guard,
     };
 
@@ -352,7 +377,10 @@ fn locked(data_dir: &Path, config: &Config) -> Result<PassOutcome> {
     match walked {
         Ok(()) => {
             recorded?;
-            Ok(PassOutcome::Ran(summary))
+            // After the row committed and before the guard drops, on this
+            // pass's own store (D-15).
+            let gate = due(&store, config);
+            Ok((PassOutcome::Ran(summary), gate))
         }
         // The walk's error is the one worth returning. If the row could not be
         // written either, the store is unwritable and that is the same fact
