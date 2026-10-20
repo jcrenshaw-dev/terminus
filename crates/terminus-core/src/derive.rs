@@ -73,6 +73,10 @@ impl TurnRow<'_> {
 /// Runs inside the caller's transaction and never opens one of its own: ingest
 /// commits the blob, the turn rows and the watermark together (STOR-02), and a
 /// nested transaction here would be a second commit point inside that.
+///
+/// Every statement here comes from the connection's statement cache, so a loop
+/// compiles each one once. That holds only while a loop's statements fit the
+/// cache's default 16: an ingest walk uses 13 and a `reindex` loop 11.
 pub fn derive_turn(tx: &Connection, row: TurnRow<'_>) -> Result<i64> {
     let id = schema::turn_id(row.session_no, row.turn.turn_seq);
 
@@ -80,7 +84,7 @@ pub fn derive_turn(tx: &Connection, row: TurnRow<'_>) -> Result<i64> {
     // of a turn whose classification changed - a rule this build extended, a
     // record the previous one read differently - would otherwise keep the old
     // value while everything around it moved (INJ-07, phase 1 D-03).
-    tx.execute(
+    tx.prepare_cached(
         "INSERT INTO turns (
             id, session_key, turn_seq, uuid, parent_uuid, record_type, tool_name, ts,
             stream_offset, byte_len, is_typed
@@ -90,24 +94,24 @@ pub fn derive_turn(tx: &Connection, row: TurnRow<'_>) -> Result<i64> {
             record_type = excluded.record_type, tool_name = excluded.tool_name,
             ts = excluded.ts, stream_offset = excluded.stream_offset,
             byte_len = excluded.byte_len, is_typed = excluded.is_typed",
-        rusqlite::params![
-            id,
-            row.session_key,
-            row.turn.turn_seq,
-            row.turn.uuid,
-            row.turn.parent_uuid,
-            row.turn.record_type,
-            row.turn.tool_name,
-            row.turn.timestamp,
-            row.stream_offset as i64,
-            row.byte_len as i64,
-            // Off the `Turn` the parser produced, never re-read out of
-            // `row.record` here - the rule `TurnRow::subtype` states above, and
-            // for the same reason: a second parse site inside the seam is a
-            // second place for ingest and rebuild to disagree.
-            row.turn.is_typed,
-        ],
-    )?;
+    )?
+    .execute(rusqlite::params![
+        id,
+        row.session_key,
+        row.turn.turn_seq,
+        row.turn.uuid,
+        row.turn.parent_uuid,
+        row.turn.record_type,
+        row.turn.tool_name,
+        row.turn.timestamp,
+        row.stream_offset as i64,
+        row.byte_len as i64,
+        // Off the `Turn` the parser produced, never re-read out of
+        // `row.record` here - the rule `TurnRow::subtype` states above, and
+        // for the same reason: a second parse site inside the seam is a
+        // second place for ingest and rebuild to disagree.
+        row.turn.is_typed,
+    ])?;
 
     // One parse, for every rule that reads the record's structure. A record
     // that will not parse projects to empty text and never to the raw line:
@@ -123,35 +127,32 @@ pub fn derive_turn(tx: &Connection, row: TurnRow<'_>) -> Result<i64> {
     // Delete before insert, at the rowid the turn id fixes. On a fresh insert
     // the delete is a no-op; on a re-derive it is what keeps the row count
     // stable instead of doubling the index.
-    tx.execute("DELETE FROM turns_fts WHERE rowid = ?1", [id])?;
-    tx.execute(
-        "INSERT INTO turns_fts (rowid, body) VALUES (?1, ?2)",
-        rusqlite::params![id, body],
-    )?;
+    tx.prepare_cached("DELETE FROM turns_fts WHERE rowid = ?1")?
+        .execute([id])?;
+    tx.prepare_cached("INSERT INTO turns_fts (rowid, body) VALUES (?1, ?2)")?
+        .execute(rusqlite::params![id, body])?;
 
     // Cleared before anything is written, at a known turn id, which is what
     // makes a re-derive idempotent by construction rather than by a uniqueness
     // check the tables do not carry. A value that stopped being extracted must
     // stop having a row.
-    tx.execute("DELETE FROM entities WHERE turn_id = ?1", [id])?;
-    tx.execute("DELETE FROM paths WHERE turn_id = ?1", [id])?;
+    tx.prepare_cached("DELETE FROM entities WHERE turn_id = ?1")?
+        .execute([id])?;
+    tx.prepare_cached("DELETE FROM paths WHERE turn_id = ?1")?
+        .execute([id])?;
     for entity in value
         .as_ref()
         .map(crate::index::entities)
         .unwrap_or_default()
     {
-        tx.execute(
-            "INSERT INTO entities (turn_id, kind, value_norm) VALUES (?1, ?2, ?3)",
-            rusqlite::params![id, entity.kind, entity.value],
-        )?;
+        tx.prepare_cached("INSERT INTO entities (turn_id, kind, value_norm) VALUES (?1, ?2, ?3)")?
+            .execute(rusqlite::params![id, entity.kind, entity.value])?;
         // `paths` exists for exactly this lookup - "which turns touched this
         // file" - so a path entity without its row would leave the table
         // describing a subset of what the index knows.
         if entity.kind == crate::index::entity::PATH {
-            tx.execute(
-                "INSERT INTO paths (turn_id, path) VALUES (?1, ?2)",
-                rusqlite::params![id, entity.value],
-            )?;
+            tx.prepare_cached("INSERT INTO paths (turn_id, path) VALUES (?1, ?2)")?
+                .execute(rusqlite::params![id, entity.value])?;
         }
     }
 
@@ -213,15 +214,17 @@ fn set_boundary(
     is_boundary: bool,
     metadata: Option<&[u8]>,
 ) -> Result<()> {
-    tx.execute(
-        "DELETE FROM compactions WHERE session_key = ?1 AND stream_offset = ?2",
-        rusqlite::params![session_key, stream_offset as i64],
-    )?;
+    tx.prepare_cached("DELETE FROM compactions WHERE session_key = ?1 AND stream_offset = ?2")?
+        .execute(rusqlite::params![session_key, stream_offset as i64])?;
     if is_boundary {
-        tx.execute(
+        tx.prepare_cached(
             "INSERT INTO compactions (session_key, stream_offset, metadata) VALUES (?1, ?2, ?3)",
-            rusqlite::params![session_key, stream_offset as i64, metadata],
-        )?;
+        )?
+        .execute(rusqlite::params![
+            session_key,
+            stream_offset as i64,
+            metadata
+        ])?;
     }
     Ok(())
 }
