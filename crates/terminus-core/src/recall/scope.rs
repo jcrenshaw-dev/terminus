@@ -126,14 +126,38 @@ impl Scoped {
         self.project.as_deref()
     }
 
-    /// Distinct `session_meta.project` values the config excludes.
-    pub fn excluded_projects(&self) -> &[String] {
+    /// Distinct `session_meta.project` values the config excludes. Private, so
+    /// a read site reaches the rule through [`Scoped::push_filter`] or
+    /// [`Scoped::admits`] and cannot rebuild it.
+    fn excluded_projects(&self) -> &[String] {
         &self.excluded_projects
     }
 
     /// Distinct `session_meta.project_pre_worktree` values the config excludes.
-    pub fn excluded_pre_worktree(&self) -> &[String] {
+    fn excluded_pre_worktree(&self) -> &[String] {
         &self.excluded_pre_worktree
+    }
+
+    /// May a turn whose session carries these two keys be served?
+    ///
+    /// No when this scope names a project and the turn's is not exactly that
+    /// one, an absent project included. No when either key is exactly one the
+    /// exclusion lists hold. The same rule [`Scoped::push_filter`] writes in
+    /// SQL, for the reads that take a turn id rather than a query.
+    ///
+    /// A caller answers a no as `NoSuchTurn` and names no path. Turn ids are
+    /// densely enumerable (`session_no << 24 | turn_seq`), so a reason of its
+    /// own would confirm the id exists, and one naming the project would say
+    /// what an excluded project is called.
+    pub(crate) fn admits(&self, project: Option<&str>, pre_worktree: Option<&str>) -> bool {
+        if self.project.is_some() && project != self.project() {
+            return false;
+        }
+        let hidden = |key: Option<&str>, excluded: &[String]| {
+            key.is_some_and(|k| excluded.iter().any(|e| e == k))
+        };
+        !hidden(project, self.excluded_projects())
+            && !hidden(pre_worktree, self.excluded_pre_worktree())
     }
 
     /// Restrict a query over `session_meta m` to this scope: its project when

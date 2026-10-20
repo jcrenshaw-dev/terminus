@@ -145,28 +145,12 @@ pub fn records(conn: &Connection, config: &Config, scope: &Scope, ids: &[i64]) -
             continue;
         };
 
-        // Both arms answer `NoSuchTurn`, and neither names a path. Ids are
-        // densely enumerable (`session_no << 24 | turn_seq`), so a reason that
-        // named the excluded project - or any reason of its own - would confirm
-        // the id exists and, swept one call at a time, map every excluded
-        // project's name and live id ranges. At the default scope the scope arm
-        // catches those ids first; at `*` only the exclusion arm stands.
-        if let Some(wanted_project) = scoped.project() {
-            if row.project.as_deref() != Some(wanted_project) {
-                fetched.absent.push(Absent {
-                    turn_id: id,
-                    reason: Reason::NoSuchTurn { turn_id: id },
-                });
-                continue;
-            }
-        }
-        let hidden = |key: &Option<String>, excluded: &[String]| {
-            key.as_deref()
-                .is_some_and(|k| excluded.iter().any(|e| e == k))
-        };
-        if hidden(&row.project, scoped.excluded_projects())
-            || hidden(&row.pre_worktree, scoped.excluded_pre_worktree())
-        {
+        // Out of scope or excluded, the answer is `NoSuchTurn` and it names no
+        // path. Ids are densely enumerable (`session_no << 24 | turn_seq`), so
+        // a reason that named the excluded project - or any reason of its own -
+        // would confirm the id exists and, swept one call at a time, map every
+        // excluded project's name and live id ranges.
+        if !scoped.admits(row.project.as_deref(), row.pre_worktree.as_deref()) {
             fetched.absent.push(Absent {
                 turn_id: id,
                 reason: Reason::NoSuchTurn { turn_id: id },
