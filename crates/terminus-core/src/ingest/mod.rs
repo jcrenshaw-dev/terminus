@@ -1167,10 +1167,13 @@ impl Existing {
         // watermark has nothing to append, and a shorter one still fails at
         // that open, so neither fetches a row. Nor does a failed stat: the
         // open fails the same way. No rows at all for an evicted session:
-        // `prepare` never appends to one, and it has none to read.
+        // `prepare` never appends to one, and it has none to read. The stat is
+        // skipped for an evicted or `whole` session, where its answer would
+        // not be read.
         let watermark = watermark.unwrap_or(0) as u64;
-        let grown = std::fs::metadata(path).is_ok_and(|m| m.len() > watermark);
-        let fetched = if !evicted && (grown || whole) {
+        let fetched = if !evicted
+            && (whole || std::fs::metadata(path).is_ok_and(|m| m.len() > watermark))
+        {
             // `max` is a seek on `UNIQUE (session_key, turn_seq)`, where
             // `count(*)` walked the session's index range. The two agree,
             // because turns are numbered from 0 with no gap.
