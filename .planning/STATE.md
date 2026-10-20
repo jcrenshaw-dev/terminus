@@ -1,6 +1,6 @@
 # State
 
-Phase: 6 of 8 (Simplify the 1.0.0 changes)
+Phase: 7 of 8 (README for 1.0.0)
 Status: phase complete
-Next: /cad-context 7
+Next: phase 8 doc sweep, driven by hand
 Updated: 2026-10-20
