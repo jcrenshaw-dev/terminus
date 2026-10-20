@@ -179,7 +179,7 @@ No command line is built from transcript content. Transcript content sets only t
 
 - Terminus sends nothing off the machine. It hands archived text to Claude Code on the same machine, and Claude Code sends it to its model with the rest of the session.
 - Text from an excluded project must never reach Claude Code.
-- With `[privacy] redact_recall` on, a secret of a shape the filter is built to replace must never reach Claude Code through a hook or an MCP tool. Open issue #93 breaks this for a bearer token, as Redaction below describes.
+- With `[privacy] redact_recall` on, a secret of a shape the filter is built to replace must never reach Claude Code through a hook or an MCP tool.
 - Archived text leaves the data directory only through hook output, MCP results, CLI output, `export` and `data move`.
 
 **Invariants a finding can break.**
@@ -334,7 +334,6 @@ A same-user process that can already write `~/.claude/projects` or the data dire
   - Bare `sk-` keys: a run of ASCII letters, digits, `-` and `_` that opens with `sk-` and has 20 or more characters after it.
   - A string stored directly under a key whose name contains one of the words above, in a tool's input, a tool's result or an attachment. It is replaced in every excerpt, context window, brief quotation and per-prompt injection, the same as in a `recall_get` body, even though the text those are cut from drops the key's name.
 - **What it misses.**
-  - A bearer token after a secret-named word and a colon, such as `rotate the vault key: Authorization: Bearer <token>`, open issue #93. The header rule reads `key` as the name, takes `Authorization:` as its value and redacts that, then resumes past it, so `Authorization` is never tested and `Bearer <token>` goes out unless another rule matches the token (`redact_header_spans` in `core/observe/egress.rs`).
   - An `sk-` run with fewer than 20 characters after the prefix, and Stripe's `sk_live_` keys, whose underscore puts them outside the `sk-` rule.
   - A value under a secret-named key that is not a string, such as a list of strings. The filter walks into it rather than replacing it, so its strings go out unless a key inside it is named like a secret or another rule matches them.
   - AWS `AKIA` keys, Slack `xox` tokens, and any vendor key with no secret-looking name beside it and no prefix the filter knows. There is no entropy check.

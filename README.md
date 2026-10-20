@@ -130,8 +130,6 @@ Releases are signed on the maintainer's machine, never in CI, and `install.sh` c
 
 ## Current state
 
-* With `[privacy] redact_recall` on, a secret-named word right before an `Authorization` header lets the bearer token through to Claude Code unfiltered ([#93](https://github.com/jcrenshaw-dev/terminus/issues/93)).
-
 Every open bug is in the [issues](https://github.com/jcrenshaw-dev/terminus/issues).
 
 ## Issues and contributions
