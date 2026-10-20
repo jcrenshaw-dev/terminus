@@ -89,6 +89,7 @@ pub fn ranges(
           ORDER BY block_no",
     )?;
     for span in merged {
+        block_reads::record(conn, session_no);
         let mut cursor = statement.query(rusqlite::params![
             session_no,
             span.start as i64,
@@ -243,7 +244,7 @@ pub(crate) struct AppendState {
 }
 
 impl AppendState {
-    /// Nothing read: what an evicted session gets, since it has no rows.
+    /// Nothing read: what a session never archived gets, since it has no rows.
     pub(crate) fn empty() -> Self {
         AppendState {
             hashes: Ok(Vec::new()),
@@ -272,6 +273,7 @@ pub(crate) fn append_state(
         .filter(|size| !uncompressed_len.is_multiple_of(*size))
         .map(|size| (uncompressed_len / size) as i64);
 
+    block_reads::record(conn, session_no);
     if every_row {
         let mut statement = conn.prepare_cached(
             "SELECT block_no, bytes, hash FROM blocks WHERE session_no = ?1 ORDER BY block_no",
@@ -302,10 +304,12 @@ pub(crate) fn append_state(
         .collect::<std::result::Result<_, _>>()?;
     let hashes = hash_list(rows.iter().map(|(no, hash)| (*no, hash.as_slice())));
     let tail: Option<Vec<u8>> = match tail_no {
-        Some(n) => conn
-            .prepare_cached("SELECT bytes FROM blocks WHERE session_no = ?1 AND block_no = ?2")?
-            .query_row(rusqlite::params![session_no, n], |r| r.get(0))
-            .optional()?,
+        Some(n) => {
+            block_reads::record(conn, session_no);
+            conn.prepare_cached("SELECT bytes FROM blocks WHERE session_no = ?1 AND block_no = ?2")?
+                .query_row(rusqlite::params![session_no, n], |r| r.get(0))
+                .optional()?
+        }
         None => None,
     };
     Ok(AppendState {
@@ -377,11 +381,55 @@ fn reader(block_size: Option<i64>, uncompressed_len: Option<i64>) -> Layout {
 
 /// Every row's bytes for one session, in `block_no` order.
 fn numbered_rows(conn: &Connection, session_no: i64) -> Result<Vec<(i64, Vec<u8>)>> {
+    block_reads::record(conn, session_no);
     let mut statement = conn.prepare_cached(
         "SELECT block_no, bytes FROM blocks WHERE session_no = ?1 ORDER BY block_no",
     )?;
     let rows = statement.query_map([session_no], |r| Ok((r.get(0)?, r.get(1)?)))?;
     Ok(rows.collect::<std::result::Result<_, _>>()?)
+}
+
+/// The block-read log: one entry per query that reads one session's `blocks`
+/// rows, the hash list included.
+///
+/// Each entry names the database file the reading connection is on as well as
+/// the `session_no`, because every temp store numbers its sessions from 0 and
+/// the tests in one binary run in parallel. Tests count one session's entries
+/// before and after a pass, and the log is never cleared.
+/// Without the `testkit` feature [`block_reads::record`] compiles to nothing.
+#[cfg(feature = "testkit")]
+pub mod block_reads {
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    use rusqlite::Connection;
+
+    static LOG: Mutex<Vec<(PathBuf, i64)>> = Mutex::new(Vec::new());
+
+    fn log() -> std::sync::MutexGuard<'static, Vec<(PathBuf, i64)>> {
+        // A test that panicked while holding the lock must not fail every
+        // test after it.
+        LOG.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub(super) fn record(conn: &Connection, session_no: i64) {
+        let db = conn.path().map(PathBuf::from).unwrap_or_default();
+        log().push((db, session_no));
+    }
+
+    /// Every entry the binary has logged, `(database file, session_no)`, in
+    /// order. The log is never cleared.
+    pub fn entries() -> Vec<(PathBuf, i64)> {
+        log().clone()
+    }
+}
+
+#[cfg(not(feature = "testkit"))]
+pub mod block_reads {
+    use rusqlite::Connection;
+
+    #[inline(always)]
+    pub(super) fn record(_conn: &Connection, _session_no: i64) {}
 }
 
 /// Hashes numbered `0..n` with no gap, each 32 bytes.

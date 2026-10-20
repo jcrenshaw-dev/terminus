@@ -6,7 +6,7 @@ The archive is `terminus.db`, one SQLite file in the data directory, and the tab
 
 This doc is the one place every table and column is given. It also covers how the store is opened, how its two format versions are checked, and the commands that check, rebuild, compact, measure, export and move it.
 
-The archive does not decide what goes into it. The ingest pass in [0003: Ingest](0003-ingest.md) is its only writer. [0005: Search](0005-search.md) and [0006: Recall through MCP](0006-recall-through-mcp.md) read it, [0007: Injection](0007-injection.md) reads it and owns what its decisions and labels mean, and `terminus uninstall --purge` in [0008: Install and release](0008-install-and-release.md) deletes the data directory that holds it.
+The archive does not decide what goes into it. The ingest pass in [0003: Ingest](0003-ingest.md) writes it, and `terminus reindex`, `compact`, `observations regenerate` and `data move` also write it, each under the same `LOCK` the pass holds. [0005: Search](0005-search.md) and [0006: Recall through MCP](0006-recall-through-mcp.md) read it, [0007: Injection](0007-injection.md) reads it and owns what its decisions and labels mean, and `terminus uninstall --purge` in [0008: Install and release](0008-install-and-release.md) deletes the data directory that holds it.
 
 ## 2. Terms
 
@@ -46,7 +46,7 @@ The store lives in the library crate, `crates/terminus-core`. The commands that 
 
 The boundaries:
 
-- **From [0003: Ingest](0003-ingest.md).** The pass holds `LOCK` and is the only process that writes archive, derived and operational rows. It calls the codec to cut and compress block rows, and writes each file's rows in one transaction. `terminus reindex`, `compact`, `data move`, `observations regenerate` and `uninstall --purge` take the same lock before they write or delete.
+- **From [0003: Ingest](0003-ingest.md).** The pass holds `LOCK` and writes archive, derived and operational rows. It calls the codec to cut and compress block rows, and writes each file's rows in one transaction. `terminus reindex` rebuilds the derived tables, `observations regenerate` rewrites `observations`, `compact` rewrites the file with `VACUUM`, and `data move` copies the store and deletes the old one, each under the same lock, and `uninstall --purge` takes it before it deletes the data directory.
 - **To [0005: Search](0005-search.md) and [0006: Recall through MCP](0006-recall-through-mcp.md).** They open the store read-only and read `turns_fts`, `entities`, `paths`, `turns` and `session_meta`, and read a turn's bytes through `store/archive.rs`, which fetches and decompresses only the blocks the turn covers.
 - **To [0007: Injection](0007-injection.md).** Injection opens the store read-only. Its decisions and their labels are kept tables here, because no rebuild from the block rows can reproduce them.
 - **To [0008: Install and release](0008-install-and-release.md).** `terminus install` refuses a store in an older archive format than this build reads, and prints a problem without refusing when the format is newer, and `terminus uninstall --purge` deletes the whole data directory under `LOCK`.

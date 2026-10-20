@@ -46,7 +46,7 @@ The boundaries:
 
 - **From [0005: Search](0005-search.md).** `recall_search` runs `recall::search::run`, the function `terminus search` runs, so the ranking, the scope, the exclusion of excluded projects and the excerpts are the same. `recall_context` and `recall_get` resolve their scope through the same `recall::scope::resolve`. A turn outside the scope, or in an excluded project, is answered as a turn that is not archived, so no answer confirms that some other project holds the id.
 - **To [0004: The archive and its block rows](0004-archive-and-block-rows.md).** Every read is through a read-only connection, with the store's 5 s busy timeout, beside the ingest's writes under WAL. Excerpts, context text and records are cut from the block rows through `store/archive.rs`, reading only the rows a turn covers. The server reads the derived tables, `session_meta` and the block rows, and writes nothing.
-- **From [0003: Ingest](0003-ingest.md).** The ingest is the only writer. Because the server opens the store per call, what a pass archives is visible to the next call without a restart.
+- **From [0003: Ingest](0003-ingest.md).** The ingest writes the store, and so do `terminus reindex`, `compact`, `observations regenerate` and `data move`, each under `LOCK`. Because the server opens the store per call, what a pass archives is visible to the next call without a restart.
 - **To [0007: Injection](0007-injection.md).** Injection hands archived text to Claude Code through the hooks, and it runs the same egress filter on that text with the same `Redaction`. This doc owns the filter.
 - **From [0008: Install and release](0008-install-and-release.md).** [`crates/terminus/src/cmd/install/claude.rs`](../../crates/terminus/src/cmd/install/claude.rs) runs `claude mcp` to place the server's entry, and `terminus uninstall` runs it to remove the entry. The server itself never touches Claude Code's files.
 
@@ -158,7 +158,7 @@ The search `terminus search` runs, with the same ranking, in [0005: Search](0005
   | `sidechain` | True for a subagent's turn, which ranks below a turn the user watched at equal score. |
   | `relevance` | Higher is better: the negated BM25 score plus `entity_score`. |
   | `entity_score` | The part of `relevance` that came from the turn's entities matching the query, 0 for a match on free text alone. |
-  | `excerpt` | Up to 240 characters of the turn's text around the match, cut from its block rows, filtered when `redact_recall` is on. Empty when the block rows would not give the text up. |
+  | `excerpt` | Up to 240 characters of the turn's text around the match, with `...` before them, after them or both where text was cut, so at most 246 characters in all, cut from its block rows, filtered when `redact_recall` is on. Empty when the block rows would not give the text up. |
 
   `reason` is null, or one string, the first that applies: why the scope or the query gave nothing, such as a query with no searchable words; that the limit was lowered to 50; that only the first 32 tokens of the query were used; or that only the first 25 paths were filtered on.
 
@@ -188,7 +188,7 @@ The conversation around one turn, in the order it happened. It reads `recall::co
   | `turns[].record_type` | Its record type. |
   | `turns[].tool_name` | The name of its first `tool_use` block, or null. |
   | `turns[].ts` | Its timestamp, or null. |
-  | `turns[].text` | The turn's projected text from the start, flattened to one line and cut to 240 characters, filtered when `redact_recall` is on. Empty when its block rows would not give it up. |
+  | `turns[].text` | The turn's projected text from the start, flattened to one line and cut to 240 characters, with `...` after them when the text is longer, so at most 243 characters in all, filtered when `redact_recall` is on. Empty when its block rows would not give it up. |
   | `turns[].is_anchor` | True for the turn asked about. |
   | `at_session_start` | True when the window reaches the session's first turn, so there is nothing earlier in this session. |
   | `at_session_end` | True when the window reaches the session's last turn. |

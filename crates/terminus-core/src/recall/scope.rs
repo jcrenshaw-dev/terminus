@@ -9,7 +9,7 @@
 //! 2 s budget, and process spawn is the 10-30 ms the cold-start budget is made
 //! of; and a rule that resolves independently can disagree with what ingest
 //! wrote, at which point a scoped search inside a worktree returns zero hits -
-//! the identity fragmentation `.planning/PROJECT.md` names the incumbent for.
+//! the identity fragmentation the incumbent suffers from.
 //! Matching against stored keys cannot disagree with them.
 //!
 //! **Exclusion (D-21, D-23).** Applied to `project` and to
@@ -126,14 +126,69 @@ impl Scoped {
         self.project.as_deref()
     }
 
-    /// Distinct `session_meta.project` values the config excludes.
-    pub fn excluded_projects(&self) -> &[String] {
-        &self.excluded_projects
+    /// May a turn whose session carries these two keys be served?
+    ///
+    /// No when this scope names a project and the turn's is not exactly that
+    /// one, an absent project included. No when either key is exactly one the
+    /// exclusion lists hold. The same rule [`Scoped::push_filter`] writes in
+    /// SQL, for the reads that take a turn id rather than a query.
+    ///
+    /// A caller answers a no as `NoSuchTurn` and names no path. Turn ids are
+    /// densely enumerable (`session_no << 24 | turn_seq`), so a reason of its
+    /// own would confirm the id exists, and one naming the project would say
+    /// what an excluded project is called.
+    pub(crate) fn admits(&self, project: Option<&str>, pre_worktree: Option<&str>) -> bool {
+        if self.project.is_some() && project != self.project() {
+            return false;
+        }
+        let hidden = |key: Option<&str>, excluded: &[String]| {
+            key.is_some_and(|k| excluded.iter().any(|e| e == k))
+        };
+        !hidden(project, &self.excluded_projects)
+            && !hidden(pre_worktree, &self.excluded_pre_worktree)
     }
 
-    /// Distinct `session_meta.project_pre_worktree` values the config excludes.
-    pub fn excluded_pre_worktree(&self) -> &[String] {
-        &self.excluded_pre_worktree
+    /// Restrict a query over `session_meta m` to this scope: its project when
+    /// it names one, and never a session an exclusion covers.
+    ///
+    /// Writes only `AND` clauses, each starting with a space, so the caller's
+    /// SQL is already inside a `WHERE`.
+    ///
+    /// Both exclusions are written even under a project. ING-08 holds on the
+    /// read path as well as on ingest, and [`resolve`] only rejects a scope
+    /// whose own project is excluded: a session of a visible project whose
+    /// pre-worktree key is excluded is still in the table and is filtered here.
+    ///
+    /// `NOT IN` carries the null guard because SQL's `NULL NOT IN (...)` is
+    /// NULL, which is not true, so an unguarded clause would drop every session
+    /// whose key is null - the one session nothing can say is excluded.
+    ///
+    /// Nothing is written for an empty list, because `NOT IN ()` is not SQL.
+    /// The skip is per list, and that is what keeps `m.project_pre_worktree`
+    /// out of the SQL on a store older than that column, where its list is
+    /// always empty.
+    pub(crate) fn push_filter(&self, sql: &mut String, params: &mut Vec<Box<dyn rusqlite::ToSql>>) {
+        if let Some(project) = self.project() {
+            sql.push_str(" AND m.project = ?");
+            params.push(Box::new(project.to_owned()));
+        }
+        for (column, excluded) in [
+            ("m.project", &self.excluded_projects),
+            ("m.project_pre_worktree", &self.excluded_pre_worktree),
+        ] {
+            if excluded.is_empty() {
+                continue;
+            }
+            sql.push_str(&format!(" AND ({column} IS NULL OR {column} NOT IN ("));
+            for (index, value) in excluded.iter().enumerate() {
+                if index > 0 {
+                    sql.push(',');
+                }
+                sql.push('?');
+                params.push(Box::new(value.clone()));
+            }
+            sql.push_str("))");
+        }
     }
 
     /// Set when this scope can match nothing at all, whatever the query is.

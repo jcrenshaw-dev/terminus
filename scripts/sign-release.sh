@@ -2,10 +2,12 @@
 # Sign and publish a draft release of Terminus, on the owner's machine:
 #   sh scripts/sign-release.sh v<X.Y.Z>
 # It refuses a release that is not a draft, downloads the draft's four binaries and four manifests, checks each binary
-# against its manifest, signs each manifest with ~/.ssh/crenshawdev-release and
-# verifies each signature the way install.sh does. Only when all four pass does it
-# upload the .sig files and publish the release as latest.
-# The public key is read from install.sh's release_key line; this script keeps no copy.
+# against its manifest and against the attestation release.yml made when it built it,
+# signs each manifest with ~/.ssh/crenshawdev-release and verifies each signature the
+# way install.sh does. Only when all four pass does it upload the .sig files and
+# publish the release as latest.
+# The public key and the version check are read from install.sh's release_key line
+# and valid_version function; this script keeps no copy of either.
 set -eu
 
 LC_ALL=C
@@ -20,17 +22,6 @@ fail() {
     exit 1
 }
 
-valid_version() (
-    case $1 in '' | *[!0-9.]* | .* | *. | *..*) return 1 ;; esac
-    set -f
-    IFS=.
-    set -- $1
-    [ "$#" -eq 3 ] || return 1
-    for part do
-        case $part in 0?*) return 1 ;; esac
-    done
-)
-
 digest() {
     if command -v sha256sum >/dev/null 2>&1; then
         sum=$(sha256sum) || fail 'cannot compute SHA-256'
@@ -44,7 +35,6 @@ digest() {
 tag=$1
 case $tag in v*) ;; *) fail "$usage" ;; esac
 version=${tag#v}
-valid_version "$version" || fail "$usage"
 
 case $0 in */*) here=${0%/*} ;; *) here=. ;; esac
 install_sh=$here/../install.sh
@@ -56,6 +46,28 @@ key=${line#release_key=\'}
 key=${key%\'}
 case $key in '' | *"'"*) fail "$install_sh: the release_key= line is not release_key='<key>'" ;; esac
 [ "$line" = "release_key='$key'" ] || fail "$install_sh: the release_key= line is not release_key='<key>'"
+
+# The version check is install.sh's own valid_version, so the signer refuses
+# exactly what the installer refuses.
+count=$(grep -c -E -e '^[[:space:]]*valid_version[[:space:]]*\(' "$install_sh") || :
+[ "$count" = 1 ] || fail "$install_sh: needs exactly one valid_version function, found ${count:-none}"
+check=
+closed=
+while IFS= read -r text; do
+    if [ -n "$check" ]; then
+        check="$check
+$text"
+        if [ "$text" = ')' ]; then
+            closed=1
+            break
+        fi
+    elif [ "$text" = 'valid_version() (' ]; then
+        check=$text
+    fi
+done < "$install_sh"
+[ -n "$closed" ] || fail "$install_sh: needs a valid_version() ( line and a ) line closing it"
+eval "$check"
+valid_version "$version" || fail "$usage"
 
 # Only a draft is signed. On a published release the upload would replace the
 # signatures users already verify against, and the edit would mark it latest.
@@ -86,6 +98,17 @@ for platform in $platforms; do
         fail "$binary: SHA-256 mismatch, the binary is $actual and its manifest names another value"
     [ "$(digest < "$work/$binary.manifest")" = "$(printf 'version %s\nsha256 %s\n' "$version" "$actual" | digest)" ] ||
         fail "$binary.manifest: not exactly the lines version $version and sha256 $actual"
+done
+
+# A binary and manifest swapped into the draft agree with each other, so each
+# binary must also carry the attestation release.yml made for this tag on a
+# GitHub-hosted runner. Only that workflow can make one.
+for platform in $platforms; do
+    binary=terminus-$platform
+    gh attestation verify "$work/$binary" --repo "$repo" \
+        --signer-workflow "$repo/.github/workflows/release.yml" \
+        --source-ref "refs/tags/$tag" --deny-self-hosted-runners > /dev/null ||
+        fail "$binary: no attestation from release.yml at $tag, so it is not the binary CI built"
 done
 
 printf 'crenshawdev-release %s\n' "$key" > "$work/allowed_signers"

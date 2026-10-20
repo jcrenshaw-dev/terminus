@@ -2,15 +2,22 @@
 //! (STOR-03).
 
 use serde_json::json;
-use terminus_core::{verify, Store};
+use terminus_core::{verify, Config};
 
 use super::json::Document;
+use super::read::{self, Opened};
 use super::Failure;
 
 pub fn run(json: bool) -> Result<(), Failure> {
-    let data_dir = super::data_dir()?;
-    let store = Store::open(&data_dir)?;
-    let report = verify::verify(&store)?;
+    // Read-only, and with the default config: the check reads no visible-session
+    // filter, so a `terminus.toml` that does not parse must not stop it.
+    let reader = match read::open_in(&super::data_dir()?, Config::default())? {
+        Opened::Ready(reader) => reader,
+        Opened::Nothing(reason) => {
+            return read::empty(document(&verify::Report::default()), &reason, json)
+        }
+    };
+    let report = verify::verify(reader.store())?;
     // Sessions, not failures: one session can fail several checks.
     let failed = report
         .failures
@@ -23,22 +30,7 @@ pub fn run(json: bool) -> Result<(), Failure> {
         // The ids and the count in one document. Split across two streams they
         // are the same two facts, and a `--json` caller reading only stdout
         // would have to infer "how many were checked" from "how many failed".
-        let mut document = Document::new("verify")
-            .field("checked", report.checked as i64)
-            .field(
-                "failures",
-                report
-                    .failures
-                    .iter()
-                    .map(|failure| {
-                        json!({
-                            "session_key": failure.session_key,
-                            "block": failure.block,
-                            "detail": failure.detail,
-                        })
-                    })
-                    .collect::<Vec<_>>(),
-            );
+        let mut document = document(&report);
         if !report.is_ok() {
             document = document.failed().because(format!(
                 "{failed} of {} session(s) failed verification",
@@ -66,4 +58,25 @@ pub fn run(json: bool) -> Result<(), Failure> {
         // whether the store is whole.
         Err(Failure::Silent)
     }
+}
+
+/// The `--json` document. With no store it is built from an empty report, which
+/// gives `checked` 0 and no failures.
+fn document(report: &verify::Report) -> Document {
+    Document::new("verify")
+        .field("checked", report.checked as i64)
+        .field(
+            "failures",
+            report
+                .failures
+                .iter()
+                .map(|failure| {
+                    json!({
+                        "session_key": failure.session_key,
+                        "block": failure.block,
+                        "detail": failure.detail,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )
 }

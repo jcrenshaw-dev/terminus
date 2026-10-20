@@ -8,16 +8,22 @@ holds `doctor`'s shape.
 
 ## The envelope
 
-Every `--json` run writes exactly one JSON document on one line to stdout, and
-nothing else to stdout, ever.
+Every `--json` run writes at most one JSON document on one line to stdout, and
+nothing else to stdout, ever. The runs that write none are listed under
+[Exit codes](#exit-codes).
 
 ```json
 {"command": "search", "ok": true, "reason": null, "data": {}}
 ```
 
+Keys come out in alphabetical order in every object, at every depth, so this
+envelope is written `{"command":"search","data":{},"ok":true,"reason":null}`.
+The same holds for the export manifest and the MCP tool results. The examples
+in this file group keys for reading and are not in output order.
+
 | Field | Type | Meaning |
 |---|---|---|
-| `command` | string | The subcommand that produced this document. |
+| `command` | string | The subcommand that produced this document: `"search"`, and `"observations regenerate"` for the rebuild. |
 | `ok` | bool | `true` when the process exits 0, `false` when it exits 1. |
 | `reason` | string or null | Why a result is empty, or why the command failed. Always present; null when there is nothing to say. |
 | `data` | object | The command's own answer. The only part whose shape differs between commands. |
@@ -43,12 +49,29 @@ A caller that parses `ok` and a caller that checks the exit code never
 disagree. `verify --json` on a damaged store writes its document **and** exits
 1; the document is the evidence and the code is the verdict.
 
-**One case writes no document:** a failure raised before the command reached its
-own answer - a store in an archive format this build refuses, an unresolvable
-data directory - is reported on stderr with exit 1 and stdout stays empty. The
-command never got far enough to know `--json` had been asked for. Empty stdout with a non-zero exit is
-therefore part of the contract, and a caller must check the exit code before it
-parses.
+**Most operational failures write no document.** The ones that do are named
+under their commands: `verify` with a failure, `reindex` with a skipped session,
+a held ingest lock in `reindex`, `observations regenerate` and `compact`, a
+decision log missing one of its two tables in `stats` and `replay`, and a
+`problem` check in `doctor`. Every other operational failure is reported on
+stderr with exit 1, and stdout stays empty:
+
+- a data directory that cannot be resolved
+- a `terminus.toml` that does not load
+- a working directory that cannot be read, when `--project` does not name the
+  project
+- a store that is there and cannot be opened or read, including a store in an
+  archive format this build refuses
+- a SQLite error while the command reads or writes the store
+- an ingest lock file that cannot be created or opened
+- an `export` destination that already holds anything, and an export directory
+  or file that cannot be created or written
+- a `VACUUM` or a WAL truncation that fails in `compact`
+
+`doctor` reports a data directory, config or store it cannot use as a check
+rather than failing. Misuse (exit 2) never writes a document. Empty stdout with
+a non-zero exit is therefore part of the contract, and a caller must check the
+exit code before it parses.
 
 ## Streams
 
@@ -79,7 +102,12 @@ command and in the `recall_search` and `recall_get` results, and it does not
 change when `.claude` moves or is reached through a symlink, or when a project
 folder moves. A transcript that is a symlink shows the key of the
 file it points at, and a path outside those two shapes, such as a file under no
-`projects` folder, shows its canonical path. It is a key, not a path to open.
+`projects` folder, shows its canonical path. A stored key that is still an
+absolute path is shown as it is: the next `terminus ingest` moves it to the form
+above, and a read never does. A session keeps its absolute key when another
+session reduces to the same key and the ingest cannot prove the two are one
+transcript; the ingest tests it again and reports it on every run. It is a key,
+not a path to open.
 
 ### `search`
 
@@ -97,6 +125,9 @@ file it points at, and a path outside those two shapes, such as a file under no
   distinct tokens. The search still ran; the tokens are conjoined, so a
   truncated query is broader than the one asked for rather than wrong in a
   direction the caller cannot see.
+- `hits` are ordered by `relevance`, highest first, then turns with `sidechain`
+  false before subagent turns, then newer `ts` first with a null `ts` last, then
+  lower `turn_id` first.
 - `ts` and `project` are null for a turn or a session that has none.
 - `relevance` is higher-is-better. `entity_score` is the part of it that came
   from an exact structural match rather than from free text.
@@ -107,10 +138,16 @@ file it points at, and a path outside those two shapes, such as a file under no
   count the injection threshold reads. `value` is the normalized stored
   spelling, not the query's.
 - `excerpt` is cut from the session's block rows, never from FTS5, and may be
-  empty when the archive would not give the bytes up.
-- `--kind` takes `user`, `assistant`, `system` or `attachment`. `observation`
-  is refused, as misuse (exit 2) from `terminus search` and as `isError` from
-  `recall_search`, because Terminus stores no session summaries.
+  empty when the archive would not give the bytes up. With
+  `[privacy] redact_recall = true` it is put through the egress filter, and
+  `--raw` skips the filter for that one invocation. The keys are the same either
+  way.
+- `--kind` is matched against `record_type` exactly, and any value is accepted.
+  The record types are `user`, `assistant`, `system` and `attachment`; any other
+  value matches nothing, so a misspelled kind is an empty result with exit 0.
+  Only `observation` is refused, as misuse (exit 2) from `terminus search` and
+  as `isError` from `recall_search`, because Terminus stores no session
+  summaries.
 
 ### `show`
 
@@ -134,8 +171,9 @@ file it points at, and a path outside those two shapes, such as a file under no
   `[privacy] redact_recall = true` in `terminus.toml` the line is put through the
   egress filter first, so `body` carries `[redacted]` markers where a credential
   stood; the archive itself is unchanged, and no key is added or removed in
-  either setting. `body` is null when the line was not read: retention evicted
-  the session, or its blocks would not give the bytes up.
+  either setting. `--raw` skips the filter for that one invocation, for `body`
+  and the context window both. `body` is null when the line was not read:
+  retention evicted the session, or its blocks would not give the bytes up.
 - `body_evicted` comes from `session_meta.is_evicted` and from nothing else. A
   block that will not decompress is archive damage, which `terminus verify`
   reports; it leaves `body` null with `body_evicted` false.
@@ -152,7 +190,13 @@ file it points at, and a path outside those two shapes, such as a file under no
   window never crosses a session boundary, and `continues_from` is handed back
   unfollowed so a caller can decide to make a second call. `turns[].tool_name`
   and `turns[].ts` are null on the same terms as the record's own `tool_name`
-  and `ts`. `continues_from` is null when the session names no session it
+  and `ts`. `turns[].text` is not the record's line: it is an excerpt of the
+  turn's text, cut the way a search `excerpt` is but from the start of the turn
+  rather than around a match, and put through the egress filter under
+  `redact_recall` the way `body` is. It is empty when the archive would not give
+  the bytes up. `continues_from` is a Claude Code session id, the `sessionId`
+  the transcript names, and not a `session_key`; zero, one or many archived
+  sessions can carry that id. It is null when the session names no session it
   continues from, or has no `session_meta` row. `reason` is null unless the
   window came back empty for a reason, and then it says why in the words
   `absent` uses.
@@ -168,6 +212,8 @@ file it points at, and a path outside those two shapes, such as a file under no
    "watermark": 12034, "sidecar": false, "evicted": false}]}
 ```
 
+- Sessions are listed in `session_no` order, for the project the working
+  directory sits in unless `--project` names another, or `*` for every project.
 - `project` is null when no record in the session carried a `cwd`, so there was
   no directory to resolve a project from.
 - `project_pre_worktree` is null unless the session's `cwd` was in a git
@@ -205,6 +251,9 @@ file it points at, and a path outside those two shapes, such as a file under no
   watermark repaired, a step that could not run. `notes` holds what a healthy
   pass did worth saying, such as labels written and sessions retention evicted.
   Each is null when there is nothing to say, and `doctor` flags only `error`.
+- A machine with no store is an ordinary empty answer: exit 0, `ok` true, a
+  `reason`, `store`, `excluded` and `last_run` null, every number zero, and no
+  data directory created by the asking.
 
 ### `verify`
 
@@ -218,6 +267,9 @@ file it points at, and a path outside those two shapes, such as a file under no
 - Without `--json`, each failure is one line on stdout,
   `<session_key>: block N: <detail>`, or `<session_key>: <detail>` when `block`
   is `null`.
+- A machine with no store is an ordinary empty answer: exit 0, `ok` true, a
+  `reason`, `checked` 0, `failures` empty, and no data directory created by the
+  asking.
 
 Exits 1 when `failures` is non-empty, with the document still written.
 
@@ -323,9 +375,10 @@ and unchanged.
                   "duration_seconds": 5421, "compactions": 1, "truncated": []}}]}
 ```
 
-- One entry per **finalized** session that has been observed, in ingest order.
-  A session the idle rule has not closed yet has no row, and neither does an
-  excluded project's session - including one archived before the exclusion was
+- One entry per **finalized** session that has been observed, in ingest order,
+  for the project the working directory sits in unless `--project` names
+  another, or `*` for every project. A session the idle rule has not closed
+  yet has no row, and neither does an excluded project's session - including one archived before the exclusion was
   configured.
 - `mechanical` is the OBS-01 fact set, and every one of its values is
   parser-derived: **no model is called and no network connection is opened** by
@@ -336,6 +389,12 @@ and unchanged.
   present and not named there is the whole of what the session did.
 - `duration_seconds` is the wall clock between the first and the last turn, and
   it is null on a session carrying no timestamp to measure from.
+  `first_turn_at` and `last_turn_at` are null on the same terms, and `branch` is
+  null when no record in the session carried a `gitBranch`. All four are null
+  for a session with no `session_meta` row.
+- `session_id` is null when the session's `session_meta` row holds none.
+  `generated_at` and `mechanical` are null only when their column is; the ingest
+  step writes both.
 - A store written before this build carries no `observations` table. That is an
   empty answer with a reason naming the table and exit 0, never a SQLite
   message: the next `terminus ingest` creates it.
@@ -350,12 +409,15 @@ and unchanged.
   touches it: the facts come off the session's block rows, and retention
   eviction deletes those rows, so a rebuild that dropped the table could not
   recompute an evicted session's observation.
-- `since` is the selector echoed back, null when it was not given. "Two rows
-  were rebuilt" is unreadable without the bound that chose them.
+- `since` is the bound the selection used, null when it was not given. It comes
+  back normalized: `--since 2026-08-14` is `"2026-08-14T00:00:00.000Z"`. "Two
+  rows were rebuilt" is unreadable without the bound that chose them.
 - `--since` takes `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SS.mmmZ` and selects
   sessions whose `session_meta.last_turn_at` is at or after it. A session
   carrying no `last_turn_at` is outside every bound. Without it, every visible
-  session is selected.
+  session that already has an observations row is selected. Either way a
+  session with no row is never selected: regenerate rewrites rows and never
+  creates one.
 - `selected` counts the rows the selector named **and** the exclusion gate
   allows; `regenerated` counts the ones actually rewritten, and `notes` names
   the difference, one line per row that could not be recomputed.
@@ -456,7 +518,7 @@ gives the pages back to the filesystem afterwards.
 
 ```json
 {"sessions": 3416, "archive_bytes": 465985120,
- "by_project": [{"project": "/data/code/verbatim", "sessions": 812, "bytes": 141203456},
+ "by_project": [{"project": "/home/you/code/project-alpha", "sessions": 812, "bytes": 141203456},
                 {"project": null, "sessions": 1, "bytes": 4096}],
  "by_month": [{"month": "2026-08", "sessions": 3415, "bytes": 465981024},
               {"month": null, "sessions": 1, "bytes": 4096}],
@@ -533,7 +595,8 @@ snapshot, not an export.
 - **A destination that already holds anything is refused**, exit 1, with nothing
   written - not merely one that already holds an export. A file this command did
   not write is never overwritten, and every refusal lands before the first byte.
-  A missing destination on the command line is misuse (exit 2): there is no
+  With `--json` the refusal writes no document either: stdout stays empty and
+  the reason is on stderr. A missing destination on the command line is misuse (exit 2): there is no
   default place to put an unredacted copy of every transcript.
 - The manifest carries `notice`, `archive_format` as the store itself reports
   it, the session / turn / evicted counts, the total bytes, the distinct
@@ -549,7 +612,7 @@ snapshot, not an export.
 
 ```json
 {"binary": {"state": "ok",
-            "finding": "/home/you/.local/bin/terminus is this build (0.1.0)", "fix": null},
+            "finding": "/home/you/.local/bin/terminus is this build (1.0.0)", "fix": null},
  "hook_SessionStart": {"state": "problem",
                        "finding": "/home/you/.claude/settings.json has no terminus entry for SessionStart",
                        "fix": "/home/you/.local/bin/terminus install"},
@@ -599,6 +662,97 @@ the same 14 keys: `binary`, `settings_file`, `hook_SessionStart`,
 - `doctor` writes nothing anywhere: no file, no directory, on any path,
   including the data directory it reports as absent.
 
-`install` and `uninstall` deliberately have no `--json` (D-24). Install prints a
-receipt written for a person, and uninstall asks a question before `--purge`
-deletes the archive, which a single JSON document on stdout cannot do.
+`install`, `uninstall` and `data move` deliberately have no `--json` (D-24,
+D-17), and each refuses the flag as misuse. Install prints a receipt written for
+a person, uninstall asks a question before `--purge` deletes the archive, and
+`data move` asks once before it moves the data directory, which a single JSON
+document on stdout cannot do.
+
+## MCP tool results
+
+`terminus mcp` serves three tools: `recall_search`, `recall_context` and
+`recall_get`. A tool's answer is not the `--json` envelope. It is one JSON
+document, serialized compactly, carried as the text of the one block in an MCP
+tool result:
+
+```json
+{"content": [{"type": "text", "text": "{\"hits\":[],\"reason\":\"...\"}"}],
+ "isError": false, "resultType": "complete",
+ "_meta": {"io.modelcontextprotocol/serverInfo": {"name": "terminus", "version": "1.0.0"}}}
+```
+
+- `content` always holds exactly one block, of type `text`, and its `text` is
+  the tool's document. The document uses the field names `terminus search
+  --json` and `terminus show --json` print.
+- `isError` is true when the call could not be used as asked: `arguments` that
+  is not an object; a required argument that is missing or null, or a `query`
+  that is empty or only whitespace; an argument of the wrong JSON type; a count
+  that is negative or not a whole number; a `since` or `until` in neither time
+  form; a `limit` of 0; a `kind` of `observation`; a `turn_ids` that is empty
+  or holds anything but integers. The document's `reason` says which.
+- `isError` is false for everything else, an empty answer included: no store
+  yet, a directory no archived project covers, a store that cannot be opened or
+  read, a SQLite error, and a server working directory that cannot be read. Each
+  is the tool's empty document with a `reason`.
+- A failed call's document has the same keys a successful one has, with empty
+  lists, `false` and null in them, and `reason` set.
+- A `tools/call` that names no tool, or a tool this server does not have, is a
+  JSON-RPC error and carries no result.
+- `resultType` and `_meta` are on every result this server sends, not only on
+  tool results.
+
+### `recall_search`
+
+```json
+{"hits": [
+  {"turn_id": 42, "session_key": "5e0a....jsonl", "project": "/abs/path/repo",
+   "record_type": "assistant", "ts": "2026-08-12T21:00:00.000Z", "sidechain": false,
+   "relevance": 1.83, "entity_score": 0.0, "excerpt": "the retry budget lives in ..."}],
+ "reason": null}
+```
+
+- Each hit is a `terminus search --json` hit without `matched_on`, read and
+  ordered the same way. The document has no `query` and no `truncated`.
+- `query` is required. `limit` defaults to 10 and is lowered to 50, and only
+  the first 25 `paths` are filtered on. `project` defaults to the project the
+  server's working directory sits in.
+- `reason` is one line, the first that applies: why the result is empty, then a
+  `limit` lowered to 50, then a query cut to its first tokens, then `paths` cut
+  to the first 25. It is null when none applies.
+
+### `recall_context`
+
+```json
+{"turns": [{"turn_id": 41, "turn_seq": 0, "record_type": "user", "tool_name": null,
+            "ts": "...", "text": "...", "is_anchor": false}],
+ "at_session_start": true, "at_session_end": false,
+ "continues_from": null, "reason": null}
+```
+
+- The same object as `terminus show --json`'s `context`, read the same way.
+- `turn_id` is required. `before` and `after` default to 5 each and are lowered
+  to 25 each.
+- `reason` says why the window is empty, or else that `before` or `after` was
+  lowered to 25. It is null when neither applies.
+
+### `recall_get`
+
+```json
+{"records": [
+  {"turn_id": 42, "session_key": "...", "turn_seq": 1, "record_type": "assistant",
+   "tool_name": null, "ts": "...", "project": "...",
+   "body": "{\"type\":\"assistant\",...}", "body_evicted": false}],
+ "absent": [{"turn_id": 99, "reason": "no turn 99 is archived"}],
+ "reason": null}
+```
+
+- Each record is a `terminus show --json` record without `context`, read the
+  same way, `body` and `body_evicted` included. There is no `--raw` here: with
+  `redact_recall` set, `body` is always filtered.
+- `turn_ids` is required. Repeated ids are dropped, each keeping its first
+  place, and then only the first 25 are read.
+- `absent` carries every requested id that named no record this caller may see,
+  as it does for `show`.
+- `reason` is the first that applies: why the answer is empty, then that ids
+  past the first 25 were not read, then, when `records` is empty, the first
+  `absent` entry's reason. It is null when none applies.

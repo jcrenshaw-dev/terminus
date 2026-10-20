@@ -80,34 +80,12 @@ pub const COMPACT_SOURCE: &str = "compact";
 
 /// How long an injection read waits behind a writer before giving up.
 ///
-/// `store::open` sets five seconds, which is right for a writer and wrong here
-/// by three orders of magnitude: backfill was measured holding the store for
-/// 49 s over the real corpus (`.planning/phases/4/SUMMARY.md`), and a prompt
-/// submitted during one would block the user for the whole busy timeout on
-/// exactly the machine state that provoked it. Lowering it turns lock
-/// contention into an immediate `SQLITE_BUSY`, which is silence - the first of
-/// D-03's two mechanisms, and the one that acts before the hook's watchdog has
-/// to.
-///
-/// A few milliseconds rather than zero so that the microsecond-scale overlap
-/// with an ordinary ingest commit is still waited out rather than reported as a
-/// missing brief.
-///
-/// **It bounds the queries and not the open, which is measured rather than
-/// assumed.** [`Store::open_read_only`] applies its own five-second timeout and
-/// then runs a statement against `sqlite_master` before it returns, so a
-/// connection that cannot get in at all waits inside the open, where nothing
-/// here has been able to lower anything yet. How long that wait is depends on
-/// who is holding the file, and both answers were measured on 2026-08-20
-/// against a store held under `PRAGMA locking_mode = EXCLUSIVE`: a holder in
-/// ANOTHER process let the open fail in about 6 ms
-/// (`crates/terminus/tests/inject.rs`), while a holder in the SAME process took
-/// the busy handler's full five seconds - 5,011 ms for
-/// `a_store_held_by_an_exclusive_writer_is_nothing` below. So the wait is not
-/// bounded by anything in this library, and the hook's watchdog is what bounds
-/// it: exactly why D-03 asks for two mechanisms rather than one. What this
-/// constant does bound is every statement after the open, which is where an
-/// ordinary ingest's contention lands.
+/// `store::open`'s five seconds is right for a writer and wrong on the prompt
+/// path: backfill was measured holding the store for 49 s, and a prompt
+/// submitted then would block for the whole timeout. A few milliseconds turns
+/// that contention into silence and still waits out an ordinary ingest commit.
+/// It bounds the queries, not the open: [`Store::open_read_only`] keeps its own
+/// timeout, and the hook's watchdog bounds that.
 const BUSY_TIMEOUT_MS: u64 = 3;
 
 /// Open the store injection reads, or nothing.
@@ -152,34 +130,6 @@ pub(crate) fn scoped(conn: &Connection, config: &Config, payload: &Payload) -> O
         return None;
     }
     Some(scoped)
-}
-
-/// The `NOT IN` clause that keeps an excluded session out of a count.
-///
-/// ING-08 is enforced on the read path as well as on ingest, and
-/// `scope::resolve` only rejects a scope whose own project is excluded - a
-/// session of a visible project whose *pre-worktree* key is excluded is still
-/// in the table and must not be counted. Written with the null guard because
-/// SQL's `NULL NOT IN (...)` is NULL rather than true, which would drop every
-/// session whose key is null: the one session nothing can say is excluded.
-pub(crate) fn push_exclusion(
-    sql: &mut String,
-    params: &mut Vec<Box<dyn rusqlite::ToSql>>,
-    column: &str,
-    excluded: &[String],
-) {
-    if excluded.is_empty() {
-        return;
-    }
-    sql.push_str(&format!(" AND ({column} IS NULL OR {column} NOT IN ("));
-    for (index, value) in excluded.iter().enumerate() {
-        if index > 0 {
-            sql.push(',');
-        }
-        sql.push('?');
-        params.push(Box::new(value.clone()));
-    }
-    sql.push_str("))");
 }
 
 /// How many characters a string is, which is what an injection budget counts
@@ -493,28 +443,9 @@ fn framed(description: &str, body: &str) -> String {
 
 /// One count over the visible rows of a scoped project.
 pub(crate) fn count(conn: &Connection, head: &str, scoped: &Scoped) -> Result<i64> {
-    let mut sql = String::from(head);
+    let mut sql = format!("{head} WHERE 1 = 1");
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-
-    match scoped.project() {
-        Some(project) => {
-            sql.push_str(" WHERE m.project = ?");
-            params.push(Box::new(project.to_owned()));
-        }
-        None => sql.push_str(" WHERE 1 = 1"),
-    }
-    push_exclusion(
-        &mut sql,
-        &mut params,
-        "m.project",
-        scoped.excluded_projects(),
-    );
-    push_exclusion(
-        &mut sql,
-        &mut params,
-        "m.project_pre_worktree",
-        scoped.excluded_pre_worktree(),
-    );
+    scoped.push_filter(&mut sql, &mut params);
 
     let count = conn.query_row(&sql, rusqlite::params_from_iter(params.iter()), |r| {
         r.get(0)

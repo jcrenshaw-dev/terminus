@@ -294,11 +294,12 @@ fn a_reindex_open_brings_every_phase_two_column_back() {
     );
 }
 
-/// The one that matters for `status` and `verify`: a plain `Store::open` - no
-/// `reindex`, no ingest lock - still finds every phase 2 column, and fires no
-/// derived rebuild while doing it. Gating the bring-forward on
-/// `rebuild_required` would make a user who upgraded the binary and ran
-/// `status` before any ingest hit `no such column` on a healthy store.
+/// The one that matters for the writable openers that never rebuild -
+/// `compact`, `observations regenerate` and the snapshot taken after a pass: a
+/// plain `Store::open` with no `reindex` still finds every phase 2 column, and
+/// fires no derived rebuild while doing it. Gating the bring-forward on
+/// `rebuild_required` would leave them hitting `no such column` on a healthy
+/// store an older build wrote.
 #[cfg(feature = "testkit")]
 #[test]
 fn a_plain_open_brings_the_columns_back_and_fires_no_rebuild() {

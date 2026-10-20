@@ -22,11 +22,12 @@ use std::fmt::Display;
 use std::path::Path;
 
 use serde_json::json;
+use serde_json::Value;
 use terminus_core::config::visible;
-use terminus_core::store::{Store, DB_FILE_NAME};
-use terminus_core::Config;
+use terminus_core::store::DB_FILE_NAME;
 
 use super::json::Document;
+use super::read::Opened;
 use super::Failure;
 
 /// A store or filesystem error is operational (exit 1), never misuse.
@@ -35,12 +36,20 @@ fn read<T, E: Display>(result: std::result::Result<T, E>) -> Result<T, Failure> 
 }
 
 pub fn run(json: bool) -> Result<(), Failure> {
-    let data_dir = super::data_dir()?;
-    let config = Config::load()?;
-    let store = Store::open(&data_dir)?;
+    // Read-only, through the path every read command uses: with no store this
+    // says so and creates nothing, and an older store is reported, not changed.
+    let reader = match super::read::open()? {
+        Opened::Ready(reader) => reader,
+        Opened::Nothing(reason) => {
+            let document = document(None, 0, visible::Counts::default(), None, None);
+            return super::read::empty(document, &reason, json);
+        }
+    };
+    let (store, config) = (reader.store(), reader.config());
+    let data_dir = store.data_dir();
     let conn = store.conn();
 
-    let counts = read(visible::counts(conn, &config))?;
+    let counts = read(visible::counts(conn, config))?;
     // Counted first rather than reached for with an optional row, so that "no
     // run yet" and "the query failed" stay two different answers.
     let runs: i64 = read(conn.query_row("SELECT count(*) FROM runs", [], |r| r.get(0)))?;
@@ -72,37 +81,19 @@ pub fn run(json: bool) -> Result<(), Failure> {
         // The same numbers the human output prints, and no others: two accounts
         // of one store that could disagree is the failure a shared shape exists
         // to prevent.
-        Document::new("status")
-            .field("store", store.path().display().to_string())
-            .field("size_bytes", size_bytes(&data_dir))
-            .field("sessions", counts.sessions)
-            .field("turns", counts.turns)
-            .field("watermarks", counts.watermarks)
-            .field("watermark_bytes", counts.watermark_bytes)
-            .field("excluded", config.exclusions())
-            .field(
-                "last_run",
-                match &last {
-                    None => serde_json::Value::Null,
-                    Some(run) => json!({
-                        "started_at": run.started_at,
-                        "duration_ms": run.duration_ms,
-                        "files_seen": run.files_seen,
-                        "files_committed": run.files_committed,
-                        "files_failed": run.files_failed,
-                        "bytes_read": run.bytes_read,
-                        "turns_added": run.turns_added,
-                        "error": run.error,
-                        "notes": run.notes,
-                    }),
-                },
-            )
-            .emit();
+        document(
+            Some(store.path().display().to_string()),
+            size_bytes(data_dir),
+            counts,
+            Some(config.exclusions()),
+            last.as_ref(),
+        )
+        .emit();
         return Ok(());
     }
 
     outln!("store          {}", store.path().display());
-    outln!("size           {}", size(&data_dir));
+    outln!("size           {}", size(data_dir));
     outln!("sessions       {}", counts.sessions);
     outln!("turns          {}", counts.turns);
     outln!(
@@ -154,6 +145,43 @@ pub fn run(json: bool) -> Result<(), Failure> {
     }
 
     Ok(())
+}
+
+/// The `--json` document. With no store it is called with no path, no
+/// exclusion list and no run, so every field the shape carries is there at zero
+/// or null.
+fn document(
+    store: Option<String>,
+    bytes: u64,
+    counts: visible::Counts,
+    excluded: Option<&[String]>,
+    last: Option<&Run>,
+) -> Document {
+    Document::new("status")
+        .field("store", store)
+        .field("size_bytes", bytes)
+        .field("sessions", counts.sessions)
+        .field("turns", counts.turns)
+        .field("watermarks", counts.watermarks)
+        .field("watermark_bytes", counts.watermark_bytes)
+        .field("excluded", excluded)
+        .field(
+            "last_run",
+            match last {
+                None => Value::Null,
+                Some(run) => json!({
+                    "started_at": run.started_at,
+                    "duration_ms": run.duration_ms,
+                    "files_seen": run.files_seen,
+                    "files_committed": run.files_committed,
+                    "files_failed": run.files_failed,
+                    "bytes_read": run.bytes_read,
+                    "turns_added": run.turns_added,
+                    "error": run.error,
+                    "notes": run.notes,
+                }),
+            },
+        )
 }
 
 struct Run {

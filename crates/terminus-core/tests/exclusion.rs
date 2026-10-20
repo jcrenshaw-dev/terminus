@@ -2,8 +2,8 @@
 //!
 //! The ingest half - never opening a file under an excluded project - lives in
 //! `tests/pass.rs`. This file covers the half that is easy to leave out and
-//! that `.planning/PROJECT.md` names the incumbent for: honoring exclusion on
-//! write and ignoring it on read.
+//! that the incumbent gets wrong: honoring exclusion on write and ignoring it
+//! on read.
 //!
 //! Every test here archives with **no** exclusions configured and only then
 //! excludes, because a session archived before its project was excluded is

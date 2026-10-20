@@ -21,7 +21,7 @@ The indexing half is called by the ingest pass in [0003: Ingest](0003-ingest.md)
 | Covered match | A stored entity value all of whose tokens are in the query, which asks for more besides. |
 | Scope | Which project a read answers about: the directory the caller stands in, a named path, or `*` for every project. |
 | Sidechain | A subagent's turn, from a session with a `parent_session_key`. |
-| Excerpt | Up to `EXCERPT_CHARS`, 240, characters of a hit's text around the match, cut from the block rows. |
+| Excerpt | Up to `EXCERPT_CHARS`, 240, characters of a hit's text around the match, cut from the block rows, plus a `...` at either end where text was cut, so at most 246 in all. |
 
 ## 3. Crate, modules and boundaries
 
@@ -80,7 +80,7 @@ Then `index::expand` appends expansion tokens. The table uses FTS5's default tok
 | Kind | Where it comes from |
 |---|---|
 | `tool` | The name of every `tool_use` block. |
-| `path` | A `tool_use` input's `file_path`, `path` or `notebook_path`; the path-shaped words of a `Bash` command; a `recall_search` call's `query` words and `paths`; and the `filePath` of a `toolUseResult`. Each loses surrounding quotes and a trailing `:line:col`, and is never resolved against the filesystem. |
+| `path` | A `tool_use` input's `file_path`, `path` or `notebook_path`; the path-shaped words of a `Bash` command; a `recall_search` call's `query` words and `paths`; and the `filePath` and nested `file.filePath` of a `toolUseResult`. Each loses surrounding quotes and a trailing `:line:col`, and is never resolved against the filesystem. |
 | `command` | The program a `Bash` command runs. |
 | `symbol` | The identifier-shaped tokens of a `Grep` pattern, an `Edit`'s `old_string` and `new_string`, and a `recall_search` query. |
 | `error` | The text of a `tool_result` with `is_error` true, and a `toolUseResult`'s `stderr`, normalized: UUIDs become `<uuid>`, ISO-8601 timestamps `<ts>`, `0x` addresses `<addr>` and `:line:col` suffixes `:<line>`, whitespace runs become one space, and the value stops at `MAX_ERROR_BYTES`, 512. Bare integers are kept. Empty text gives no entity. |
@@ -122,13 +122,13 @@ Options are in [commands.md](../commands.md#reading-the-archive), and the `--jso
 ```mermaid
 flowchart TD
   W["the words typed"] --> P["Query::parse: split on every non-alphanumeric, drop case-folded repeats, keep the first 32"]
-  P --> E{"any tokens left?"}
-  E -->|"no"| N["empty result, reason: nothing searchable"]
-  E -->|"yes"| X["match_expression: each token quoted, joined with AND"]
-  X --> S["scope::resolve: longest-prefix match of the path against stored project keys"]
+  P --> S["scope::resolve: longest-prefix match of the path against stored project keys"]
   S --> R{"a project, or every project?"}
   R -->|"neither"| M["empty result with the reason"]
-  R -->|"yes"| Q["turns_fts MATCH, joined to turns and session_meta, in the project, excluded projects filtered out, then the filters"]
+  R -->|"yes"| E{"any tokens left?"}
+  E -->|"no"| N["empty result, reason: nothing searchable"]
+  E -->|"yes"| X["match_expression: each token quoted, joined with AND"]
+  X --> Q["turns_fts MATCH, joined to turns and session_meta, in the project, excluded projects filtered out, then the filters"]
   Q --> O["order by -bm25, then non-sidechain first, newer first, lower id first, keep the top 200"]
   O --> I["entity re-rank: add IDF times 2 for an exact match or times 1 for a covered one"]
   I --> L["sort again in the same order, cut to the limit"]
@@ -146,7 +146,7 @@ The re-rank reads every entity of the candidate turns. For each distinct `(kind,
 
 Each hit also reports what the re-rank found, its entity score, its strongest match, exact or covered, and the distinct pairs it matched, because the prompt injection decides on those rather than on a score.
 
-An excerpt reads the turn's `stream_offset` and `byte_len` from `turns`, fetches only the block rows that range covers, decompresses each once per search even when several hits share it, and runs the record through the same projection ingest indexed, so the excerpt is the turn's text and not its JSON. It is flattened to one line, windowed so the earliest place any query token appears sits a third of the way in, or at the start of the text when none does, and cut to 240 characters, with `...` where text was cut. A hit whose block rows cannot be read keeps an empty excerpt and every other field: reporting damage is `terminus verify`'s job.
+An excerpt reads the turn's `stream_offset` and `byte_len` from `turns`, fetches only the block rows that range covers, decompresses each once per search even when several hits share it, and runs the record through the same projection ingest indexed, so the excerpt is the turn's text and not its JSON. It is flattened to one line, windowed so the earliest place any query token appears sits a third of the way in, or at the start of the text when none does, and cut to 240 characters, with `...` where text was cut, so at most 246 characters in all. A hit whose block rows cannot be read keeps an empty excerpt and every other field: reporting damage is `terminus verify`'s job.
 
 ### Indexing one turn
 

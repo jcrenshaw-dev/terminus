@@ -28,7 +28,7 @@ flowchart TD
   CLI -->|"reads, read-only"| DB
 ```
 
-*Figure 1. The whole system. Claude Code writes its transcripts and runs `terminus hook` on each hook event. The hook starts a detached `terminus ingest`, which copies the new bytes of each transcript into `terminus.db` and indexes them. On `SessionStart` and `UserPromptSubmit` the hook also runs injection, which reads the store and hands text back to Claude Code. Claude Code starts `terminus mcp` and calls its three recall tools, which read the same store. The terminal commands read it too. Only the ingest writes the database.*
+*Figure 1. The whole system. Claude Code writes its transcripts and runs `terminus hook` on each hook event. The hook starts a detached `terminus ingest`, which copies the new bytes of each transcript into `terminus.db` and indexes them. On `SessionStart` and `UserPromptSubmit` the hook also runs injection, which reads the store and hands text back to Claude Code. Claude Code starts `terminus mcp` and calls its three recall tools, which read the same store. The terminal commands read it too. The ingest writes the database, and so do `terminus reindex`, `compact`, `observations regenerate` and `data move`, each under `LOCK`.*
 
 ## What Terminus is made of
 
@@ -49,6 +49,7 @@ The archived session is the record. Each session's transcript is stored as compr
 | [`crates/terminus/src/cmd/`](../../crates/terminus/src/cmd/) | One module per command, plus `spawn.rs`, which starts the detached ingest, and `read.rs`, the read-only open every read command shares. |
 | [`crates/terminus/src/cmd/json.rs`](../../crates/terminus/src/cmd/json.rs) | The one `--json` envelope, `{command, ok, reason, data}`, built with `serde_json` and never by hand. Its fields and the exit codes are in [json-shapes.md](../json-shapes.md). |
 | [`crates/terminus/src/out.rs`](../../crates/terminus/src/out.rs) | Every write to stdout, so a reader that closes the pipe early does not make the binary panic. |
+| [`crates/terminus/src/escape.rs`](../../crates/terminus/src/escape.rs) | Spells every control character other than tab and newline as `\u00XX` in the human output of `search`, `show` and `observations`, so archived text cannot drive the reader's terminal. The store, `--json` and the record body `show` prints are left as they are. |
 
 ### `crates/terminus-core`, the library
 
@@ -115,7 +116,7 @@ Both are defined in [`crates/terminus-core/src/store/open.rs`](../../crates/term
 
 There is no daemon. The hook is the scheduler: each hook event starts an ingest, and the ingest exits when its pass is done. The hook starts it through a double fork, so the ingest outlives the hook even when Claude Code kills the hook. A pass that finds `LOCK` already held exits 0 without writing anything, so ingests started at the same time collapse into one pass.
 
-The store has one writer at a time, the ingest that holds `LOCK`. The MCP server, injection and the terminal read commands open it read-only and read beside a running pass under WAL.
+The store has one writer at a time, the process that holds `LOCK`: an ingest, or `terminus reindex`, `compact`, `observations regenerate` or `data move`. The MCP server, injection and the terminal read commands open it read-only and read beside a running pass under WAL.
 
 Terminus links no async runtime and no thread-pool crate, `rayon` included. In the library, threads start in one place only, `ingest::backfill`, reached through `terminus backfill`: a fixed number of `std::thread` workers read and compress transcripts, and exactly one thread owns the SQLite connection and makes every write. A hook-started `terminus ingest` starts no thread. The binary starts short-lived threads in two more places: the hook reads stdin on one thread and runs injection on another, so it can stop waiting at a deadline, and `terminus install` drains the stderr of `claude mcp` on one while it runs.
 

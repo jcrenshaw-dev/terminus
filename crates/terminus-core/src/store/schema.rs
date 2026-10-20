@@ -439,9 +439,11 @@ pub const DERIVED_TABLES: &[&str] = &["turns", "compactions", "turns_fts", "enti
 /// a store that already has `session_meta` and `runs` creates a new *table* and
 /// adds no *column* to either. This list is the other half: `Store::open`
 /// compares it against `PRAGMA table_info` and issues
-/// `ALTER TABLE ... ADD COLUMN` for whatever is missing, which is why a binary
-/// carrying a newer schema can run `status` against a store written by an older
-/// one without hitting `no such column`.
+/// `ALTER TABLE ... ADD COLUMN` for whatever is missing, which is why a writable
+/// command in a binary carrying a newer schema can run against a store written
+/// by an older one without hitting `no such column`. A read-only open, which
+/// `status` and every other read command use, adds nothing: it measures the
+/// same list and reports what is absent through `Store::missing_columns`.
 ///
 /// Order matters: `ALTER TABLE ADD COLUMN` appends, so these must be listed in
 /// the same order [`CREATE_SQL`] declares them and must be declared at the END

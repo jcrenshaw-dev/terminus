@@ -206,20 +206,21 @@ struct Brief {
 ///
 /// **All of it goes inside the frame (D-02, D-06).** The header and both tags
 /// are a fixed cost that comes off first; a budget they do not fit renders no
-/// brief at all, so [`remember`] writes nothing. The pointer goes inside with
-/// the rest because it repeats the project label, which is archived text.
+/// brief at all, so [`remember`] writes nothing. Nor does a budget whose room
+/// after the frame cannot hold more than [`excerpt::ELISION`]: any cut there
+/// would be a few raw characters with nothing saying so (#46). The pointer goes
+/// inside with the rest because it repeats the project label, which is
+/// archived text.
 fn render(
     conn: &Connection,
     scoped: &Scoped,
     budget: usize,
     redaction: &Redaction,
 ) -> Option<Brief> {
-    let budget = budget.min(MAX_BRIEF_CHARS);
-    if !super::frame_fits(DESCRIPTION, budget) {
-        return None;
-    }
-    let framed = budget;
-    let budget = budget - super::frame_cost(DESCRIPTION);
+    let framed = budget.min(MAX_BRIEF_CHARS);
+    let budget = framed
+        .checked_sub(super::frame_cost(DESCRIPTION))
+        .filter(|&room| room > chars(excerpt::ELISION))?;
     let (continuity, reads) = last_session(conn, scoped, redaction);
     let pointer = index_pointer(conn, scoped);
     if continuity.is_none() && pointer.is_none() {
@@ -245,9 +246,10 @@ fn render(
         pointer.as_deref(),
     ));
     let cut = continuity.map(|continuity| continuity.within(budget.saturating_sub(spent)));
-    // The backstop inside `frame`, and only that: it fires when the head line
-    // and the pointer alone are over what the frame left, which no cut to the
-    // quoted turns can fix. It cuts inside the frame, never the closing tag.
+    // The backstop inside `frame`, and only that: it fires when the head line,
+    // the pointer and the marks of turns cut to nothing are over what the frame
+    // left, which no cut to the quoted turns can fix. It cuts the pointer's tail
+    // with a mark of its own, inside the frame, never the closing tag.
     Some(Brief {
         turns: quoted(cut.as_ref()),
         text: super::frame(
@@ -267,9 +269,9 @@ const DESCRIPTION: &str =
 /// The turns a rendered continuity block quotes.
 ///
 /// Read off the block that was actually assembled, never off the one that was
-/// selected: a quotation the budget cut down to nothing is dropped from the
-/// text (see [`Continuity::within`]), and a turn the model was not shown is a
-/// turn the prompt arm must still be free to inject.
+/// selected: a quotation the budget left no room for shows as its label and
+/// [`excerpt::ELISION`] alone (see [`Continuity::within`]), and a turn the model
+/// was not shown is a turn the prompt arm must still be free to inject.
 fn quoted(continuity: Option<&Continuity>) -> Vec<i64> {
     let Some(continuity) = continuity else {
         return Vec::new();
@@ -277,6 +279,7 @@ fn quoted(continuity: Option<&Continuity>) -> Vec<i64> {
     [continuity.prompt.as_ref(), continuity.reply.as_ref()]
         .into_iter()
         .flatten()
+        .filter(|quote| quote.shown)
         .map(|quote| quote.turn_id)
         .collect()
 }
@@ -312,6 +315,9 @@ struct Continuity {
 struct Quote {
     turn_id: i64,
     text: String,
+    /// Whether any of the turn's own text is in [`Quote::text`]. False for a
+    /// turn the budget cut to the mark alone, which the brief did not carry.
+    shown: bool,
 }
 
 impl Continuity {
@@ -327,13 +333,16 @@ impl Continuity {
     }
 
     /// The same block with both quoted turns emptied, for measuring what the
-    /// fixed parts cost. It keeps the labels, so the measurement is an upper
-    /// bound on the fixed cost and never an under-count.
+    /// fixed parts cost. It keeps the labels, which every cut renders, and not
+    /// the marks: a turn cut to the mark alone costs at most the mark's length
+    /// over its share, and the backstop in [`super::frame`] takes that from the
+    /// pointer's tail.
     fn bare(&self) -> Continuity {
         let empty = |quote: &Option<Quote>| {
             quote.as_ref().map(|quote| Quote {
                 turn_id: quote.turn_id,
                 text: String::new(),
+                shown: quote.shown,
             })
         };
         Continuity {
@@ -348,8 +357,9 @@ impl Continuity {
     /// Even shares, except that a turn shorter than its half hands the
     /// remainder to the other rather than wasting it - a one-line prompt
     /// against a long reply is the ordinary shape of a session. A turn whose
-    /// share is nothing is dropped rather than rendered as a label with an
-    /// empty quotation.
+    /// share cannot hold a marked cut renders as its label and
+    /// [`excerpt::ELISION`] alone, so the brief says it cut the turn, and is
+    /// not recorded as briefed (#46).
     fn within(self, allowance: usize) -> Continuity {
         let (prompt, reply) = shares(self.prompt.as_ref(), self.reply.as_ref(), allowance);
         Continuity {
@@ -383,11 +393,20 @@ fn shares(
         spare -= extra;
     }
 
+    // A share smaller than the text and no larger than the mark cannot hold a
+    // marked cut: `clip` would hand back a few raw characters, and a share of
+    // nothing would drop the turn. Either way the turn is shown as the mark.
     let cut = |quote: Option<&Quote>, given: usize| -> Option<Quote> {
         let quote = quote?;
-        (given > 0).then(|| Quote {
+        let shown = given >= chars(&quote.text) || given > chars(excerpt::ELISION);
+        Some(Quote {
             turn_id: quote.turn_id,
-            text: clip(&quote.text, given),
+            text: if shown {
+                clip(&quote.text, given)
+            } else {
+                excerpt::ELISION.to_owned()
+            },
+            shown,
         })
     };
     (cut(prompt, given_prompt), cut(reply, given_reply))
@@ -473,23 +492,7 @@ fn last_session_row(
          WHERE m.parent_session_key IS NULL",
     );
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-
-    if let Some(project) = scoped.project() {
-        sql.push_str(" AND m.project = ?");
-        params.push(Box::new(project.to_owned()));
-    }
-    super::push_exclusion(
-        &mut sql,
-        &mut params,
-        "m.project",
-        scoped.excluded_projects(),
-    );
-    super::push_exclusion(
-        &mut sql,
-        &mut params,
-        "m.project_pre_worktree",
-        scoped.excluded_pre_worktree(),
-    );
+    scoped.push_filter(&mut sql, &mut params);
     sql.push_str(" ORDER BY m.last_turn_at DESC, m.session_key DESC LIMIT 1");
 
     let row = conn
@@ -573,7 +576,11 @@ fn last_exchange(
         let (turn_id, _, _) = coordinates?;
         let bytes = bytes.next()?.ok()?;
         let text = excerpt::of_record_scrubbed(&query, &bytes, redaction, super::neutralize);
-        (!text.trim().is_empty()).then_some(Quote { turn_id, text })
+        (!text.trim().is_empty()).then_some(Quote {
+            turn_id,
+            text,
+            shown: true,
+        })
     };
     let [prompt, reply] = pair;
     (cut(prompt), cut(reply), reads)
@@ -652,5 +659,91 @@ fn plural(count: i64, noun: &str) -> String {
         format!("{count} {noun}")
     } else {
         format!("{count} {noun}s")
+    }
+}
+
+/// The brief's SQL on a store with no `project_pre_worktree` column and an
+/// exclusion configured.
+///
+/// Here and not in `tests/`: `inject::open` refuses every store older than
+/// this build, so `session_start` never reaches the brief's SQL on one and only
+/// [`render`] does. What it pins is the per-list skip that keeps the
+/// pre-worktree clause out of the SQL when that list is empty, which it always
+/// is on such a store. No other test configures an exclusion against one.
+#[cfg(all(test, feature = "testkit"))]
+mod predating_store {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::recall::scope::{self, Scope};
+    use crate::recall::{search, Request, MAX_RESULTS};
+    use crate::store::Store;
+    use crate::testkit;
+
+    #[test]
+    fn search_and_the_brief_still_answer_and_hide_an_excluded_project() {
+        let dir = tempfile::tempdir_in(testkit::temp_root()).unwrap();
+        let data_dir = dir.path().join("data");
+        let work = dir.path().join("work");
+        let root = dir.path().join("root");
+        std::fs::create_dir_all(&work).unwrap();
+        for fixture in ["session-recall.jsonl", "session-errors-a.jsonl"] {
+            let path = testkit::copy_rooted_fixture_into(fixture, &work, &root);
+            match crate::ingest::run(&data_dir, &path).unwrap() {
+                crate::ingest::Outcome::Committed(_) => {}
+                other => panic!("{fixture}: {other:?}"),
+            }
+        }
+        let kept = testkit::fixture_project("session-recall.jsonl", &root)
+            .to_string_lossy()
+            .into_owned();
+        let excluded = testkit::fixture_project("session-errors-a.jsonl", &root)
+            .to_string_lossy()
+            .into_owned();
+
+        // Only the column the skip guards goes, so the brief's other reads
+        // meet the store they always do.
+        Connection::open(data_dir.join(crate::store::DB_FILE_NAME))
+            .unwrap()
+            .execute_batch("ALTER TABLE session_meta DROP COLUMN project_pre_worktree")
+            .unwrap();
+        let store = Store::open_read_only(&data_dir).unwrap();
+        assert!(
+            store
+                .missing_columns()
+                .iter()
+                .any(|c| c.column == "project_pre_worktree"),
+            "the premise: the column has to be gone for this to be a test"
+        );
+        let conn = store.conn();
+
+        let projects = |config: &Config| -> Vec<String> {
+            let response = search::run(
+                conn,
+                config,
+                &Request::new(Query::parse("the"), Scope::Everything).limit(MAX_RESULTS),
+            )
+            .expect("a search against this store must answer, not error");
+            let mut projects: Vec<String> = response
+                .hits
+                .into_iter()
+                .filter_map(|h| h.project)
+                .collect();
+            projects.sort();
+            projects.dedup();
+            projects
+        };
+        assert_eq!(
+            projects(&Config::from_parts(Vec::new(), Vec::new())),
+            vec![kept.clone(), excluded.clone()]
+        );
+        let config = Config::from_parts(Vec::new(), vec![excluded.clone()]);
+        assert_eq!(projects(&config), vec![kept.clone()]);
+
+        let scoped =
+            scope::resolve(conn, &config, &Scope::Directory(PathBuf::from(&kept))).unwrap();
+        let brief = render(conn, &scoped, config.brief_chars(), &Redaction::of(&config))
+            .expect("a brief against this store must still render");
+        assert!(!brief.text.contains(&excluded), "{}", brief.text);
     }
 }

@@ -658,7 +658,7 @@ fn an_excluded_transcript_under_no_configured_root_is_still_refused() {
 ///
 /// It is `excludes_path`'s spelling either way, so before normalization this
 /// pass archived the project in full while every read path hid it - the exact
-/// write-then-hide split `.planning/PROJECT.md` names the incumbent for.
+/// write-then-hide split the incumbent gets wrong.
 #[test]
 fn an_exclusion_with_a_trailing_separator_is_honored_before_the_open() {
     let bench = bench();
@@ -1122,4 +1122,373 @@ fn backfill_and_a_named_file_refuse_a_file_the_session_was_not_read_from() {
     assert!(gone.to_string().contains("which is gone"), "{gone}");
     assert_eq!(stream_of(&bench.conn(), &key), archived);
     assert_eq!(diverged(&bench.conn(), &key), None);
+}
+
+// #85, D-09. What a file that has not grown since its last pass still gets.
+// Written against the code before the unchanged-file gate, so each test pins
+// today's answer, and run on both entry points: the tree walk and the named
+// file, each on a fresh bench so neither runs on the other's result.
+
+/// The two ways into ingest that an unchanged file can reach.
+#[derive(Debug, Clone, Copy)]
+enum Entry {
+    Walk,
+    Named,
+}
+
+const ENTRIES: [Entry; 2] = [Entry::Walk, Entry::Named];
+
+fn watermark_of(conn: &Connection, key: &str) -> Option<i64> {
+    conn.query_row(
+        "SELECT byte_offset FROM watermarks WHERE transcript_path = ?1",
+        [key],
+        |r| r.get(0),
+    )
+    .ok()
+}
+
+fn session_no_of(conn: &Connection, key: &str) -> Option<i64> {
+    conn.query_row(
+        "SELECT session_no FROM sessions WHERE session_key = ?1",
+        [key],
+        |r| r.get(0),
+    )
+    .ok()
+}
+
+fn session_count(conn: &Connection) -> i64 {
+    conn.query_row("SELECT count(*) FROM sessions", [], |r| r.get(0))
+        .unwrap()
+}
+
+fn transcript_path_of(conn: &Connection, key: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT transcript_path FROM session_meta WHERE session_key = ?1",
+        [key],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+/// Place one transcript and archive it with a pass, so its watermark is its
+/// length and its bytes are the ones archived.
+fn archived(bench: &Bench, project: &str, name: &str) -> PathBuf {
+    let path = bench.place(project, name, "session-basic.jsonl");
+    let summary = bench.pass(&[]);
+    assert!(summary.failures.is_empty(), "{:?}", summary.failures);
+    assert_eq!(summary.files_committed, 1);
+    let mark = watermark_of(&bench.conn(), &key_of(&path));
+    assert_eq!(mark, Some(std::fs::metadata(&path).unwrap().len() as i64));
+    path
+}
+
+/// The one failure a walk recorded, for `path`.
+fn only_failure(summary: &Summary, path: &Path) -> String {
+    let failed: Vec<&PathBuf> = summary.failures.iter().map(|(p, _)| p).collect();
+    assert_eq!(failed, vec![path], "{:?}", summary.failures);
+    summary.failures[0].1.clone()
+}
+
+#[test]
+fn an_unchanged_file_whose_key_another_file_holds_is_still_refused() {
+    for entry in ENTRIES {
+        let bench = bench();
+        let name = format!("{}.jsonl", uuid(20));
+        let real = archived(&bench, "-code-zzz", &name);
+        let key = key_of(&real);
+        let conn = bench.conn();
+        let before = (
+            stream_of(&conn, &key),
+            watermark_of(&conn, &key),
+            session_count(&conn),
+        );
+
+        // Same name, same bytes, so its length is the watermark, and in a
+        // project folder that sorts first.
+        let other = bench.place("-code-aaa", &name, "session-basic.jsonl");
+        assert_eq!(
+            Some(std::fs::metadata(&other).unwrap().len() as i64),
+            before.1
+        );
+
+        match entry {
+            Entry::Walk => {
+                let reason = only_failure(&bench.pass(&[]), &other);
+                assert!(reason.contains("already held"), "{reason}");
+                assert!(reason.contains(other.to_str().unwrap()), "{reason}");
+                assert!(reason.contains(real.to_str().unwrap()), "{reason}");
+            }
+            Entry::Named => {
+                let err =
+                    ingest::run_with(&bench.data_dir, &other, &bench.config(&[])).unwrap_err();
+                assert!(err.to_string().contains("already held"), "{err}");
+            }
+        }
+
+        let after = (
+            stream_of(&conn, &key),
+            watermark_of(&conn, &key),
+            session_count(&conn),
+        );
+        assert_eq!(after, before, "{entry:?}");
+    }
+}
+
+#[test]
+fn an_unchanged_file_whose_session_lost_its_meta_row_is_still_refused() {
+    for entry in ENTRIES {
+        let bench = bench();
+        let path = archived(&bench, PROJECT, &format!("{}.jsonl", uuid(21)));
+        let key = key_of(&path);
+        let conn = bench.conn();
+        conn.execute("DELETE FROM session_meta WHERE session_key = ?1", [&key])
+            .unwrap();
+        let before = (
+            testkit::stored(&conn, &key),
+            session_no_of(&conn, &key),
+            watermark_of(&conn, &key),
+        );
+        assert!(before.1.is_some());
+
+        match entry {
+            Entry::Walk => {
+                let reason = only_failure(&bench.pass(&[]), &path);
+                assert!(reason.contains("session_meta"), "{reason}");
+            }
+            Entry::Named => {
+                let err = ingest::run_with(&bench.data_dir, &path, &bench.config(&[])).unwrap_err();
+                assert!(err.to_string().contains("session_meta"), "{err}");
+            }
+        }
+
+        let after = (
+            testkit::stored(&conn, &key),
+            session_no_of(&conn, &key),
+            watermark_of(&conn, &key),
+        );
+        assert_eq!(after, before, "{entry:?}");
+    }
+}
+
+#[test]
+fn an_unchanged_file_whose_checksum_is_not_32_bytes_is_still_refused() {
+    for entry in ENTRIES {
+        let bench = bench();
+        let path = archived(&bench, PROJECT, &format!("{}.jsonl", uuid(22)));
+        let key = key_of(&path);
+        let conn = bench.conn();
+        conn.execute(
+            "UPDATE session_meta SET checksum = x'0102030405' WHERE session_key = ?1",
+            [&key],
+        )
+        .unwrap();
+        let before = testkit::stored(&conn, &key);
+
+        match entry {
+            Entry::Walk => {
+                let reason = only_failure(&bench.pass(&[]), &path);
+                assert!(reason.contains("32 bytes"), "{reason}");
+            }
+            Entry::Named => {
+                let err = ingest::run_with(&bench.data_dir, &path, &bench.config(&[])).unwrap_err();
+                assert!(err.to_string().contains("32 bytes"), "{err}");
+            }
+        }
+
+        assert_eq!(testkit::stored(&conn, &key), before, "{entry:?}");
+        assert_eq!(diverged(&conn, &key), None, "{entry:?}");
+    }
+}
+
+#[test]
+fn a_file_shorter_than_its_watermark_is_still_refused_and_the_walk_flags_it() {
+    for entry in ENTRIES {
+        let bench = bench();
+        let path = archived(&bench, PROJECT, &format!("{}.jsonl", uuid(23)));
+        let key = key_of(&path);
+        let conn = bench.conn();
+        let before = stream_of(&conn, &key);
+        std::fs::write(&path, b"{}\n").unwrap();
+
+        match entry {
+            Entry::Walk => {
+                let reason = only_failure(&bench.pass(&[]), &path);
+                assert!(reason.contains("watermark"), "{reason}");
+                assert_eq!(diverged(&conn, &key), Some(1));
+            }
+            Entry::Named => {
+                let err = ingest::run_with(&bench.data_dir, &path, &bench.config(&[])).unwrap_err();
+                assert!(
+                    matches!(err, terminus_core::Error::TranscriptDiverged { .. }),
+                    "{err}"
+                );
+                assert!(err.to_string().contains("watermark"), "{err}");
+                // Only the walk flags a divergence.
+                assert_eq!(diverged(&conn, &key), None);
+            }
+        }
+
+        assert_eq!(stream_of(&conn, &key), before, "{entry:?}");
+    }
+}
+
+#[test]
+fn an_unchanged_file_in_a_moved_project_folder_has_its_path_updated() {
+    for entry in ENTRIES {
+        let bench = bench();
+        let name = format!("{}.jsonl", uuid(24));
+        let path = archived(&bench, "-code-zzz", &name);
+        let key = key_of(&path);
+        let conn = bench.conn();
+        let before = (stream_of(&conn, &key), session_count(&conn));
+
+        std::fs::rename(
+            bench.projects().join("-code-zzz"),
+            bench.projects().join("-code-yyy"),
+        )
+        .unwrap();
+        let moved = bench
+            .projects()
+            .join("-code-yyy")
+            .join(&name)
+            .canonicalize()
+            .unwrap();
+        assert_eq!(key_of(&moved), key);
+
+        match entry {
+            Entry::Walk => {
+                let summary = bench.pass(&[]);
+                assert!(summary.failures.is_empty(), "{:?}", summary.failures);
+                assert_eq!(summary.files_committed, 0);
+            }
+            Entry::Named => {
+                assert_eq!(
+                    ingest::run_with(&bench.data_dir, &moved, &bench.config(&[])).unwrap(),
+                    ingest::Outcome::UpToDate
+                );
+            }
+        }
+
+        assert_eq!(
+            transcript_path_of(&conn, &key).as_deref(),
+            moved.to_str(),
+            "{entry:?}"
+        );
+        assert_eq!(
+            (stream_of(&conn, &key), session_count(&conn)),
+            before,
+            "{entry:?}"
+        );
+    }
+}
+
+// #85, D-10. The block-read log, counted for one session in one store before
+// and after a pass. The log is shared by every test in this binary and they run
+// in parallel, so it is never reset: an entry counts here only when it names
+// this bench's database and this session's number.
+
+fn reads_of(bench: &Bench, key: &str) -> usize {
+    let db = bench.data_dir.join(DB_FILE_NAME).canonicalize().unwrap();
+    let session_no = session_no_of(&bench.conn(), key).expect("an archived session");
+    terminus_core::store::archive::block_reads::entries()
+        .iter()
+        .filter(|(path, no)| *no == session_no && path.canonicalize().ok().as_ref() == Some(&db))
+        .count()
+}
+
+#[test]
+fn a_pass_over_a_grown_file_reads_its_block_rows() {
+    let bench = bench();
+    let path = archived(&bench, PROJECT, &format!("{}.jsonl", uuid(30)));
+    let key = key_of(&path);
+    append(&path, &last_line("session-basic.jsonl"));
+
+    let before = reads_of(&bench, &key);
+    let summary = bench.pass(&[]);
+    assert_eq!(summary.files_committed, 1, "{summary:?}");
+    assert!(
+        reads_of(&bench, &key) > before,
+        "the grown file read no rows"
+    );
+}
+
+#[test]
+fn a_pass_over_a_diverged_session_reads_its_block_rows() {
+    let bench = bench();
+    let path = archived(&bench, PROJECT, &format!("{}.jsonl", uuid(31)));
+    let key = key_of(&path);
+    bench
+        .conn()
+        .execute(
+            "UPDATE session_meta SET transcript_diverged = 1 WHERE session_key = ?1",
+            [&key],
+        )
+        .unwrap();
+
+    let before = reads_of(&bench, &key);
+    let summary = bench.pass(&[]);
+    assert!(summary.failures.is_empty(), "{:?}", summary.failures);
+    assert!(
+        reads_of(&bench, &key) > before,
+        "the flagged session read no rows"
+    );
+}
+
+#[test]
+fn a_pass_over_a_session_whose_file_is_gone_reads_its_block_rows() {
+    let bench = bench();
+    let name = format!("{}.jsonl", uuid(32));
+    let path = archived(&bench, "-code-zzz", &name);
+    let key = key_of(&path);
+    std::fs::rename(
+        bench.projects().join("-code-zzz"),
+        bench.projects().join("-code-yyy"),
+    )
+    .unwrap();
+
+    let before = reads_of(&bench, &key);
+    let summary = bench.pass(&[]);
+    assert!(summary.failures.is_empty(), "{:?}", summary.failures);
+    assert!(
+        reads_of(&bench, &key) > before,
+        "the session whose file is gone read no rows"
+    );
+}
+
+#[test]
+fn a_pass_over_an_unchanged_file_reads_none_of_its_block_rows() {
+    let bench = bench();
+    let still = bench.place(
+        PROJECT,
+        &format!("{}.jsonl", uuid(33)),
+        "session-basic.jsonl",
+    );
+    let grown = bench.place(
+        PROJECT,
+        &format!("{}.jsonl", uuid(34)),
+        "session-basic.jsonl",
+    );
+    let first = bench.pass(&[]);
+    assert_eq!(first.files_committed, 2, "{first:?}");
+    // `observe_new` reads a session's stream once, on the pass it becomes
+    // final. One more pass settles that, so the counted pass is steady state.
+    bench.pass(&[]);
+
+    append(&grown, &last_line("session-basic.jsonl"));
+    let (still_key, grown_key) = (key_of(&still), key_of(&grown));
+    let still_before = reads_of(&bench, &still_key);
+    let grown_before = reads_of(&bench, &grown_key);
+
+    let summary = bench.pass(&[]);
+    assert_eq!(summary.files_committed, 1, "{summary:?}");
+    assert!(summary.failures.is_empty(), "{:?}", summary.failures);
+    assert_eq!(
+        reads_of(&bench, &still_key) - still_before,
+        0,
+        "the unchanged file read block rows"
+    );
+    assert!(
+        reads_of(&bench, &grown_key) > grown_before,
+        "the grown file read no rows"
+    );
 }

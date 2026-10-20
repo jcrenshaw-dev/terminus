@@ -345,26 +345,7 @@ pub fn run(conn: &Connection, config: &Config, request: &Request) -> Result<Resp
     let mut sql = String::from(HEAD);
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(expression)];
 
-    if let Some(project) = scoped.project() {
-        sql.push_str(" AND m.project = ?\n");
-        params.push(Box::new(project.to_owned()));
-    }
-    // `NOT IN` is written with the null guard rather than without it: SQL's
-    // `NULL NOT IN (...)` is NULL, which is not true, so an unguarded clause
-    // would drop every session whose project is null - the one session nothing
-    // can say is excluded.
-    push_exclusion(
-        &mut sql,
-        &mut params,
-        "m.project",
-        scoped.excluded_projects(),
-    );
-    push_exclusion(
-        &mut sql,
-        &mut params,
-        "m.project_pre_worktree",
-        scoped.excluded_pre_worktree(),
-    );
+    scoped.push_filter(&mut sql, &mut params);
     request.filters.push_onto(&mut sql, &mut params)?;
     // Conjunctive with everything above and applied inside the ranking query,
     // not after it: a bound applied to the results would let a later-archived
@@ -697,27 +678,4 @@ fn is_shaped(value: &str, shape: &str) -> bool {
                 b'N' => byte.is_ascii_digit(),
                 other => byte == other,
             })
-}
-
-/// Hide every session whose `column` names an excluded project.
-///
-/// Nothing is appended for an empty list, because `NOT IN ()` is not SQL.
-fn push_exclusion(
-    sql: &mut String,
-    params: &mut Vec<Box<dyn rusqlite::ToSql>>,
-    column: &str,
-    excluded: &[String],
-) {
-    if excluded.is_empty() {
-        return;
-    }
-    sql.push_str(&format!(" AND ({column} IS NULL OR {column} NOT IN ("));
-    for (index, value) in excluded.iter().enumerate() {
-        if index > 0 {
-            sql.push(',');
-        }
-        sql.push('?');
-        params.push(Box::new(value.clone()));
-    }
-    sql.push_str("))\n");
 }

@@ -2,7 +2,7 @@
 
 ## 1. Purpose and scope
 
-This part puts Terminus on a machine and wires it into Claude Code, and it builds, signs and checks the releases it installs from. It has two workflows, and both meet at `install.sh`: the release workflow reads its marker, the signing script reads its key, and the release check runs it. A release is built in CI from a version tag, signed on the owner's machine with a key CI never holds, and published. `install.sh` downloads a published release, checks its signature and its SHA-256, stores the binary under its version, points `~/.local/bin/terminus` at it, and runs `terminus install`, which writes Claude Code's wiring. An update is the same command run again.
+This part puts Terminus on a machine and wires it into Claude Code, and it builds, signs and checks the releases it installs from. It has two workflows, and both meet at `install.sh`: the release workflow reads its marker, the signing script reads its key and its version check, and the release check runs it. A release is built in CI from a version tag, signed on the owner's machine with a key CI never holds, and published. `install.sh` downloads a published release, checks its signature and its SHA-256, stores the binary under its version, points `~/.local/bin/terminus` at it, and runs `terminus install`, which writes Claude Code's wiring. An update is the same command run again.
 
 It also covers `terminus uninstall`, which takes out what install put in, `terminus doctor`, which reports what is wired up and changes nothing, and the CI that tests every push.
 
@@ -19,7 +19,7 @@ What every check refuses, and the release steps one at a time, are already in [r
 | Marker | `MARKER`, a fixed string compiled into every build, `terminus-stable-binary:` and a UUID. A file at the stable path that carries it is a Terminus build and may be replaced. One that does not is someone else's and is refused. |
 | Release files | For each of four platforms: the binary `terminus-<os>-<arch>`, its manifest `terminus-<os>-<arch>.manifest`, and the manifest's signature `terminus-<os>-<arch>.manifest.sig`. |
 | Manifest | Exactly two lines, `version X.Y.Z` and `sha256 <64 lowercase hex digits>`, each ending in a newline. The signature covers the manifest, and the manifest covers the binary. |
-| Release key | The Ed25519 SSH key `crenshawdev-release`. Its public half is the `release_key` line of `install.sh`, the only copy in the repository, and `scripts/sign-release.sh` reads it from there. The private half is `~/.ssh/crenshawdev-release` on the owner's machine. |
+| Release key | The Ed25519 SSH key `crenshawdev-release`. Its public half is the `release_key` line of `install.sh`, the only copy in the repository, and `scripts/sign-release.sh` reads it from there, as it reads `install.sh`'s `valid_version` function, and keeps no copy of either. The private half is `~/.ssh/crenshawdev-release` on the owner's machine. |
 | Namespace | `terminus-release`, the `-n` value every signature is made and checked under, so a signature made with the same key for anything else does not verify. |
 | Draft | A GitHub release CI has created and not published. `releases/latest` does not serve it, so `install.sh` cannot reach it. |
 | Receipt | What `terminus install` prints last: every file it touched, how the MCP server was registered, the data directory, the transcript roots and the undo command. |
@@ -41,7 +41,7 @@ What every check refuses, and the release steps one at a time, are already in [r
 | [`.github/workflows/release.yml`](../../.github/workflows/release.yml) | On a version tag: four builds, one per platform on its own runner, then one draft holding exactly the eight files. |
 | [`.github/workflows/release-check.yml`](../../.github/workflows/release-check.yml) | On a published release: installs it with the public one-line command on the same four runners and checks the installed version. |
 | [`.github/workflows/test.yml`](../../.github/workflows/test.yml) | On every push and pull request: the whole suite on the four runners, in a debug and a release build each. |
-| [`.github/workflows/fast.yml`](../../.github/workflows/fast.yml) | On every pull request: sentinel's fast check, copied from sentinel and run from its submodule at `.sentinel`. |
+| [`.github/workflows/fast.yml`](../../.github/workflows/fast.yml) | On every pull request and every push to main: sentinel's fast check, copied from sentinel and run from its submodule at `.sentinel`. A push to main runs only its mechanical job. |
 | [`scripts/sign-release.sh`](../../scripts/sign-release.sh) | Run by the owner on his own machine: checks a draft, signs its four manifests, verifies each signature the way `install.sh` will, uploads them and publishes the release as latest. |
 
 The boundaries:
@@ -72,7 +72,7 @@ Options are in [commands.md](../commands.md#setup), and `doctor`'s `--json` fiel
 
 - **Inputs:** no argument, which downloads from `https://github.com/jcrenshaw-dev/terminus/releases/latest/download`, or one `https://` source. `HOME`, `uname -s` and `uname -m`, `curl`, `ssh-keygen`, and `sha256sum` or `shasum -a 256`.
 - **Outputs:** in the order [release.md](../release.md#what-installsh-checks) lists: the environment and the stable path are checked, the manifest and its signature are downloaded, and the manifest is verified with `ssh-keygen -Y verify -I crenshawdev-release -n terminus-release` against an allowed-signers file the script writes from `release_key`, so no allowed-signers file of the user's is read. Only then is the binary downloaded, the manifest's two lines checked, and the binary's SHA-256 compared with the manifest's. Then the binary is stored as `~/.local/lib/crenshawdev/terminus/versions/<version>/terminus` through a temporary and a rename, the stable path is checked again, a new link is made beside it and renamed over `~/.local/bin/terminus`, the versions present are printed, and `terminus install` runs through the link. The script exits with its status.
-- **Refusals:** every check refuses with `terminus: <reason>` on stderr and exit 1, with nothing installed. Among them, `TERMINUS_BIN_DIR` set, because `terminus install` would point the wiring into that folder while the script links `~/.local/bin/terminus`; a `HOME` that is unset, relative, not UTF-8, holds `..`, or changes when the shell copies it; a stable path holding a folder or a file that does not carry the marker; and a manifest that does not verify against the pinned key. Nothing overrides the key.
+- **Refusals:** every check refuses with `terminus: <reason>` on stderr and exit 1, with nothing installed. Among them, `TERMINUS_BIN_DIR` set, because `terminus install` would point the wiring into that folder while the script links `~/.local/bin/terminus`; a `HOME` that is unset, relative, not UTF-8, has a path part that is exactly `..`, or changes when the shell copies it; a stable path holding a folder or a file that does not carry the marker; and a manifest that does not verify against the pinned key. Nothing overrides the key.
 
 ### `terminus install`
 
@@ -102,20 +102,20 @@ Options are in [commands.md](../commands.md#setup), and `doctor`'s `--json` fiel
 ### Pushing a version tag
 
 - **Inputs:** a tag `v<X.Y.Z>` pushed to the repository. Nothing else starts `release.yml`.
-- **Outputs:** four build jobs, one per platform on its own runner: `ubuntu-24.04` for `x86_64-unknown-linux-musl`, `ubuntu-24.04-arm` for `aarch64-unknown-linux-musl`, `macos-15-intel` for `x86_64-apple-darwin` and `macos-15` for `aarch64-apple-darwin`. Each builds with `cargo build --release --locked -p terminus` and no features, checks that `--version` matches the tag, that a Linux binary is statically linked and a macOS binary links nothing outside `/usr/lib/`, and that the binary carries the marker read from `install.sh`, then writes the manifest. When all four pass, the draft job checks it holds exactly the eight files and creates the release as a draft.
-- **Refusals:** any failed check fails its job, and one failed build leaves no draft. The workflow has `contents: read`, and only the draft job has `contents: write`, with the workflow's own token. No workflow names a signing key.
+- **Outputs:** four build jobs, one per platform on its own runner: `ubuntu-24.04` for `x86_64-unknown-linux-musl`, `ubuntu-24.04-arm` for `aarch64-unknown-linux-musl`, `macos-15-intel` for `x86_64-apple-darwin` and `macos-15` for `aarch64-apple-darwin`. Each builds with `cargo build --release --locked -p terminus` and no features, checks that `--version` matches the tag, that a Linux binary is statically linked and a macOS binary links nothing outside `/usr/lib/`, and that the binary carries the marker read from `install.sh`, then writes the manifest and attests the binary with `actions/attest`. When all four pass, the draft job checks it holds exactly the eight files and creates the release as a draft.
+- **Refusals:** any failed check fails its job, and one failed build leaves no draft. The workflow has `contents: read`. The build jobs add `id-token: write` and `attestations: write` for the attestation, and only the draft job has `contents: write`, with the workflow's own token. No workflow names a signing key.
 
 ### `scripts/sign-release.sh v<X.Y.Z>`
 
-- **Inputs:** the tag, the owner's `gh` login, `~/.ssh/crenshawdev-release`, and `install.sh`'s one `release_key` line.
-- **Outputs:** it downloads the draft, checks every binary against its manifest and every manifest's exact two lines before it signs anything, signs each manifest with `ssh-keygen -Y sign -n terminus-release`, verifies each signature with the command `install.sh` runs, uploads the four `.sig` files, and publishes the release as latest. Publishing with the owner's own login is what starts `release-check.yml`, because a release published with a workflow's token starts no other workflow.
-- **Refusals:** a release that is not a draft, a draft missing any of the eight files, a binary whose SHA-256 is not its manifest's, a manifest not exactly the two lines, a signature that does not verify, and a failed upload or publish all stop it, and the release stays a draft.
+- **Inputs:** the tag, the owner's `gh` login, `~/.ssh/crenshawdev-release`, and `install.sh`'s one `release_key` line and one `valid_version` function.
+- **Outputs:** it checks the tag's version with `install.sh`'s `valid_version`, so it refuses exactly the versions the installer refuses, then downloads the draft, checks every binary against its manifest, every manifest's exact two lines, and every binary's attestation from `release.yml` at the tag on a GitHub-hosted runner before it signs anything, signs each manifest with `ssh-keygen -Y sign -n terminus-release` and verifies its signature with the command `install.sh` runs before it signs the next, uploads the four `.sig` files, and publishes the release as latest. Publishing with the owner's own login is what starts `release-check.yml`, because a release published with a workflow's token starts no other workflow.
+- **Refusals:** a tag that does not start with `v` or whose version `valid_version` rejects, a release that is not a draft, a draft missing any of the eight files, a binary whose SHA-256 is not its manifest's, a manifest not exactly the two lines, a binary with no such attestation, a signature that does not verify, and a failed upload or publish all stop it, and the release stays a draft.
 
 ### The CI runs
 
 - **`release-check.yml`**, on `release: published`. On `ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-15-intel` and `macos-15`, it puts a stand-in `claude` that exits 0 on `PATH`, runs `curl -fsSL https://raw.githubusercontent.com/jcrenshaw-dev/terminus/main/install.sh | sh` with pipefail, and checks that `~/.local/bin/terminus --version` is the release's version.
 - **`test.yml`**, on every push and pull request. On the same four runners, in a debug and a release build each, eight jobs, it runs `cargo test --workspace --all-features --locked`, with a 15-minute limit on the test step that prints the processes and their open files before it stops a hung run. It reads no secret. Three timing tests of a hook spawn's p99 are skipped on every runner, and three budgets on a single spawn on the two macOS runners, because a hosted VM's timing measures the VM.
-- **`fast.yml`**, on every pull request. Sentinel's fast check: a mechanical job that installs sentinel's gating tools and runs its checks, and on GitHub a security review of the diff, posted as a pull request comment. The review job reads the `ANTHROPIC_API_KEY` secret and is skipped for Dependabot. This is the repository's CI. The binary calls no model and reads no key.
+- **`fast.yml`**, on every pull request and every push to main. Sentinel's fast check: a mechanical job that installs sentinel's gating tools and runs its checks, and on a GitHub pull request a security review of the diff, posted as a pull request comment. A push to main runs only the mechanical job. The review job reads the `ANTHROPIC_API_KEY` secret and is skipped for Dependabot. This is the repository's CI. The binary calls no model and reads no key.
 
 ## 6. States and workflows
 
@@ -134,6 +134,7 @@ sequenceDiagram
   Note over B: ubuntu-24.04, ubuntu-24.04-arm, macos-15-intel, macos-15
   B->>B: cargo build --release --locked, no features
   B->>B: version matches the tag, linkage, marker, then the manifest
+  B->>GH: attest each binary, signed as release.yml at the tag
   alt every build passes
     B->>D: four binaries and four manifests
     D->>D: exactly eight files
@@ -144,8 +145,8 @@ sequenceDiagram
   O->>S: sh scripts/sign-release.sh vX.Y.Z, on his own machine
   S->>GH: is it a draft, download it
   S->>S: each binary against its manifest, each manifest exactly two lines
-  S->>S: sign each manifest with crenshawdev-release, namespace terminus-release
-  S->>S: verify each signature as install.sh does
+  S->>GH: gh attestation verify each binary against release.yml at the tag
+  S->>S: for each manifest, sign it with crenshawdev-release, namespace terminus-release, then verify it as install.sh does
   S->>GH: upload four .sig files, publish as latest
   GH->>RC: release published
   RC->>GH: curl install.sh from main, pipe to sh, on the four runners

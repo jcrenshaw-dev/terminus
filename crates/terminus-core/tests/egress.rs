@@ -132,8 +132,8 @@ fn a_payload_holding_multibyte_text_survives_the_scan() {
 // ---------------------------------------------------------------------------
 // Egress only, never ingest
 
-/// `.planning/PROJECT.md` bars ingest-time redaction outright: it makes the
-/// store lossy and destroys what it strips. The ingest write path must
+/// Ingest-time redaction is barred outright: it makes the store lossy and
+/// destroys what it strips. The ingest write path must
 /// therefore not be able to reach this module at all.
 #[test]
 fn nothing_in_the_ingest_path_names_the_egress_filter() {

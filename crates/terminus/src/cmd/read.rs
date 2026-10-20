@@ -1,8 +1,11 @@
-//! The one place `search`, `show` and `sessions` open the store.
+//! The one place the read commands open the store: `search`, `show`,
+//! `sessions`, `status`, `verify`, `observations`, `stats`, `replay`, `usage`,
+//! `export`, `retention --dry-run`, `doctor`, `backfill`'s estimate and the MCP
+//! tools.
 //!
-//! Three commands opening a store three times is three chances to drift on the
-//! two behaviours D-10 and D-18 fix, and neither of them is visible in a test
-//! that only checks the command answered.
+//! Each of them opening a store its own way is that many chances to drift on
+//! the two behaviours D-10 and D-18 fix, and neither of them is visible in a
+//! test that only checks the command answered.
 //!
 //! **Read-only, always (D-10).** [`terminus_core::Store::open_read_only`] and
 //! never `Store::open`: opening a store is a read, and `Store::open` would
@@ -13,9 +16,12 @@
 //!
 //! **A missing store is an answer, not a failure.** A machine that has installed
 //! terminus and not yet run an ingest is the ordinary starting state, so it gets
-//! an empty result carrying a reason and exit 0. A store that is *there* and
-//! cannot be read is the other thing: that is operational (exit 1), because a
-//! script told "no results" about an unreadable database would carry on.
+//! an empty result carrying a reason and exit 0. A database file with no tables
+//! at all is the same answer: it is a store another process is still creating,
+//! between `Store::open` stamping `journal_mode=wal` and `initialize`
+//! committing. A store that is *there* and cannot be read is the other thing:
+//! that is operational (exit 1), because a script told "no results" about an
+//! unreadable database would carry on.
 //!
 //! **A store older than this build says so and is not repaired (D-18).**
 //! `reindex::open_up_to_date` stays the only caller that rebuilds. A read that
@@ -98,12 +104,7 @@ pub fn open_in(data_dir: &Path, config: Config) -> Result<Opened, Failure> {
         Ok(store) => store,
         // The ordinary state of a machine that has never ingested. Nothing is
         // created here, and that includes the data directory itself.
-        Err(Error::StoreNotFound { path }) => {
-            return Ok(Opened::Nothing(format!(
-                "no terminus store at {}; nothing has been archived yet",
-                path.display()
-            )))
-        }
+        Err(Error::StoreNotFound { path }) => return Ok(Opened::Nothing(no_store(&path))),
         Err(other) => return Err(Failure::Operational(other.to_string())),
     };
 
@@ -112,6 +113,14 @@ pub fn open_in(data_dir: &Path, config: Config) -> Result<Opened, Failure> {
     }
 
     Ok(Opened::Ready(Box::new(Reader { store, config })))
+}
+
+/// The reason a read gives when there is no store to read.
+fn no_store(path: &Path) -> String {
+    format!(
+        "no terminus store at {}; nothing has been archived yet",
+        path.display()
+    )
 }
 
 /// What a store missing part of the decision log is: old, or damaged.
@@ -260,6 +269,81 @@ mod tests {
             Err(Failure::Operational(_)) => {}
             Err(other) => panic!("expected an operational failure, got {other:?}"),
             Ok(_) => panic!("a file that is not a database opened as a store"),
+        }
+    }
+
+    /// A `terminus.db` holding `sql` and nothing else, closed again.
+    fn database(dir: &Path, sql: &str) -> std::path::PathBuf {
+        let path = dir.join("terminus.db");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.pragma_update(None, "journal_mode", "wal").unwrap();
+        conn.execute_batch(sql).unwrap();
+        path
+    }
+
+    fn tables(path: &Path) -> i64 {
+        rusqlite::Connection::open(path)
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'table'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+
+    /// A database with no tables is what `Store::open` leaves between stamping
+    /// `journal_mode=wal` and committing `initialize`. A read in that moment
+    /// gets the missing-store answer, and the file still holds no tables.
+    #[test]
+    fn a_database_with_no_tables_is_a_reason_and_still_holds_no_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = database(dir.path(), "");
+        assert!(std::fs::metadata(&path).unwrap().len() > 0);
+
+        match open_in(dir.path(), Config::default()).unwrap() {
+            Opened::Nothing(reason) => {
+                assert!(reason.contains("no terminus store"), "{reason}");
+                assert!(
+                    reason.contains(&path.display().to_string()),
+                    "the reason must name where it looked: {reason}"
+                );
+            }
+            Opened::Ready(_) => panic!("a database with no tables opened as a store"),
+        }
+
+        assert_eq!(tables(&path), 0, "a read created a table");
+    }
+
+    /// A database whose tables are not ours is somebody else's SQLite file, and
+    /// stays operational.
+    #[test]
+    fn a_database_with_a_foreign_table_is_operational() {
+        let dir = tempfile::tempdir().unwrap();
+        database(dir.path(), "CREATE TABLE other (x);");
+
+        match open_in(dir.path(), Config::default()) {
+            Err(Failure::Operational(_)) => {}
+            Err(other) => panic!("expected an operational failure, got {other:?}"),
+            Ok(_) => panic!("a foreign database opened as a store"),
+        }
+    }
+
+    /// A `meta` table with no version keys is not a store either: `initialize`
+    /// writes the tables and the keys in one transaction, so a store being
+    /// created never looks like this.
+    #[test]
+    fn a_meta_table_with_no_versions_is_operational() {
+        let dir = tempfile::tempdir().unwrap();
+        database(
+            dir.path(),
+            "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        );
+
+        match open_in(dir.path(), Config::default()) {
+            Err(Failure::Operational(_)) => {}
+            Err(other) => panic!("expected an operational failure, got {other:?}"),
+            Ok(_) => panic!("a meta table with no versions opened as a store"),
         }
     }
 }

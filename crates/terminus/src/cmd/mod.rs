@@ -133,10 +133,7 @@ impl Footprint {
 
 /// Measure that footprint now.
 ///
-/// `cmd::status` and `cmd::uninstall` each keep a private copy of this rule.
-/// They are not folded in here: both are shipped human outputs with their own
-/// doc blocks about when the sidecars exist, and rewriting two working commands
-/// is not part of adding a third caller.
+/// `cmd::status` and `cmd::uninstall` each keep their own copy of this rule.
 pub fn footprint(data_dir: &Path) -> Footprint {
     let of = |name: String| {
         std::fs::metadata(data_dir.join(name))
@@ -173,17 +170,6 @@ pub fn human(bytes: u64) -> String {
 /// The `--json` flag as spelled on every command line.
 pub const JSON_FLAG: &str = "json";
 
-/// Parse the rest of the command line for a subcommand whose only argument is
-/// `--json`.
-///
-/// The flag is parsed by the subcommand rather than by `run()`, because
-/// `main.rs` hands the `lexopt::Parser` on and a flag consumed before dispatch
-/// could not be spelled differently by two commands that need to. This is the
-/// shape for `verify`, `reindex` and `status`, which take nothing else;
-/// `search`, `show` and `sessions` match `--json` as one arm of their own loop.
-///
-/// Everything else is still rejected. A subcommand that silently ignored an
-/// argument is how `verify --json` came to look supported before it was.
 /// The value of a flag that takes one, as a misuse when it is absent.
 ///
 /// Shared by every command that has flags, so "--project with nothing after it"
@@ -214,8 +200,7 @@ pub fn value(parser: &mut lexopt::Parser, flag: &str) -> Result<String, Failure>
 /// `recall::search::run` resolves the scope before it validates its filters, so
 /// a bad bound typed in a directory no archived project covers would otherwise
 /// be answered with the scope's reason and exit 0. `recall::search` keeps its
-/// own copy of the rule for library callers, which is a duplication worth
-/// naming - see the open items on this plan.
+/// own copy of the rule for library callers.
 pub fn time_bound(flag: &str, raw: &str) -> Result<String, Failure> {
     const FULL: &str = "NNNN-NN-NNTNN:NN:NN.NNNZ";
     const DATE: &str = "NNNN-NN-NN";
@@ -247,6 +232,12 @@ pub fn time_bound(flag: &str, raw: &str) -> Result<String, Failure> {
     )))
 }
 
+/// Parse the rest of the command line for a subcommand whose only argument is
+/// `--json`, rejecting anything else.
+///
+/// Each subcommand parses its own flags because `main.rs` hands the
+/// `lexopt::Parser` on. This is the shape for the commands that take nothing
+/// else; the rest match `--json` as one arm of their own loop.
 pub fn json_flag(parser: &mut lexopt::Parser) -> Result<bool, Failure> {
     use lexopt::prelude::*;
 

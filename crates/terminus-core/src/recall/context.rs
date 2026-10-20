@@ -122,35 +122,24 @@ pub fn window(
         .optional()?;
     let (project, pre_worktree, continues_from) = meta.unwrap_or((None, None, None));
 
-    // Both arms refuse the anchor as `NoSuchTurn`, and neither names a path:
-    // naming the excluded project, at `*` or anywhere, would confirm the turn
-    // exists and say what the project is called.
+    // One check covers scope and exclusion, and a no refuses the anchor as
+    // `NoSuchTurn` naming no path: naming the excluded project, at `*` or
+    // anywhere, would confirm the turn exists and say what the project is
+    // called.
     //
-    // The scoping half of the same door. RCL-10 auto-scopes all three MCP
-    // tools to the current project with `project: "*"` opting out, and this is
-    // the only place the context tool can enforce it: a caller supplies a turn
-    // id, not a search, and ids are densely enumerable (`session_no << 24 |
-    // turn_seq`), so a window that scoped nothing would walk out of the
-    // caller's project one id at a time. `search::run` refuses those rows with
-    // `AND m.project = ?`; leaving this open was the second door the module doc
-    // above closes for exclusion and had not closed for scoping.
+    // Scope is in the check as well as exclusion. RCL-10 auto-scopes all three
+    // MCP tools to the current project with `project: "*"` opting out, and this
+    // is the only place the context tool can enforce it: a caller supplies a
+    // turn id, not a search, and ids are densely enumerable (`session_no << 24
+    // | turn_seq`), so a window that scoped nothing would walk out of the
+    // caller's project one id at a time. `search::run` refuses those rows in
+    // SQL through `Scoped::push_filter`; leaving this open was the second door
+    // the module doc above closes for exclusion and had not closed for scoping.
     //
     // Answered as `NoSuchTurn` rather than a reason of its own, deliberately:
     // out of the caller's scope, the turn does not exist, and a distinct reason
     // would confirm that some other project holds that id.
-    if let Some(wanted) = scoped.project() {
-        if project.as_deref() != Some(wanted) {
-            return Ok(Window::nothing(Reason::NoSuchTurn { turn_id: anchor }));
-        }
-    }
-
-    let hidden = |key: &Option<String>, excluded: &[String]| {
-        key.as_deref()
-            .is_some_and(|k| excluded.iter().any(|e| e == k))
-    };
-    if hidden(&project, scoped.excluded_projects())
-        || hidden(&pre_worktree, scoped.excluded_pre_worktree())
-    {
+    if !scoped.admits(project.as_deref(), pre_worktree.as_deref()) {
         return Ok(Window::nothing(Reason::NoSuchTurn { turn_id: anchor }));
     }
 

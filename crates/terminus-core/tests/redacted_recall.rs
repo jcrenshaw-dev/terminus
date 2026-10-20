@@ -280,6 +280,10 @@ const PROMPT_SENTINEL: &str = "sk-VBEGRESS-prompt-8d3";
 /// `inject::prompt` never injects on a text score, so a turn holding the secret
 /// and nothing else would prove nothing about the filter because nothing would
 /// ever be injected.
+///
+/// The prose block naming the credential sits ahead of the `Edit` because the
+/// excerpt window starts at the first query token, and behind the absolute path
+/// it falls out of the window once the temp directory's path is long (#46).
 fn archive_a_prompt_target(bench: &Bench) -> (String, String) {
     let cwd = bench.root.join("project-injected");
     std::fs::create_dir_all(&cwd).unwrap();
@@ -294,6 +298,9 @@ fn archive_a_prompt_target(bench: &Bench) -> (String, String) {
         "timestamp": "2026-09-04T11:00:00.000Z",
         "requestId": "req_0",
         "message": {"role": "assistant", "model": "claude-opus-5", "content": [{
+            "type": "text",
+            "text": format!("rotate the vault call off Authorization: Bearer {PROMPT_SENTINEL}"),
+        }, {
             "type": "tool_use",
             "id": "toolu_inject01",
             "name": "Edit",

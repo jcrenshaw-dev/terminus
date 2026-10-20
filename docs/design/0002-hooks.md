@@ -107,7 +107,7 @@ sequenceDiagram
 
 *Figure 1. One run of `terminus hook`. An unknown event exits 2 before anything starts. Every known event starts the ingest first, then reads its payload. The two events with an arm may hand back one object, and the two without one never write to stdout. Every known event exits 0.*
 
-The hook waits on its two threads with a timeout and never joins them. A blocking read on a pipe, or a blocking SQLite call, cannot be cancelled with `std`, so the hook stops waiting and lets its own exit end the thread. Neither thread leaves half-done work that matters: the stdin thread writes nothing, and the injection thread writes its files through a temp file and a rename, so an abandoned write leaves a `.tmp` file that the ingest's drain deletes once it is old.
+The hook waits on its two threads with a timeout and never joins them. A blocking read on a pipe, or a blocking SQLite call, cannot be cancelled with `std`, so the hook stops waiting and lets its own exit end the thread. Neither thread leaves half-done work that matters: the stdin thread writes nothing, and the injection thread writes its files through a temp file and a rename, so an abandoned write leaves a `.tmp` file, or for a decision an empty `.json` reserved for the rename, and the ingest's drain deletes either once it is old.
 
 ### The detached spawn
 

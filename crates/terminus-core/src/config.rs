@@ -4,8 +4,8 @@
 //! The file is `terminus.toml` inside terminus's config directory, and
 //! `config.toml` in that same directory is deliberately never read (D-15). The
 //! legacy tool wrote one - 184 bytes, `base_dir = "/data/verbatim"` - and
-//! adopting it would point the new store at the legacy data directory whose
-//! import `.planning/PROJECT.md` defers.
+//! adopting it would point the new store at the legacy data directory, which
+//! Terminus does not import.
 //!
 //! A missing config file is not an error. It yields the defaults, which is the
 //! state every user starts in.
@@ -263,7 +263,7 @@ pub const REDACTED: &str = "[redacted]";
 /// `toolUseResult` and `attachment` subtrees with a mark saying how many bytes
 /// stood there. That is an ELISION and not a redaction - it drops a whole named
 /// subtree and records that it did, it never rewrites content in place, and
-/// ingest-time redaction stays barred outright (`.planning/PROJECT.md`).
+/// ingest-time redaction stays barred outright.
 ///
 /// Two consequences are worth knowing before choosing one:
 ///
@@ -438,8 +438,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            // No file, so nothing to name: a config built in memory must not
-            // claim a path a refusal would then print (D-13).
+            // Built in memory, so there is no file for a refusal to name.
             source: None,
             roots: Vec::new(),
             exclusions: Vec::new(),
@@ -447,26 +446,14 @@ impl Default for Config {
             encoded_exclusions: Vec::new(),
             brief_chars: DEFAULT_BRIEF_CHARS,
             prompt_chars: DEFAULT_PROMPT_CHARS,
-            // Every field at its zero, and here that IS the specified state:
-            // `Keep` with no age selects nothing, so a user who never wrote a
-            // `[retention]` table has retention off (RET-01).
+            // `Keep` with no age: retention is off until it is configured.
             retention: Retention::default(),
-            // The one block here whose zero value is the WRONG default, which is
-            // why `Snapshot` writes its own: STOR-06 says rolling snapshots run
-            // by default, so a user who never wrote a `[snapshot]` table has
-            // them on, daily, three kept.
+            // Snapshots are on by default: daily, three kept.
             snapshot: Snapshot::default(),
-            // `Full` is both the derived zero and the specified default
-            // (ING-07), so this line is the one place in this impl where the
-            // two agree and it is still spelled out: the mode a store captures
-            // under is not a value to leave to a derive.
+            // Spelled out: the capture mode is not a value to leave to a derive.
             capture: CaptureMode::Full,
-            // Off, and this is the one default in this impl that would be
-            // actively harmful to get the other way round: every byte in the
-            // archive already reached the model once, when it was typed, so a
-            // filter on by default would spend the product's whole value -
-            // precise recall over what was actually said - to re-hide text the
-            // model has already seen.
+            // Off: the model saw every archived byte once already, and
+            // redacting by default would cost exact recall to hide it again.
             redact_recall: false,
         }
     }
@@ -512,12 +499,8 @@ impl Config {
         Ok(config)
     }
 
-    /// A config built in memory, for callers that have no file. Test support
-    /// and nothing else uses this today.
-    ///
-    /// The signature is the one every existing caller passes, and the injection
-    /// budgets it does not name come out at their defaults: a new argument here
-    /// would be an edit to every test in the workspace that builds a config.
+    /// A config built from roots and exclusions, every other setting at its
+    /// default. `Config::resolve` starts from it, and so do the tests.
     pub fn from_parts(roots: Vec<PathBuf>, exclusions: Vec<String>) -> Config {
         let exclusions: Vec<String> = exclusions.iter().filter_map(|e| normalize(e)).collect();
         let mut exclusion_spellings = Vec::new();
@@ -968,8 +951,8 @@ pub fn encode(path: &str) -> String {
         .collect()
 }
 
-/// Path comparison is case-insensitive on macOS and case-sensitive on Linux
-/// (`.planning/PROJECT.md` constraints).
+/// Path comparison is case-insensitive on macOS and case-sensitive on Linux,
+/// matching each platform's default file system.
 #[cfg(target_os = "macos")]
 fn fold(s: &str) -> String {
     s.to_lowercase()
@@ -1154,8 +1137,8 @@ fn non_empty_var(name: &str) -> Option<std::ffi::OsString> {
 /// the MCP tools all reuse it; a query that reaches past it is how an excluded
 /// project becomes visible again.
 ///
-/// The failure this exists to prevent is named in `.planning/PROJECT.md`: the
-/// incumbent honors exclusion on write and ignores it on read. Terminus honors
+/// The failure this exists to prevent: the incumbent honors exclusion on write
+/// and ignores it on read. Terminus honors
 /// it on both, and honors it **retroactively** - which is why no per-session
 /// flag is written at ingest (D-23). A flag would say what was true when the
 /// session was archived, and the case that matters is precisely the session
@@ -1267,7 +1250,11 @@ pub mod visible {
         let mut out = Vec::new();
         for session in rows {
             let session = session?;
-            if !is_excluded(config, &session) {
+            if !is_excluded(
+                config,
+                session.project.as_deref(),
+                session.project_pre_worktree.as_deref(),
+            ) {
                 out.push(session);
             }
         }
@@ -1295,13 +1282,6 @@ pub mod visible {
         pub project_excluded: bool,
         /// The config excludes [`ProjectKeys::project_pre_worktree`].
         pub pre_worktree_excluded: bool,
-    }
-
-    impl ProjectKeys {
-        /// Is a session carrying these keys hidden from every read path?
-        pub fn excluded(&self) -> bool {
-            self.project_excluded || self.pre_worktree_excluded
-        }
     }
 
     /// Every distinct project key the archive carries, and which of them the
@@ -1364,9 +1344,10 @@ pub mod visible {
         Ok(counts)
     }
 
-    /// Is this session inside an excluded project, under either of its keys?
-    pub fn is_excluded(config: &Config, session: &Session) -> bool {
-        [&session.project, &session.project_pre_worktree]
+    /// Is a session with these two keys inside an excluded project, under
+    /// either of them?
+    pub fn is_excluded(config: &Config, project: Option<&str>, pre_worktree: Option<&str>) -> bool {
+        [project, pre_worktree]
             .into_iter()
             .flatten()
             .any(|key| config.excludes_path(std::path::Path::new(key)))

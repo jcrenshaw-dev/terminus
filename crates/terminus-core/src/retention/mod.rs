@@ -231,11 +231,14 @@ fn cutoff_at(conn: &Connection, now: &str, age_days: u32) -> Result<String> {
 /// Both keys, for the reason `config::visible` gives: a worktree session
 /// carries the folded parent repo in `project` and the worktree path in the
 /// pre-mapping column, and a user may reasonably have excluded either one.
+/// The check is `visible::is_excluded`, so retention and every read path agree
+/// on what is excluded.
 fn is_excluded(config: &Config, row: &Candidate) -> bool {
-    [&row.project, &row.project_pre_worktree]
-        .into_iter()
-        .flatten()
-        .any(|key| config.excludes_path(std::path::Path::new(key)))
+    visible::is_excluded(
+        config,
+        row.project.as_deref(),
+        row.project_pre_worktree.as_deref(),
+    )
 }
 
 /// Has Claude Code's own cleanup already removed this transcript (D-02)?

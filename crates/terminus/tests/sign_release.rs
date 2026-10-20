@@ -1,5 +1,7 @@
 //! `scripts/sign-release.sh` run end to end under `/bin/sh` and under dash,
-//! with a stand-in `gh` and a throwaway Ed25519 key.
+//! with a stand-in `gh` and a throwaway Ed25519 key. The stand-in `gh` finds
+//! every binary attested unless a test names it in the fixture's `unattested`
+//! file.
 //!
 //! Each test runs once per shell, as `<test>::sh` and `<test>::dash`. Without
 //! dash or ssh-keygen on `PATH` these tests fail; none is skipped.
@@ -237,6 +239,12 @@ case $1/$2 in
         done
         ;;
     release/edit) ;;
+    attestation/verify)
+        if grep -q -x -F -e "${3##*/}" '@UNATTESTED@'; then
+            printf 'stand-in gh: no attestation for %s\n' "${3##*/}" >&2
+            exit 1
+        fi
+        ;;
     *) printf 'stand-in gh: unexpected call: %s\n' "$*" >&2; exit 1 ;;
 esac
 "#
@@ -244,9 +252,11 @@ esac
     .replace("@IS_DRAFT@", &fx.is_draft().display().to_string())
     .replace("@CP@", &cp.display().to_string())
     .replace("@DRAFT@", &fx.draft.display().to_string())
-    .replace("@UPLOADED@", &fx.uploaded.display().to_string());
+    .replace("@UPLOADED@", &fx.uploaded.display().to_string())
+    .replace("@UNATTESTED@", &fx.unattested().display().to_string());
     write_executable(&fx.fake.join("gh"), &gh);
     std::fs::write(fx.is_draft(), "true\n").unwrap();
+    std::fs::write(fx.unattested(), "").unwrap();
 
     for tool in TOOLS {
         let target = which(tool).unwrap_or_else(|| panic!("{tool} is not on PATH"));
@@ -289,6 +299,11 @@ impl Fixture {
         self.root.join("is-draft")
     }
 
+    /// The binaries the stand-in `gh` finds no attestation for, one per line.
+    fn unattested(&self) -> PathBuf {
+        self.root.join("unattested")
+    }
+
     fn gh_log(&self) -> PathBuf {
         self.root.join("gh.log")
     }
@@ -323,10 +338,10 @@ impl Fixture {
     }
 }
 
-/// A good draft: four manifests signed from stdin with the owner's key file
-/// under `terminus-release`, each verified as `install.sh` verifies, then one
-/// upload of the four signatures and one edit that publishes the release as
-/// latest.
+/// A good draft: each binary's attestation checked against `release.yml` at
+/// the tag, four manifests signed from stdin with the owner's key file under
+/// `terminus-release`, each verified as `install.sh` verifies, then one upload
+/// of the four signatures and one edit that publishes the release as latest.
 fn a_good_draft_is_signed_and_published(shell: Shell) {
     let fx = fixture(shell);
     let output = fx.run(TAG);
@@ -371,13 +386,32 @@ fn a_good_draft_is_signed_and_published(shell: Shell) {
     assert_eq!(ssh.len(), 8, "{ssh:?}");
 
     let gh = fx.gh_calls();
-    assert_eq!(gh.len(), 4, "{gh:?}");
+    assert_eq!(gh.len(), 8, "{gh:?}");
     for call in &gh {
         assert!(call.windows(2).any(|pair| pair == REPO), "{call:?}");
     }
     assert_eq!(gh[0], VIEW);
     assert_eq!(gh[1][..3], ["release", "download", TAG]);
-    let gh = &gh[1..];
+    for (call, platform) in gh[2..6].iter().zip(PLATFORMS) {
+        assert_eq!(call[..2], ["attestation", "verify"], "{call:?}");
+        assert!(
+            call[2].ends_with(&format!("/terminus-{platform}")),
+            "{call:?}"
+        );
+        assert_eq!(
+            call[3..],
+            [
+                "--repo",
+                "jcrenshaw-dev/terminus",
+                "--signer-workflow",
+                "jcrenshaw-dev/terminus/.github/workflows/release.yml",
+                "--source-ref",
+                "refs/tags/v0.1.0",
+                "--deny-self-hosted-runners"
+            ]
+        );
+    }
+    let gh = &gh[5..];
     assert_eq!(gh[1][..3], ["release", "upload", TAG]);
     let named: Vec<_> = gh[1][3..7]
         .iter()
@@ -433,7 +467,16 @@ fn a_good_draft_is_signed_and_published(shell: Shell) {
 /// so nothing that looks like a flag ever reaches `gh`.
 fn a_bad_tag_is_refused(shell: Shell) {
     let fx = fixture(shell);
-    for tag in ["0.1.0", "v0.1", "v0.01.0", "v0.1.0-rc1", "--repo=x/y", ""] {
+    for tag in [
+        "0.1.0",
+        "v0.1",
+        "v0.01.0",
+        "v0.1.0-rc1",
+        "--repo=x/y",
+        "",
+        "v123456789012345678901.0.0",
+        "v18446744073709551616.0.0",
+    ] {
         let output = fx.run(tag);
         assert!(!output.status.success(), "{tag}: {}", text(&output));
         assert_eq!(
@@ -444,6 +487,17 @@ fn a_bad_tag_is_refused(shell: Shell) {
     }
     assert!(fx.gh_calls().is_empty(), "{:?}", fx.gh_calls());
     assert!(fx.ssh_calls().is_empty(), "{:?}", fx.ssh_calls());
+}
+
+/// A part of u64's largest value is a legal version, so the tag gets past the
+/// tag check and the first `gh` call asks about that release.
+fn the_largest_u64_part_passes_the_tag_check(shell: Shell) {
+    let fx = fixture(shell);
+    let tag = "v18446744073709551615.0.0";
+    fx.run(tag);
+    let gh = fx.gh_calls();
+    assert!(!gh.is_empty(), "no gh call");
+    assert_eq!(gh[0][..3], ["release", "view", tag], "{gh:?}");
 }
 
 /// Run the script on `fx`'s draft and assert it was refused before anything
@@ -521,7 +575,7 @@ fn a_signature_the_pinned_key_does_not_verify_is_refused(shell: Shell) {
     fx.use_shipped_install_sh();
     let output = fx.run(TAG);
     let gh = fx.gh_calls();
-    assert_eq!(gh.len(), 2, "{gh:?}");
+    assert_eq!(gh.len(), 6, "{gh:?}");
     assert_eq!(gh[0], VIEW);
     assert_eq!(gh[1][..2], ["release", "download"]);
     assert_eq!(std::fs::read_dir(&fx.uploaded).unwrap().count(), 0);
@@ -536,6 +590,32 @@ fn a_signature_the_pinned_key_does_not_verify_is_refused(shell: Shell) {
     let ssh = fx.ssh_calls();
     let verbs: Vec<_> = ssh.iter().map(|call| call[2].as_str()).collect();
     assert_eq!(verbs, ["sign", "verify"], "{ssh:?}");
+}
+
+/// A binary with no attestation from `release.yml` at the tag is refused
+/// before any passphrase is asked for, even though it matches its manifest:
+/// that is what a binary and manifest swapped into the draft look like.
+fn a_binary_ci_did_not_attest_is_refused(shell: Shell) {
+    let fx = fixture(shell);
+    std::fs::write(fx.unattested(), "terminus-linux-aarch64\n").unwrap();
+    let output = fx.run(TAG);
+    assert!(!output.status.success(), "{}", text(&output));
+    let gh = fx.gh_calls();
+    assert_eq!(gh.len(), 4, "{gh:?}");
+    assert_eq!(gh[3][..2], ["attestation", "verify"], "{gh:?}");
+    let ssh = fx.ssh_calls();
+    assert!(
+        !ssh.iter().any(|call| call[1..3] == ["-Y", "sign"]),
+        "{ssh:?}"
+    );
+    assert_eq!(std::fs::read_dir(&fx.uploaded).unwrap().count(), 0);
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.ends_with(
+            "terminus: terminus-linux-aarch64: no attestation from release.yml at v0.1.0, so it is not the binary CI built\n"
+        ),
+        "{stderr}"
+    );
 }
 
 /// A release that is already published is refused before anything is
@@ -561,10 +641,12 @@ fn a_published_release_is_refused(shell: Shell) {
 both_shells!(
     a_good_draft_is_signed_and_published,
     a_bad_tag_is_refused,
+    the_largest_u64_part_passes_the_tag_check,
     a_draft_missing_a_file_is_refused,
     a_binary_that_does_not_match_its_manifest_is_refused,
     a_manifest_naming_another_version_is_refused,
     a_signature_the_pinned_key_does_not_verify_is_refused,
+    a_binary_ci_did_not_attest_is_refused,
     a_published_release_is_refused,
 );
 

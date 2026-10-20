@@ -732,11 +732,16 @@ fn a_configured_budget_cuts_the_quoted_turns_and_keeps_the_date_branch_and_count
         ..LATE
     });
 
-    // 500 characters of brief, as before the frame, plus what the frame costs:
-    // without that, the frame leaves the quoted turns no room at all and the
-    // backstop cuts the pointer instead.
+    // The frame, the body's fixed text and 200 characters for the two quoted
+    // turns. The fixed text is measured off the uncut brief because the head
+    // line and the pointer name the project path, which sits under the temp
+    // directory. 200 gives each turn a cut that ends in the mark, and is well
+    // short of the two windowed quotations whole.
     let uncut = bench.brief("project-alpha").expect("a brief");
-    let budget = 500 + frame_cost(&uncut);
+    let quotations = quoted_after(&uncut, "It last asked: ").chars().count()
+        + quoted_after(&uncut, "It last answered: ").chars().count();
+    let fixed = between_tags(&uncut).chars().count() - 2 - quotations;
+    let budget = frame_cost(&uncut) + fixed + 200;
     let brief = bench
         .brief_with("project-alpha", &bench.config(budget))
         .expect("a brief");
@@ -869,6 +874,74 @@ fn every_brief_budget_gives_nothing_or_a_framed_brief_that_fits() {
     }
     assert!(silent > 0, "no budget was too small for the frame");
     assert!(spoke > 0, "no budget was large enough to render");
+}
+
+/// The text after `label` on the line between the tags that starts with it.
+fn quoted_after<'a>(brief: &'a str, label: &str) -> &'a str {
+    between_tags(brief)
+        .lines()
+        .find_map(|line| line.strip_prefix(label))
+        .unwrap_or_else(|| panic!("no {label:?} line between the tags:\n{brief}"))
+}
+
+/// #46: a long project path and a small budget leave the quoted turns no room,
+/// and the brief has to say it cut them rather than drop them without a word.
+///
+/// The project is never created, so its key is the long path itself, as in
+/// `no_brief_exceeds_the_ceiling_whatever_the_config_says`. The budget that
+/// leaves the quotations no room is measured off the rendered uncut brief, so it
+/// follows whatever the temp path makes the project label.
+#[test]
+fn a_budget_that_leaves_a_quoted_turn_no_room_marks_it_and_does_not_record_it() {
+    let bench = bench();
+    let long = format!("project-with-a-long-name-{}", "0123456789".repeat(13));
+    bench.archive(&Session {
+        file: "long.jsonl",
+        project: &long,
+        ..LATE
+    });
+
+    let uncut = bench.brief(&long).expect("a brief");
+    let ellipsis = terminus_core::recall::excerpt::ELISION;
+    assert!(
+        !uncut.contains(ellipsis),
+        "the premise: the uncut brief holds no mark, or the sweep proves nothing: {uncut}"
+    );
+    let length = uncut.chars().count();
+    let quotations = quoted_after(&uncut, "It last asked: ").chars().count()
+        + quoted_after(&uncut, "It last answered: ").chars().count();
+    let budget = length - quotations;
+
+    let session = "46464646-0000-4000-8000-000000000046";
+    let brief = bench
+        .brief_as(session, &long, &bench.config(budget))
+        .expect("a brief");
+    assert_eq!(
+        asked_line(&brief),
+        format!("It last asked: {ellipsis}"),
+        "{brief}"
+    );
+    assert_eq!(
+        quoted_after(&brief, "It last answered: "),
+        ellipsis,
+        "{brief}"
+    );
+    let state = inject::state::State::load(&bench.data_dir, Some(session));
+    assert!(
+        state.brief.is_empty(),
+        "a turn shown only as the mark was recorded as briefed: {:?}",
+        state.brief
+    );
+
+    for budget in 0..=length {
+        let session = format!("46464646-1111-4000-8000-{budget:012}");
+        if let Some(brief) = bench.brief_as(&session, &long, &bench.config(budget)) {
+            assert!(
+                brief == uncut || brief.contains(ellipsis),
+                "budget {budget} cut the brief without saying so: {brief}"
+            );
+        }
+    }
 }
 
 /// AC3 for the brief: a closing tag planted in any archived string it carries
@@ -1054,4 +1127,100 @@ fn the_knob_leaves_an_ordinary_brief_exactly_as_it_was() {
         bench.brief_with("project-alpha", &bench.redacting(true)),
         bench.brief_with("project-alpha", &bench.redacting(false)),
     );
+}
+
+/// The earlier session of `project-zeta`, run from the repository itself.
+const REPO: Session<'static> = Session {
+    file: "zeta-repo.jsonl",
+    id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    project: "project-zeta",
+    branch: Some("branch-of-the-repo-one"),
+    day: "2026-08-10",
+    prompt: "the repo prompt, about gaskets",
+    reply: "the repo reply, about gaskets",
+};
+
+/// The later session of `project-zeta`, run from one of its worktrees. Ingest
+/// folds it into the repository's `project` and keeps the worktree path as its
+/// `project_pre_worktree`.
+const FORKED: Session<'static> = Session {
+    file: "zeta-forked.jsonl",
+    id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    project: "project-zeta/.claude/worktrees/wt-a",
+    branch: Some("branch-of-the-worktree-one"),
+    day: "2026-08-14",
+    prompt: "the worktree prompt, about flanges",
+    reply: "the worktree reply, about flanges",
+};
+
+/// A session excluded under its worktree key is neither the one the brief
+/// quotes nor one it counts.
+///
+/// `scope::resolve` refuses only a scope whose own project is excluded, so a
+/// worktree session folded into a visible repository is still in the brief's
+/// scope, and only the `project_pre_worktree` clause keeps it out of the last
+/// session and out of both counts. Every other exclusion test reads search or
+/// the session listing, never the brief.
+#[test]
+fn a_session_excluded_under_its_worktree_key_is_neither_quoted_nor_counted() {
+    let bench = bench();
+    bench.archive(&REPO);
+    bench.archive(&FORKED);
+
+    let repo = bench.project(REPO.project).to_string_lossy().into_owned();
+    let worktree = bench.project(FORKED.project).to_string_lossy().into_owned();
+
+    // The premise: ingest folded the worktree session into the repository.
+    let conn = rusqlite::Connection::open(bench.data_dir.join(terminus_core::store::DB_FILE_NAME))
+        .unwrap();
+    let (project, pre): (Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT project, project_pre_worktree FROM session_meta WHERE session_id = ?1",
+            [FORKED.id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        project.as_deref(),
+        Some(repo.as_str()),
+        "it folded to the repo"
+    );
+    assert_eq!(pre.as_deref(), Some(worktree.as_str()));
+
+    // The control: with nothing excluded the later, worktree session is the
+    // one quoted, and both sessions are counted.
+    let open = bench.brief(REPO.project).expect("a brief");
+    for present in [
+        FORKED.day,
+        FORKED.branch.unwrap(),
+        FORKED.prompt,
+        FORKED.reply,
+        "2 sessions and 4 turns",
+    ] {
+        assert!(
+            open.contains(present),
+            "the brief omits {present:?}: {open}"
+        );
+    }
+
+    let config = Config::from_parts(Vec::new(), vec![worktree]);
+    let brief = bench.brief_with(REPO.project, &config).expect("a brief");
+    for present in [
+        REPO.day,
+        REPO.branch.unwrap(),
+        REPO.prompt,
+        REPO.reply,
+        "1 session and 2 turns",
+    ] {
+        assert!(
+            brief.contains(present),
+            "the brief omits {present:?}: {brief}"
+        );
+    }
+    for absent in [FORKED.day, FORKED.branch.unwrap(), "flanges"] {
+        assert!(
+            !brief.contains(absent),
+            "the brief carries the excluded session's {absent:?}: {brief}"
+        );
+    }
 }

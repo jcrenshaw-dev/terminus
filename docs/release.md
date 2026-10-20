@@ -10,6 +10,10 @@ A Terminus release is built in CI, signed on the owner's machine with a key CI n
 
 The one network use in installing or updating Terminus is `install.sh`'s `curl` downloads.
 
+## Version numbers
+
+From 1.0.0 on, each release bumps the middle number of the version, a release with only fixes bumps the last, and the first moves only for a large change. The number does not promise compatibility. The [changelog](../CHANGELOG.md) says what each release changes.
+
 ## How a release is built
 
 From [`.github/workflows/release.yml`](../.github/workflows/release.yml):
@@ -23,21 +27,24 @@ From [`.github/workflows/release.yml`](../.github/workflows/release.yml):
    sha256 <64 lowercase hex digits>
    ```
 
-4. The draft job runs only when all four builds pass. It checks that it holds exactly the four binaries and four manifests, and creates the release as a draft, never as a prerelease and never published.
+4. Each build job attests its binary with [`actions/attest`](https://github.com/actions/attest), a signed statement that `release.yml` built it from the tag on a GitHub-hosted runner.
+5. The draft job runs only when all four builds pass. It checks that it holds exactly the four binaries and four manifests, and creates the release as a draft, never as a prerelease and never published.
 
-The workflow's permissions are `contents: read`. The draft job alone has `contents: write`, and it uses only the workflow's own token. No workflow names a signing key, so CI can build a draft but cannot sign one.
+The workflow's permissions are `contents: read`. The build jobs add `id-token: write` and `attestations: write`, which they use only to attest their binaries. The draft job alone has `contents: write`, and it uses only the workflow's own token. No workflow names a signing key, so CI can build and attest a draft but cannot sign one.
 
 ## How a release is signed
 
 The owner runs [`scripts/sign-release.sh`](../scripts/sign-release.sh) on his own machine as `sh scripts/sign-release.sh v<X.Y.Z>`. In order, it:
 
-1. Reads the public key from `install.sh`'s one `release_key=` line, and keeps no copy of its own.
-2. Refuses a release that is not a draft, because signing a published release would replace signatures users already check against.
-3. Downloads the draft and refuses it unless all four binaries and all four manifests are there.
-4. Checks every binary's SHA-256 against its manifest, and that every manifest is exactly the two lines above, before it signs anything.
-5. Signs each manifest with the `crenshawdev-release` key under the namespace `terminus-release`, writing `terminus-<os>-<arch>.manifest.sig`.
-6. Verifies each signature with the same `ssh-keygen -Y verify` command `install.sh` runs.
-7. Only when all four pass, uploads the four `.sig` files and publishes the release as the latest. A failed upload or publish leaves the release a draft.
+1. Refuses a tag that does not start with `v`.
+2. Reads the public key from `install.sh`'s one `release_key=` line, and keeps no copy of its own.
+3. Reads `install.sh`'s `valid_version` function, keeps no copy of it either, and refuses a tag whose version it rejects, so the signer refuses exactly the versions the installer refuses.
+4. Refuses a release that is not a draft, because signing a published release would replace signatures users already check against.
+5. Downloads the draft and refuses it unless all four binaries and all four manifests are there.
+6. Checks every binary's SHA-256 against its manifest, and that every manifest is exactly the two lines above with the tag's version on the first, before it signs anything. A manifest whose version differs from the tag is refused.
+7. Checks every binary with `gh attestation verify`, before it signs anything, requiring an attestation from `.github/workflows/release.yml` in this repository, for the tag being signed, made on a GitHub-hosted runner. A binary CI did not build has none and is refused, even when its manifest matches it.
+8. Signs and verifies one manifest at a time. It signs the manifest with the `crenshawdev-release` key under the namespace `terminus-release`, writing `terminus-<os>-<arch>.manifest.sig`, and verifies that signature with the same `ssh-keygen -Y verify` command `install.sh` runs before it signs the next.
+9. Only when all four pass, uploads the four `.sig` files and publishes the release as the latest. A failed upload or publish leaves the release a draft.
 
 ## What install.sh checks
 
@@ -45,7 +52,7 @@ The owner runs [`scripts/sign-release.sh`](../scripts/sign-release.sh) on his ow
 
 1. **The source.** With no argument it downloads from `https://github.com/jcrenshaw-dev/terminus/releases/latest/download`. One argument names another source, and it must start with `https://`. More than one argument is refused.
 2. **`TERMINUS_BIN_DIR`.** Refused when it is set, because `terminus install` would point the hooks and the MCP entry into that folder while the script links `~/.local/bin/terminus`.
-3. **`HOME`.** Refused when it is unset or empty, relative, not valid UTF-8, contains `..`, or when the shell changes its bytes on copying it, which dash does when started without a UTF-8 locale.
+3. **`HOME`.** Refused when it is unset or empty, relative, not valid UTF-8, has a path part that is exactly `..`, or when the shell changes its bytes on copying it, which dash does when started without a UTF-8 locale.
 4. **What sits at `~/.local/bin/terminus`.** Refused when it is a folder or a link to one, a file that is not a Terminus build, a link to nothing that does not point into `~/.local/lib/crenshawdev/terminus/versions/`, or anything other than a file or a link. Nothing there, a Terminus build, or a link to `~/.local/lib/crenshawdev/terminus/versions/<version>/terminus` is fine.
 5. **The OS and architecture.** Linux or macOS, on x86_64 or aarch64 (`arm64` counts as aarch64). Anything else is refused.
 6. **`ssh-keygen`.** Refused when it is not on `PATH`. The message names the package: `openssh-client` on Debian and Ubuntu, `openssh-clients` on Fedora, `openssh` on Arch.
@@ -70,16 +77,18 @@ Identity `crenshawdev-release`, namespace `terminus-release`, fingerprint `SHA25
 ## What the signature protects
 
 - Each manifest, signed by `crenshawdev-release` under `terminus-release`, and through the manifest's SHA-256 the binary it names.
-- CI holds no signing key. The build jobs have `contents: read` and the draft job uses only the workflow's own token, so nothing CI produces carries a signature.
+- CI holds no signing key. The draft job uses only the workflow's own token, so nothing CI produces carries a signature.
 - Only a draft is signed, so the signatures on a published release are never replaced.
 - The signer checks each binary against its manifest before signing, so a draft whose binary and manifest disagree is never signed.
+- The signer checks each binary's attestation before signing, so a binary and manifest swapped into the draft after CI built it are never signed, even by someone holding a token that can write to the repository.
 
 ## What the signature does not protect
 
 - `install.sh` itself. It is fetched unsigned over HTTPS from `main`.
 - An older, validly signed release served from a source you pass. It installs, because there is no version floor.
 - Key loss or rotation. There is no revocation, and a new key means a new `install.sh`.
-- Proof that the binary was built from the tagged source. The signature says the owner signed the manifest, not what CI compiled.
+- Proof at install time that the binary was built from the tagged source. The signer checks the attestation before signing, and `install.sh` checks only the signature.
+- A change to `release.yml` or the source, pushed and tagged by someone with write access to the repository. CI builds and attests that code like any other, so the attestation says where a binary was built, not who wrote what it was built from.
 
 ## Checking a release by hand
 

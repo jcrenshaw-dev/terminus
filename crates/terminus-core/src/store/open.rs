@@ -15,46 +15,19 @@ use crate::error::{Error, Result};
 /// than rebuilt: a rebuild would read the old bytes as the new format and fail
 /// every session.
 ///
-/// 2 as of v0.0.1 phase 7: a session is numbered block rows in `blocks`, each
-/// with its compressed bytes and a BLAKE3 hash of its uncompressed bytes, and
-/// `session_meta` holds the block size and a checksum over those hashes. Format
-/// 1 kept the whole session as one blob in a `sessions.blob` column.
+/// Format 2 is numbered block rows in `blocks`, each with its compressed
+/// bytes and a BLAKE3 hash of its uncompressed bytes, and `session_meta` holds
+/// the block size and a checksum over those hashes.
 pub const ARCHIVE_FORMAT: i64 = 2;
 
 /// The derived-table schema this build writes.
 ///
 /// Bumped whenever anything rebuildable from the archive changes shape: `turns`,
-/// `compactions`, `turns_fts`, `entities`, `paths`. Two integers
-/// rather than one, because one cannot tell "derived tables need a rebuild"
-/// from "the archive itself changed" (D-09).
-///
-/// 2 as of phase 2: `compaction_boundaries` joined the derived set (D-21), so
-/// the first ingest run against a store written by a phase 1 binary rebuilds
-/// every archived session from its blob, inside the ingest lock, before it
-/// walks anything.
-///
-/// 3 as of phase 3 (D-17): `turns_fts.body` changed shape. It held the raw
-/// transcript line and now holds a per-record-type text projection plus RCL-01's
-/// expansion tokens, and `entities` and `paths` are filled for the first time.
-/// Without the bump a store written by a phase 2 binary would keep an index that
-/// matches JSON keys and holds no entity at all, and no integer would say so.
-///
-/// 4 as of v0.1.1 phase 1 (D-03): `turns` gained `is_typed`, the per-turn
-/// discriminator INJ-07's resume brief reads. The bump is what makes
-/// [`crate::reindex::reindex`] the archive-only backfill that fills the column on
-/// a store an earlier build wrote - the bring-forward `ALTER` adds it empty, and
-/// nothing else would ever populate a turn already archived. Note the naming
-/// collision: `crate::ingest::backfill` is the parallel transcript-reading pass
-/// and is NOT this mechanism; it reads the files on disk, and this reads only
-/// the archive.
-///
-/// 5 after 0.1.1 (D-20, D-22): the boundary rows moved from
-/// `compaction_boundaries`, keyed by the boundary's turn, to `compactions`, keyed
-/// by `(session_key, stream_offset)`, so a boundary with no `uuid` or
-/// `timestamp`, which is not a turn, still gets a row. The first ingest after the
-/// upgrade rebuilds every session's derived tables, and
-/// [`crate::reindex::reindex`] carries an evicted session's old boundary rows
-/// across before it drops the old table.
+/// `compactions`, `turns_fts`, `entities`, `paths`. A separate integer from
+/// [`ARCHIVE_FORMAT`], because one cannot tell "derived tables need a rebuild"
+/// from "the archive itself changed". A store with an older number has its
+/// derived tables rebuilt from the archive by
+/// [`crate::reindex::open_up_to_date`].
 pub const DERIVED_SCHEMA: i64 = 5;
 
 /// The store file inside the data directory.
@@ -69,6 +42,12 @@ pub const META_DERIVED_SCHEMA: &str = "derived_schema";
 /// is the `LOCK` file's job (D-15), not the busy handler's; this is only there
 /// so a short overlap with a reader is not an error.
 const BUSY_TIMEOUT_MS: u32 = 5_000;
+
+/// How many prepared statements the writable connection keeps. `derive_turn`
+/// and the archive reads go through `prepare_cached`, and a loop compiles each
+/// statement once only while all of its statements fit. Twice rusqlite's
+/// default of 16, so one ingest or `reindex` loop fits with room to spare.
+const STATEMENT_CACHE_CAPACITY: usize = 32;
 
 /// The store's derived schema differs from this build's and its derived tables
 /// need rebuilding.
@@ -168,6 +147,7 @@ impl Store {
 
         let conn = Connection::open(&path).map_err(Error::Sqlite)?;
         conn.busy_timeout(std::time::Duration::from_millis(BUSY_TIMEOUT_MS.into()))?;
+        conn.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
         conn.pragma_update(None, "journal_mode", "wal")?;
         conn.pragma_update(None, "synchronous", "normal")?;
 
@@ -190,14 +170,15 @@ impl Store {
             store.initialize()?;
         } else {
             // Every open of an existing store, and deliberately NOT gated on
-            // `rebuild_required`. `reindex::open_up_to_date` is the only caller
-            // that acts on that outcome, while `status`, `verify` and every
-            // phase 3 reader open through here alone - so gating the column
-            // bring-forward on it would leave a user who upgraded the binary
-            // and ran `status` before any ingest hitting `no such column` on a
-            // perfectly healthy store. Adding a missing column is safe on any
-            // opener; the destructive derived-table rebuild stays exactly where
-            // it is, outside this function and inside the ingest lock.
+            // `rebuild_required`. `reindex` and the recovery at the top of an
+            // ingest pass act on that outcome through `reindex::up_to_date`,
+            // while `compact`, `observations regenerate` and the snapshot taken
+            // after a pass open through here alone - so gating the column
+            // bring-forward on it would leave them naming columns an older
+            // store does not have. Adding a missing column is safe on any
+            // writable opener; the destructive derived-table rebuild stays
+            // exactly where it is, outside this function and inside the ingest
+            // lock.
             bring_forward(&store.conn)?;
             drop_summary_columns(&store.conn)?;
         }
@@ -226,8 +207,8 @@ impl Store {
     /// [`Store::missing_columns`] - the D-18 degraded read - rather than left to
     /// surface as a SQLite error from the middle of a search.
     ///
-    /// A missing data directory or database file is
-    /// [`Error::StoreNotFound`] and any other failure to open is
+    /// A missing data directory or database file, or a database with no
+    /// tables, is [`Error::StoreNotFound`] and any other failure to open is
     /// [`Error::StoreUnreadable`]: both are variants and neither is a panic,
     /// because RCL-10 renders them as an empty result with a reason and a
     /// caller must not have to match on message text to tell them apart.
@@ -265,13 +246,23 @@ impl Store {
         // whose shared-memory index cannot be created actually fails. Mapping it
         // here is what keeps that case an empty result with a reason rather than
         // a bare `unable to open database file` out of the query layer.
-        conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
-            r.get::<_, i64>(0)
-        })
-        .map_err(|source| Error::StoreUnreadable {
-            path: path.clone(),
-            detail: source.to_string(),
-        })?;
+        let tables = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'table'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .map_err(|source| Error::StoreUnreadable {
+                path: path.clone(),
+                detail: source.to_string(),
+            })?;
+        // `Store::open` stamps `journal_mode=wal` before `initialize` commits,
+        // so a non-empty file with no tables is a store another process is still
+        // creating: no store yet. Tables but no `meta` is somebody else's file,
+        // and `read_versions` says so (phase 2 D-03).
+        if tables == 0 {
+            return Err(Error::StoreNotFound { path });
+        }
 
         let rebuild = read_versions(&conn, &path)?;
         let missing = missing_columns(&conn)?;

@@ -9,7 +9,7 @@
 //! themselves.
 //!
 //! `#![cfg(feature = "testkit")]` gates the file, which is load-bearing and also
-//! a hazard `.planning/CAPTURE.md` records: `cargo test -p terminus-core`
+//! a hazard: `cargo test -p terminus-core`
 //! without the feature compiles this to an empty test binary and reports it
 //! green. The command is
 //! `cargo test -p terminus-core --features testkit --test backfill`, and the

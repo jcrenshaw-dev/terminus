@@ -1,7 +1,7 @@
 //! JSON-RPC 2.0, hand-written over `serde_json` (D-11).
 //!
-//! No SDK and no async runtime. `.planning/PROJECT.md` bars a runtime outright -
-//! cold start is the product and the hook path must not pay for one - and the
+//! No SDK and no async runtime. A runtime is barred outright - cold start is
+//! the product and the hook path must not pay for one - and the
 //! official SDK would link tokio into the same binary the hooks call. What is
 //! left is small: one message per line, one response line per request, the
 //! four standard error codes and one MCP code.
