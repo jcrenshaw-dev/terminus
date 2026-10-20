@@ -405,15 +405,15 @@ pub(crate) fn prepare(
     };
     let clear_divergence = existing.diverged;
 
-    // The FIRST scan, over the raw tail, and its only job is to say where this
-    // pass stops in the FILE. The watermark is a file offset - the tail read seeks
-    // by it and `open_at_least` refuses a file shorter than it - so it has to keep
-    // being measured against the file, whatever the capture mode does to the
-    // bytes afterwards. `consumed` is likewise file bytes, and is what
-    // `runs.bytes_read` and `status` report.
-    // Its turn numbers are never read, so it numbers from 0.
-    let file_scan = parse::scan_from(&tail, existing.watermark, 0);
-    let consumed = file_scan.consumed(existing.watermark);
+    // Where this pass stops in the FILE: just past the tail's last `\n`, never
+    // at end of file, which is the resume rule `parse`'s module comment states
+    // and its scan applies. A search and not a parse, because nothing else
+    // from the raw tail is used. The watermark is a file offset - the tail read
+    // seeks by it and `open_at_least` refuses a file shorter than it - so it
+    // has to keep being measured against the file, whatever the capture mode
+    // does to the bytes afterwards. `consumed` is likewise file bytes, and is
+    // what `runs.bytes_read` and `status` report.
+    let consumed = tail.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
     // No complete record past the watermark, which is where a rerun on an
     // unchanged file lands. Or there is one, and the file grew after
     // `Existing::read` found it no longer than the watermark, so nothing an
@@ -449,8 +449,8 @@ pub(crate) fn prepare(
         0
     };
 
-    // The SECOND scan, over the bytes actually being stored, and it is the one
-    // `apply` derives turns from - so `turns.stream_offset` and `byte_len`
+    // The one scan, over the bytes actually being stored, not the file's: `apply`
+    // derives turns from it, so `turns.stream_offset` and `byte_len`
     // address the stored stream, which is what `store::archive`, `recall::get`
     // and `reindex` read. Elision preserves the line framing and
     // every field a record is classified on, so this scan finds the same records
@@ -506,13 +506,12 @@ pub(crate) fn prepare(
 
     // Both numbers here are the FILE's, and deliberately: `bytes_read` is what
     // this pass read past the watermark, and `watermark` is where the next pass
-    // seeks to. Only `turns_added` comes off the stored scan, and the two scans
-    // agree about it by construction.
+    // seeks to. Only `turns_added` comes off the stored scan.
     let pass = Pass {
         session_key: session_key.clone(),
         bytes_read: consumed as u64,
         turns_added: scan.turn_count(),
-        watermark: file_scan.resume_offset,
+        watermark: existing.watermark + consumed as u64,
         block_rows_read: fetched.archive.rows_read,
     };
 
@@ -658,7 +657,7 @@ pub(crate) fn apply(
         // (STOR-04). `stored` starts at `stream_base`, so a record's stream
         // offset has to be rebased to index it - and the offset and the buffer
         // are in the SAME coordinate system, which is the whole reason the
-        // second scan exists.
+        // scan is of the stored bytes and not the file's.
         let from = (record.offset - stream_base) as usize;
         derive::derive_turn(
             &tx,
