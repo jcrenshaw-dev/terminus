@@ -1267,7 +1267,11 @@ pub mod visible {
         let mut out = Vec::new();
         for session in rows {
             let session = session?;
-            if !is_excluded(config, &session) {
+            if !is_excluded(
+                config,
+                session.project.as_deref(),
+                session.project_pre_worktree.as_deref(),
+            ) {
                 out.push(session);
             }
         }
@@ -1295,13 +1299,6 @@ pub mod visible {
         pub project_excluded: bool,
         /// The config excludes [`ProjectKeys::project_pre_worktree`].
         pub pre_worktree_excluded: bool,
-    }
-
-    impl ProjectKeys {
-        /// Is a session carrying these keys hidden from every read path?
-        pub fn excluded(&self) -> bool {
-            self.project_excluded || self.pre_worktree_excluded
-        }
     }
 
     /// Every distinct project key the archive carries, and which of them the
@@ -1364,9 +1361,10 @@ pub mod visible {
         Ok(counts)
     }
 
-    /// Is this session inside an excluded project, under either of its keys?
-    pub fn is_excluded(config: &Config, session: &Session) -> bool {
-        [&session.project, &session.project_pre_worktree]
+    /// Is a session with these two keys inside an excluded project, under
+    /// either of them?
+    pub fn is_excluded(config: &Config, project: Option<&str>, pre_worktree: Option<&str>) -> bool {
+        [project, pre_worktree]
             .into_iter()
             .flatten()
             .any(|key| config.excludes_path(std::path::Path::new(key)))
