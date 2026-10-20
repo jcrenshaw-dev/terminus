@@ -1,0 +1,59 @@
+{
+  "phase": "4",
+  "trigger": "plan",
+  "discriminator": "plan-e94b45e",
+  "round": 1,
+  "base": "e94b45e",
+  "head": "e94b45e",
+  "base_id": "e94b45ed4dcc1370330e59339c6a4130514f5bfa",
+  "head_id": "e94b45ed4dcc1370330e59339c6a4130514f5bfa",
+  "voices": [
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol"
+    }
+  ],
+  "citations": {
+    "checked": true
+  },
+  "entries": [
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol",
+      "file": ".planning/phases/4/PLAN-2.md",
+      "line": 55,
+      "severity": "high",
+      "claim": "The pass-start cache is reused for all of backfill even though backfill itself changes the rows it caches, and the plan's `taken`-map argument only establishes freshness for the walk.",
+      "failure_scenario": "Backfill starts with no cached row for a session key, archives one path for that key, and later encounters another path with the same key in a subsequent dispatch round. The cache still says the key is unarchived, so `read_existing` cannot see the newly written holder, metadata, or watermark and may process the second path as new instead of issuing the existing key-holder refusal. That can change which transcript is archived or indexed. The plan needs either a backfill-wide uniqueness guarantee enforced by a shared `taken` set, cache updates after apply, or a fresh row read at a boundary where prior rounds may have changed it.",
+      "ruling": "refuted",
+      "convergent": false,
+      "counter_evidence": {
+        "file": "crates/terminus-core/src/ingest/backfill.rs",
+        "line": 283,
+        "note": "`taken` is created once before the round loop (\"Across rounds, not per round\") and passed to every dispatch_round. claim (crates/terminus-core/src/ingest/mod.rs:192-210) checks `taken` before the store, so a second path with an already-archived key gets Claim::Same or Claim::Held(key_held) and never reaches read_existing or the cached row. Only keys no earlier round applied read the cache, and no apply has changed those rows. PLAN-2 Task 1 already states this per-run argument."
+      },
+      "citation_missing": true,
+      "base_id": "e94b45ed4dcc1370330e59339c6a4130514f5bfa",
+      "head_id": "e94b45ed4dcc1370330e59339c6a4130514f5bfa"
+    },
+    {
+      "voice": "openai",
+      "model": "gpt-5.6-sol",
+      "file": ".planning/phases/4/PLAN-2.md",
+      "line": 79,
+      "severity": "medium",
+      "claim": "The split snapshot protocol carries a stale due decision and timestamp beyond the ingest lock without rechecking or preventing concurrent snapshot finishers from writing timestamps out of order.",
+      "failure_scenario": "Pass A decides a snapshot is due with timestamp A and releases the lock. Before A finishes its snapshot, pass B acquires the ingest lock, also sees the old stamp, decides one is due with later timestamp B, then snapshots and writes B. A subsequently finishes and writes its older timestamp A, regressing `last_snapshot_at`; concurrent `take`/`prune` operations may also race over snapshot names and retention. The next pass can consequently take a snapshot earlier than configured, and one concurrent snapshot can be reduced to a note despite another pass already satisfying the interval. The plan needs an ordering/recheck mechanism for the post-lock snapshot stamp while preserving D-15's requirement not to hold the ingest lock through the copy.",
+      "ruling": "refuted",
+      "convergent": false,
+      "counter_evidence": {
+        "file": "crates/terminus-core/src/ingest/pass.rs",
+        "line": 147,
+        "note": "The race is not introduced by the plan. Today roll runs entirely after the lock drops (pass.rs:136-147, 165-244): it reads now and last_snapshot_at, takes the snapshot, then writes the stamp, all outside the ingest lock, so two concurrent passes can already both snapshot and write their stamps out of order. PLAN-2 Task 2 moves only the due decision under the lock and keeps the take and the stamp write after release, as CONTEXT D-15 locks; holding the lock through the copy was rejected there."
+      },
+      "citation_missing": true,
+      "base_id": "e94b45ed4dcc1370330e59339c6a4130514f5bfa",
+      "head_id": "e94b45ed4dcc1370330e59339c6a4130514f5bfa"
+    }
+  ]
+}
