@@ -7,7 +7,7 @@ Each release bumps the middle number of the version, a release with only fixes
 bumps the last, and the first moves only for a large change. The number does not
 promise compatibility; the entry for each release says what it changes.
 
-## [1.0.0] - Unreleased
+## [1.0.0] - 2026-10-20
 
 The first release of Terminus as a product. It keeps every Claude Code session
 you run and gives that history back to Claude and to you.
