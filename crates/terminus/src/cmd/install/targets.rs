@@ -70,10 +70,9 @@
 //!
 //! # A subprocess, never a shell (phase 3 D-03)
 //!
-//! v0.1.0's D-06 rule kept install off `claude mcp` with a contract of "no
-//! shell and no subprocess". That rule is gone. Phase 3 D-03 replaces it: no
-//! shell, and `claude` run as a subprocess by the absolute path found on
-//! `PATH`, so `.claude.json` is changed only by the program that owns it.
+//! Install runs no shell. It runs `claude` as a subprocess by the absolute
+//! path found on `PATH`, so `.claude.json` is changed only by the program
+//! that owns it.
 
 use std::path::{Path, PathBuf};
 

@@ -725,8 +725,8 @@ fn count_where(conn: &Connection, predicate: &str) -> i64 {
 /// list would fail with `no such column` on the rebuild itself and on every
 /// pass afterwards, permanently, since `open_up_to_date` runs at the top of
 /// each one. The `turns` entry in `BRING_FORWARD_COLUMNS` is the only thing
-/// standing between this store and that (v0.1.1 phase 1 D-08); delete it and
-/// this test fails with exactly that message.
+/// standing between this store and that; delete it and this test fails with
+/// exactly that message.
 #[test]
 fn a_previous_builds_store_gains_is_typed_and_is_filled_from_the_blobs() {
     let bench = bench();

@@ -4,7 +4,7 @@ The sentinel audit reads this file before every review of Terminus. Everything h
 
 Paths below are relative to the repo root. `core/` is `crates/terminus-core/src/` and `bin/` is `crates/terminus/src/`.
 
-Version or commit this describes: v0.1.1-298-g5933b3b (`5933b3b`)
+Version or commit this describes: `5933b3b`
 Last reviewed: 2026-10-20
 
 ## What this tool reads

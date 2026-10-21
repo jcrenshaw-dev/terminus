@@ -466,7 +466,7 @@ fn a_nested_mention_of_the_field_name_is_not_the_field() {
 }
 
 // ---------------------------------------------------------------------------
-// INJ-07 (v0.1.1 phase 1): did the PERSON type this `user` record?
+// INJ-07: did the PERSON type this `user` record?
 //
 // D-01/D-05/D-06 bind the rule to the record's own `message.content` blocks -
 // never the top-level `toolUseResult`, whose shape is a dict on 6,265 records,

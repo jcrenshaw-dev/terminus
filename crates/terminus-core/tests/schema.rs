@@ -512,7 +512,7 @@ fn a_brought_forward_session_meta_has_the_same_column_order_as_a_fresh_one() {
     );
 
     // And for `turns`, the third: the only DERIVED table with a bring-forward
-    // list (v0.1.1 phase 1 D-08), where the layout claim matters twice over -
+    // list, where the layout claim matters twice over -
     // the preserving rebuild path never recreates the table, so a brought-forward
     // `turns` is the only `turns` such a store will ever have.
     let brought_turns = column_layout(brought.conn(), "turns");

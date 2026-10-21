@@ -48,7 +48,7 @@ pub const FIXTURE_ROOT_TOKEN: &str = "{{ROOT}}";
 /// something to be both true and false about.
 ///
 /// `project-gamma` has exactly one member and that is deliberate.
-/// `session-envelope.jsonl` is the phase 1 v0.1.1 one: its last `user` record is
+/// `session-envelope.jsonl` is that member: its last `user` record is
 /// a harness envelope rather than a typed prompt, so the brief's quoted turn
 /// moves under INJ-07's rule and a test at the process boundary can watch it
 /// move. Every project-scoped assertion in the repository is written against
@@ -56,7 +56,7 @@ pub const FIXTURE_ROOT_TOKEN: &str = "{{ROOT}}";
 /// inert for all of them.
 ///
 /// `project-delta` has exactly one member for that same reason.
-/// `session-secrets.jsonl` is the v0.1.1 phase 2 one: its turns carry the seven
+/// `session-secrets.jsonl` is that member: its turns carry the seven
 /// credential shapes the egress filter is asked to catch, so a test can run
 /// them through recall with `redact_recall` on and check each one is gone. Its
 /// vocabulary shares none of the corpus's counted tokens, so no existing

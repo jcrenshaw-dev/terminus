@@ -409,7 +409,7 @@ fn hook_budget(data_dir: &Path) {
     // same 100 runs measure `SessionStart` p50 10.38 ms, p99 10.85 ms. That
     // overage is not INJ-07's extra `AND`: with the `AND` reverted the debug
     // p50 is 10.24 ms, inside the noise, and consistent with D-11's 0.002 ms /
-    // 0.362 ms measurement of that lookup. It is v0.1.0's INJ-01 index pointer
+    // 0.362 ms measurement of that lookup. It is the INJ-01 index pointer
     // in `crates/terminus-core/src/inject/brief.rs`, whose
     // `SELECT count(*) FROM turns JOIN session_meta` scales with the scoped
     // project: ~3.2 ms of the 10.4 is the fixed store open plus scope

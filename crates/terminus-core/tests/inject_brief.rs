@@ -466,9 +466,9 @@ const ANSWER: &str = "the reply, about sprockets";
 /// The `user` record Claude Code writes when a tool returns: a `tool_result`
 /// block in `message.content`, and the result again at the top level.
 ///
-/// Both halves, because the classifier reads only the first (v0.1.1 phase 1
-/// D-01) and a record carrying only the top-level key would let a rule that
-/// read the wrong one pass.
+/// Both halves, because the classifier reads only the first, and a record
+/// carrying only the top-level key would let a rule that read the wrong one
+/// pass.
 fn tool_result_record(text: &str) -> serde_json::Value {
     serde_json::json!({
         "type": "user",
