@@ -19,8 +19,8 @@ by hand without re-deriving the others will fail
 | `session-compacted.jsonl` | D-21/D-08: a session ending in a `compact_boundary` record whose `compactMetadata` bytes are stored verbatim |
 | `session-recall.jsonl` | Phase 3 D-01/D-13: a `SearchManager` turn, an `src/worker/S.ts` turn, and AC3's structured-versus-prose pair - a `Read` `tool_use` naming a file against an assistant turn naming that same file in prose |
 | `session-edits.jsonl` | Phase 5 D-05: an `Edit` `tool_use` storing an **absolute** path beneath the fixture root, the spelling the real corpus almost always uses, with symbols beside it so one turn carries two independent entities - and a prose turn naming the same file structurally invisibly |
-| `session-envelope.jsonl` | v0.1.1 phase 1 D-02/D-13/D-15: a session whose **last** `user` record is a `<task-notification>` envelope and whose second-to-last is a `tool_result`, so the turn the resume brief quotes moves under INJ-07's rule |
-| `session-secrets.jsonl` | v0.1.1 phase 2 D-15: one turn for each of the seven credential shapes the egress filter must catch on the remote provider path - an `Authorization: Bearer` header, a JSON `"password"` pair, a space-separated `--token` flag, a mid-line `Cookie` with prose after it, a bare JWT, a GitHub token and a connection URL carrying userinfo |
+| `session-envelope.jsonl` | A session whose **last** `user` record is a `<task-notification>` envelope and whose second-to-last is a `tool_result`, so the turn the resume brief quotes moves under INJ-07's rule |
+| `session-secrets.jsonl` | One turn for each of the seven credential shapes the egress filter must catch on the remote provider path - an `Authorization: Bearer` header, a JSON `"password"` pair, a space-separated `--token` flag, a mid-line `Cookie` with prose after it, a bare JWT, a GitHub token and a connection URL carrying userinfo |
 | `session-redaction.jsonl` | hardin phase 2 D-13: one turn per shape the redaction phase adds - a PEM private key, a bare `sk-` key in prose, a secret-named key in a `tool_use` input, in a `toolUseResult` and in an attachment - and one `tool_use` turn holding `café=1`, `Größe=10` and `“token=abc”` |
 | `session-errors-a.jsonl` | Phase 3 D-03/D-04: `tool_result` blocks with `is_error` and a `toolUseResult` carrying `stdout`/`stderr`/`interrupted`, holding the a-half of both stderr pairs |
 | `session-errors-b.jsonl` | Phase 3 D-04, the b-half: one stderr differing from a's only in the parts normalization strips, one differing only in a bare integer it must not |
@@ -237,7 +237,7 @@ The `Edit` turn opens with a short prose block naming `lanternFlicker`, ahead of
 the `tool_use`, so the excerpt window reaches the asserted text whatever the
 length of the temp directory's path. Moving it behind the path brings back #46.
 
-**`session-secrets.jsonl`** is the v0.1.1 phase 2 egress fixture: ten turns
+**`session-secrets.jsonl`** is the egress fixture: ten turns
 that exist to be *sent*, not to be found. Each of the seven shapes the widened
 egress rule set is asked to catch sits in a turn of its own, so a wire test can
 assert on one sentinel at a time and attribute the catch to one rule.
@@ -320,7 +320,7 @@ paths the entity tests match on. It is last in `TRANSCRIPT_FIXTURES`, because
 session numbers follow ingest order and turn ids are built from them; anywhere
 earlier would move the turn ids the recall golden pins.
 
-**`session-envelope.jsonl`** is the v0.1.1 phase 1 brief fixture: five records
+**`session-envelope.jsonl`** is the brief fixture: five records
 whose last `user` record is not one a person typed. In order - a `user` text
 turn (`wire up the quince exporter and tell me what it prints`, the prompt the
 brief must end up quoting), an `assistant` turn carrying a `Glob` `tool_use`, a

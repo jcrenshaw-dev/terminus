@@ -165,8 +165,8 @@ fn nothing_in_the_ingest_path_names_the_egress_filter() {
 // file-level gate makes `cargo test --test egress` compile an empty binary and
 // report green, which would retire the ingest-path scan above silently.
 
-/// The transcript with one turn per credential shape the v0.1.1 rule set
-/// catches.
+/// The transcript with one turn for each of seven credential shapes the
+/// rule set catches.
 #[cfg(feature = "testkit")]
 const FIXTURE: &str = "session-secrets.jsonl";
 

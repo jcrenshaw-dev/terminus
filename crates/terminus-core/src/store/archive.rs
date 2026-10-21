@@ -3,9 +3,8 @@
 //! Every product read of the archive goes through here, so the readers never
 //! name how a session is stored. A session is numbered rows in `blocks`, one
 //! per block of its stream, cut at the block size `session_meta` records for
-//! it. Ranges and offsets are in the uncompressed session stream (v0.1.0 phase
-//! 1 D-04), and nothing here checks a hash (phase 7 D-15): `verify` and append
-//! are the checkers.
+//! it. Ranges and offsets are in the uncompressed session stream, and nothing
+//! here checks a hash (phase 7 D-15): `verify` and append are the checkers.
 
 use std::collections::BTreeMap;
 use std::ops::Range;

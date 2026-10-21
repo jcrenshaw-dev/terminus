@@ -599,7 +599,7 @@ fn last_exchange(
 /// comparison, so a null passes: an `assistant` row carries null by
 /// construction (`parse::record` classifies `user` records and nothing else),
 /// and a preserved evicted session's rows keep null because `reindex` skips
-/// them (v0.1.1 phase 1 D-04). For an evicted session the choice is
+/// them. For an evicted session the choice is
 /// unobservable anyway - `retention::apply` deletes its block rows, so
 /// [`last_exchange`] reads no bytes and renders no quote either way.
 ///

@@ -1,11 +1,12 @@
 name: test
 
-# The whole suite on every push and pull request, on the four runners the
-# release builds on. It reads no secret, so corpus.rs skips the private corpus
-# here as it does on any machine without it.
+# The whole suite on every pull request and every push to main, on the four
+# runners the release builds on. It reads no secret, so corpus.rs skips the
+# private corpus here as it does on any machine without it.
 on:
-  push:
   pull_request:
+  push:
+    branches: [main]
 
 permissions:
   contents: read
