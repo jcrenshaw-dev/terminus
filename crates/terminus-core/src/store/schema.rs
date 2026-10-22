@@ -138,11 +138,6 @@ CREATE TABLE IF NOT EXISTS session_meta (
     -- full - an append never rewrites a completed block, so bytes written under
     -- an earlier mode are never revisited and a store whose mode changes
     -- mid-life holds a mix inside one session.
-    --
-    -- Declared last, and appended last in `BRING_FORWARD_COLUMNS`, which is that
-    -- constant's own rule: `ALTER TABLE ADD COLUMN` appends, so a column placed
-    -- mid-table would give a fresh store and an upgraded store different column
-    -- orders.
     capture_mode      TEXT
 );
 
@@ -213,11 +208,6 @@ CREATE TABLE IF NOT EXISTS decisions (
     compacted    INTEGER,
     -- The turn ids the compaction dropped, one JSON document like the other
     -- list-shaped columns. Null for the same earlier decisions.
-    --
-    -- Both declared last, and appended last in `BRING_FORWARD_COLUMNS`, which
-    -- is that constant's own rule: `ALTER TABLE ADD COLUMN` appends, so a
-    -- column placed mid-table would give a fresh store and an upgraded store
-    -- different column orders.
     dropped      TEXT
 );
 
@@ -295,11 +285,6 @@ CREATE TABLE IF NOT EXISTS turns (
     -- claim is asserted as a count query returning zero instead. The `capture_mode`
     -- column above is the same shape - a nullable added column whose null has a
     -- documented meaning.
-    --
-    -- Declared last, and appended last in `BRING_FORWARD_COLUMNS`, which is that
-    -- constant's own rule: `ALTER TABLE ADD COLUMN` appends, so a column placed
-    -- mid-table would give a fresh store and an upgraded store different column
-    -- orders.
     is_typed      INTEGER,
     UNIQUE (session_key, turn_seq)
 );
@@ -369,8 +354,7 @@ CREATE TABLE IF NOT EXISTS watermarks (
 --
 -- `error` holds what went wrong and `notes` what a healthy pass did worth
 -- saying (labels written, sessions retention evicted), so a reader that flags
--- a non-null `error` flags only failures. `notes` is declared last, and
--- appended last in `BRING_FORWARD_COLUMNS`, for the column-order rule there.
+-- a non-null `error` flags only failures.
 CREATE TABLE IF NOT EXISTS runs (
     id           INTEGER PRIMARY KEY,
     started_at   TEXT    NOT NULL,
@@ -433,59 +417,28 @@ pub const TABLES: &[&str] = &[
 pub const DERIVED_TABLES: &[&str] = &["turns", "compactions", "turns_fts", "entities", "paths"];
 
 /// Columns added to an existing table after that table first shipped, with the
-/// type clause that adds each one back.
+/// type clause that adds each one.
 ///
 /// Every statement in [`CREATE_SQL`] is `IF NOT EXISTS`, so re-running it over
-/// a store that already has `session_meta` and `runs` creates a new *table* and
-/// adds no *column* to either. This list is the other half: `Store::open`
-/// compares it against `PRAGMA table_info` and issues
-/// `ALTER TABLE ... ADD COLUMN` for whatever is missing, which is why a writable
-/// command in a binary carrying a newer schema can run against a store written
-/// by an older one without hitting `no such column`. A read-only open, which
+/// a store that already has a table adds no *column* to it. This list is the
+/// other half: `Store::open` compares it against `PRAGMA table_info` and issues
+/// `ALTER TABLE ... ADD COLUMN` for whatever is missing. A read-only open, which
 /// `status` and every other read command use, adds nothing: it measures the
 /// same list and reports what is absent through `Store::missing_columns`.
 ///
-/// Order matters: `ALTER TABLE ADD COLUMN` appends, so these must be listed in
-/// the same order [`CREATE_SQL`] declares them and must be declared at the END
-/// of their table there. A fresh store and an upgraded store then carry
-/// identical column order. Adding a column in a later phase means appending it
-/// in both places, never inserting it.
+/// Empty until a column is added to a table a store already has.
+///
+/// Order matters: `ALTER TABLE ADD COLUMN` appends, so a column listed here
+/// must be declared at the END of its table in [`CREATE_SQL`], in the same
+/// order it is listed. A fresh store and an upgraded store then carry identical
+/// column order. Adding a column means appending it in both places, never
+/// inserting it.
 ///
 /// Only additive changes belong here. Adding a column is safe on any opener;
 /// dropping, renaming or rewriting one is not, and the archive tables
 /// (`sessions`, `session_meta`) never migrate beyond an added column
 /// (`DESIGN-BRIEF.md:94`).
-pub const BRING_FORWARD_COLUMNS: &[(&str, &[(&str, &str)])] = &[
-    (
-        "session_meta",
-        &[
-            ("agent_meta", "BLOB"),
-            ("transcript_diverged", "INTEGER"),
-            ("project_pre_worktree", "TEXT"),
-            ("capture_mode", "TEXT"),
-        ],
-    ),
-    (
-        "runs",
-        &[
-            ("files_committed", "INTEGER NOT NULL DEFAULT 0"),
-            ("files_failed", "INTEGER NOT NULL DEFAULT 0"),
-            ("notes", "TEXT"),
-        ],
-    ),
-    // `turns` is a DERIVED table, and it is here anyway (phase 1 D-08). The
-    // preserving rebuild path - a store holding an evicted session - skips the
-    // DROP loop and runs only `CREATE TABLE IF NOT EXISTS`, a no-op on a table
-    // that already exists, so nothing there would ever create the column;
-    // `derive::derive_turn` names it in an explicit INSERT list and would then
-    // fail with `no such column` on every future pass, permanently, because
-    // `reindex::open_up_to_date` runs at the top of each one.
-    ("turns", &[("is_typed", "INTEGER")]),
-    (
-        "decisions",
-        &[("compacted", "INTEGER"), ("dropped", "TEXT")],
-    ),
-];
+pub const BRING_FORWARD_COLUMNS: &[(&str, &[(&str, &str)])] = &[];
 
 /// The session-summary columns `observations` carried while Terminus called a
 /// model, which `Store::open` drops from any store that still has them.

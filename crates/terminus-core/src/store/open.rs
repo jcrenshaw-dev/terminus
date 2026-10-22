@@ -199,13 +199,13 @@ impl Store {
     /// predates this build instead of silently querying an old-shape index
     /// (D-18).
     ///
-    /// Dropping `bring_forward` means the columns it adds are not guaranteed to
-    /// be there: `session_meta.project_pre_worktree`, `agent_meta` and
-    /// `transcript_diverged` all arrived after phase 1, and a read query naming
-    /// one of them fails with `no such column` on a connection that cannot
-    /// `ALTER`. So their absence is measured here, once, and reported through
-    /// [`Store::missing_columns`] - the D-18 degraded read - rather than left to
-    /// surface as a SQLite error from the middle of a search.
+    /// Skipping `bring_forward` means a table or column this build declares is
+    /// not guaranteed to be there, and a read query naming one fails with
+    /// `no such table` or `no such column` on a connection that cannot `CREATE`
+    /// or `ALTER`. So their absence is measured here, once, and reported through
+    /// [`Store::missing_tables`] and [`Store::missing_columns`] - the D-18
+    /// degraded read - rather than left to surface as a SQLite error from the
+    /// middle of a search.
     ///
     /// A missing data directory or database file, or a database with no
     /// tables, is [`Error::StoreNotFound`] and any other failure to open is
@@ -501,10 +501,15 @@ fn narrow(path: &Path, mode: u32, wanted: fn(&std::fs::FileType) -> bool) {
 /// still touches no byte of it.
 ///
 /// When something is missing, the list is read again inside an IMMEDIATE
-/// transaction before anything is altered, as [`drop_summary_columns`] does.
-/// Two processes opening one older store at once would otherwise both see the
-/// same column missing, and the second `ALTER TABLE ADD COLUMN` would fail on a
-/// column the first had just added.
+/// transaction before anything is written, as [`drop_summary_columns`] does.
+/// Two processes opening a store that lacks a table would otherwise both see it
+/// missing under a deferred transaction's read lock, and once the first had
+/// created it, the second's read lock could not become the write lock its own
+/// `CREATE` needs: SQLite fails that upgrade at once with "database is locked"
+/// instead of calling the busy handler. Taking the write lock first means the
+/// second open waits, reads the list again and finds nothing left to add. A
+/// column listed in [`crate::store::schema::BRING_FORWARD_COLUMNS`] is covered
+/// the same way.
 fn bring_forward(conn: &Connection) -> Result<()> {
     let (missing_tables, missing_columns) = missing(conn)?;
     if missing_tables.is_empty() && missing_columns.is_empty() {
