@@ -1,8 +1,10 @@
 //! Terminus's own config: the roots it walks and the projects it never opens.
 //!
-//! The exclusion tests are the load-bearing half. D-09 fixes what the pre-open
-//! test may match and D-07 is why it may not be a prefix match, so each case
-//! below is one of those two decisions stated as an assertion.
+//! The exclusion tests are the load-bearing half. The pre-open test has to
+//! match an excluded project's subtree at a segment boundary and spare a
+//! hyphenated sibling, and it may not be a prefix match because the directory
+//! encoding cannot tell `<repo>/research` from `<repo>-research`. Each case
+//! below is one of those two rules stated as an assertion.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -63,7 +65,7 @@ fn a_missing_config_file_yields_the_default_single_root() {
     assert!(config.exclusions().is_empty());
 }
 
-/// D-13: the refusal over this file's mode has to name the file the values came
+/// The refusal over this file's mode has to name the file the values came
 /// from, so a loaded config carries that path and an in-memory one carries
 /// nothing to name.
 ///
@@ -103,7 +105,7 @@ fn a_loaded_config_carries_its_file_and_an_in_memory_one_carries_none() {
     );
 }
 
-/// D-15: `CLAUDE_CONFIG_DIR` is read as a single directory, and it replaces the
+/// `CLAUDE_CONFIG_DIR` is read as a single directory, and it replaces the
 /// default. An empty value is not a directory and must not become one.
 #[test]
 fn claude_config_dir_replaces_the_default_and_an_empty_value_does_not() {
@@ -147,10 +149,10 @@ fn a_config_naming_two_roots_yields_both_in_order() {
     );
 }
 
-/// D-15's whole point. The legacy tool's `config.toml` sits in this exact
-/// directory on the development machine holding `base_dir = "/data/verbatim"`,
-/// and adopting it would point the new store at the legacy data directory whose
-/// import PROJECT.md defers.
+/// Only `terminus.toml` is ours to read. The legacy tool's `config.toml` sits
+/// in this exact directory on the development machine holding
+/// `base_dir = "/data/verbatim"`, and adopting it would point the new store at
+/// the legacy data directory, which Terminus does not import.
 #[test]
 fn the_legacy_config_toml_beside_ours_is_never_read() {
     let dir = config_dir_holding(&[("config.toml", "base_dir = \"/data/verbatim\"\n")]);
@@ -198,11 +200,11 @@ fn excluding(paths: &[&str]) -> Config {
 /// The encoded name matches exactly, and an extension of it is resolved
 /// against the filesystem rather than guessed at.
 ///
-/// D-07 proved the encoding cannot tell `<repo>/research` from
-/// `<repo>-research`, and D-09 asked for both a segment-boundary match and for
-/// the hyphenated sibling to be spared - not both satisfiable in the encoded
-/// space, so the ambiguity is resolved outside it. Real directories here, since
-/// that is now what the answer depends on.
+/// The encoding cannot tell `<repo>/research` from `<repo>-research`, and the
+/// exclusion has to match at a segment boundary and spare the hyphenated
+/// sibling - not both satisfiable in the encoded space, so the ambiguity is
+/// resolved outside it. Real directories here, since that is now what the
+/// answer depends on.
 #[test]
 fn an_extension_of_an_excluded_name_is_resolved_against_the_filesystem() {
     let tree = tempfile::tempdir().unwrap();
@@ -225,7 +227,7 @@ fn an_extension_of_an_excluded_name_is_resolved_against_the_filesystem() {
         config.excludes_encoded_dir(&encoded(
             &repo.join(".claude").join("worktrees").join("agent-a33a")
         )),
-        "D-06 folds a worktree into its parent repo, so excluding the repo must \
+        "a worktree folds into its parent repo, so excluding the repo must \
          exclude the worktree before anything is opened"
     );
     assert!(
@@ -256,7 +258,7 @@ fn a_child_and_a_sibling_that_collide_resolve_to_excluded() {
     let sibling =
         terminus_core::config::encode(tree.path().join("cadence-research").to_str().unwrap());
 
-    assert_eq!(child, sibling, "D-07: these are the same encoded name");
+    assert_eq!(child, sibling, "the encoding gives these the same name");
     assert!(config.excludes_encoded_dir(&child));
 
     assert!(config.excludes_path(&repo.join("research")));
@@ -274,8 +276,7 @@ fn a_child_and_a_sibling_that_collide_resolve_to_excluded() {
 /// belongs to some other path - so it stays excluded. Every worktree project
 /// directory on the development machine is this case (all three
 /// `.claude/worktrees` directories there are empty), which is why a search that
-/// answered "not a child" here would reopen the ING-08 violation rather than
-/// close it.
+/// answered "not a child" here would open an excluded project's files.
 #[test]
 fn a_deleted_worktree_under_a_live_repo_is_still_excluded() {
     let tree = tempfile::tempdir().unwrap();
@@ -296,7 +297,7 @@ fn a_deleted_worktree_under_a_live_repo_is_still_excluded() {
     assert!(
         config.excludes_encoded_dir(&worktree),
         "the worktree directory is gone but its sessions are archived under this \
-         name, and D-06 folds them into the excluded repo"
+         name, and a worktree folds into its excluded repo"
     );
 }
 
@@ -367,7 +368,7 @@ fn the_path_test_covers_the_subtree_and_stops_at_a_segment_boundary() {
 /// a path is spelled; `excludes_encoded_dir` compares a string the encoding
 /// produced, where every spelling is a different name and only one can equal a
 /// real project directory's. Unnormalized, a trailing separator is the whole
-/// ING-08 failure: the pre-open test never matches, so every file in the
+/// exclusion failure: the pre-open test never matches, so every file in the
 /// project is opened and archived, and only the read path hides it afterwards.
 #[test]
 fn a_differently_spelled_exclusion_is_the_same_exclusion_to_both_tests() {
@@ -502,7 +503,7 @@ fn an_exclusion_spelled_with_a_parent_or_a_tilde_still_names_its_project() {
 }
 
 // ---------------------------------------------------------------------------
-// The `[injection]` table (INJ-01, D-18)
+// The `[injection]` table
 
 /// Every key present: the file's numbers are the budgets, not the defaults.
 #[test]
@@ -617,7 +618,7 @@ fn any_provider_key_is_refused_by_name_and_echoes_nothing() {
 }
 
 /// The other way a config file can put a key on a stream: forget the quotes and
-/// let the TOML parser echo the line back (PRIV-01).
+/// let the TOML parser echo the line back.
 #[test]
 fn a_malformed_api_key_line_is_not_echoed_by_the_parse_error() {
     let dir = config_dir_holding(&[(
@@ -647,7 +648,7 @@ fn a_malformed_api_key_line_is_not_echoed_by_the_parse_error() {
     );
 }
 
-// RET-01 and D-01: retention is off unless `terminus.toml` says otherwise, and
+// Retention is off unless `terminus.toml` says otherwise, and
 // a per-project rule is matched through the same subtree test the exclusions
 // use rather than by string equality against `session_meta.project`.
 
@@ -659,7 +660,7 @@ fn retention_config(body: &str) -> Config {
     })
 }
 
-/// RET-01's off state, from both directions it can be reached: no file at all,
+/// The off state, from both directions it can be reached: no file at all,
 /// and a file that configures something else entirely. Neither may select a
 /// session, and a store whose every session predates any plausible default has
 /// to come out of a pass unchanged because of this.
@@ -682,9 +683,9 @@ fn a_config_with_no_retention_table_selects_nothing() {
     }
 }
 
-/// D-01: the per-project key is a subtree, matched through `covers`. The
-/// hyphenated sibling is the case a string prefix would get wrong, and it is
-/// the same one D-07 proved the encoded exclusion test cannot decide.
+/// The per-project key is a subtree, matched through `covers`. The hyphenated
+/// sibling is the case a string prefix would get wrong, and it is the same one
+/// the encoded exclusion test cannot decide.
 #[test]
 fn a_project_rule_covers_the_subtree_and_stops_at_a_segment_boundary() {
     let config = retention_config(
@@ -778,7 +779,7 @@ fn an_action_without_a_positive_age_selects_nothing() {
     }
 }
 
-/// D-01: a project key is spelled by a human and normalized by the same
+/// A project key is spelled by a human and normalized by the same
 /// function the exclusions go through, so a trailing separator, a `..` or a
 /// `~` still names its project - and a key that names nothing at all is
 /// dropped rather than kept as a prefix of every path there is.
@@ -802,7 +803,7 @@ fn a_project_key_is_normalized_the_way_an_exclusion_is() {
 }
 
 // ---------------------------------------------------------------------------
-// The `[snapshot]` table (STOR-06, D-15)
+// The `[snapshot]` table
 
 fn snapshot_config(body: &str) -> Config {
     let dir = config_dir_holding(&[(CONFIG_FILE_NAME, body)]);
@@ -849,7 +850,7 @@ fn a_snapshot_table_resolves_to_the_numbers_it_names() {
     assert_eq!(config.snapshots_kept(), 10);
 }
 
-/// One key configured leaves the others where STOR-06 put them, which is why
+/// One key configured leaves the others at their defaults, which is why
 /// each is an `Option` on the way in rather than a `#[serde(default)]` zero.
 #[test]
 fn one_configured_snapshot_key_does_not_take_the_others_with_it() {
@@ -888,7 +889,7 @@ fn an_unknown_key_inside_the_snapshot_table_is_ignored_rather_than_rejected() {
 }
 
 // ---------------------------------------------------------------------------
-// The `[capture]` table (ING-07, D-05)
+// The `[capture]` table
 
 fn capture_config(body: &str) -> Config {
     let dir = config_dir_holding(&[(CONFIG_FILE_NAME, body)]);
@@ -985,7 +986,7 @@ fn the_stored_spelling_is_a_configurable_one() {
 }
 
 // ---------------------------------------------------------------------------
-// The `[privacy]` table (PRIV-03, phase 4 D-09)
+// The `[privacy]` table
 
 fn privacy_config(body: &str) -> Config {
     let dir = config_dir_holding(&[(CONFIG_FILE_NAME, body)]);

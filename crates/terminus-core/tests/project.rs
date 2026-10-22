@@ -1,4 +1,4 @@
-//! Project identity from a `cwd` (ING-05, D-05, D-07).
+//! Project identity from a `cwd`.
 //!
 //! Degrading is the common case and it is asserted as a normal answer, not as
 //! an error: 33 of the 63 distinct `cwd` values in the real corpus no longer
@@ -37,7 +37,7 @@ fn text(path: &Path) -> String {
     path.to_str().expect("test paths are UTF-8").to_owned()
 }
 
-/// D-05's git branch: a `cwd` inside a repository keys to the repository, and a
+/// The git case: a `cwd` inside a repository keys to the repository, and a
 /// `cwd` two directories deeper keys to the same one.
 #[test]
 fn a_cwd_inside_a_repository_resolves_to_its_toplevel() {
@@ -143,9 +143,9 @@ fn a_cwd_is_normalized_as_a_string() {
     );
 }
 
-/// D-07 from the other side: two `cwd` values that encode to the same project
-/// directory name are two different project keys. Nothing ever runs the
-/// encoding backwards.
+/// Identity never comes from the encoded directory name: two `cwd` values that
+/// encode to the same project directory name are two different project keys.
+/// Nothing ever runs the encoding backwards.
 #[test]
 fn two_cwds_that_encode_identically_stay_two_keys() {
     let mut resolver = Resolver::new();
@@ -161,7 +161,7 @@ fn two_cwds_that_encode_identically_stay_two_keys() {
 }
 
 // ---------------------------------------------------------------------------
-// AC3, through a real pass: the worktree half and the encoding half.
+// Project keys through a real pass: the worktree half and the encoding half.
 // ---------------------------------------------------------------------------
 
 use std::path::PathBuf;
@@ -243,9 +243,9 @@ fn record(n: u8, cwd: &str) -> String {
     )
 }
 
-/// AC3's worktree half. A repository `cwd` and a `cwd` under its
+/// The worktree half. A repository `cwd` and a `cwd` under its
 /// `.claude/worktrees/` fold to one project key, and both keys survive the
-/// worktree directory being deleted afterwards (D-06, ING-05).
+/// worktree directory being deleted afterwards.
 ///
 /// It has to be constructed rather than measured: all 13 real worktree `cwd`
 /// values name deleted directories, so git answers for none of them.
@@ -278,7 +278,7 @@ fn a_repo_and_its_worktree_land_on_one_project_key() {
 
     // The directory goes away and the session grows. A pass that re-derived
     // identity from the disk would now key this session somewhere else; the
-    // stored keys are what stop that (D-06), and D-20 keeps the first `cwd`.
+    // stored keys are what stop that, and the session keeps its first `cwd`.
     std::fs::remove_dir_all(repo.join(".claude")).unwrap();
     tree.append(&forked, 3, "/somewhere/else/entirely");
     let second = tree.pass();
@@ -292,7 +292,7 @@ fn a_repo_and_its_worktree_land_on_one_project_key() {
     );
 }
 
-/// AC3's encoding half (D-07). Two `cwd` values that encode to the same project
+/// The encoding half. Two `cwd` values that encode to the same project
 /// directory name - and really do sit in one such directory - stay two keys.
 #[test]
 fn two_cwds_in_one_encoded_directory_stay_two_project_keys() {
@@ -310,7 +310,7 @@ fn two_cwds_in_one_encoded_directory_stay_two_project_keys() {
     assert_eq!(tree.keys_of(&hyphenated), (Some("/x/a-b".to_owned()), None));
 }
 
-/// D-20: a transcript whose `cwd` changes mid-session keeps the first one. 19
+/// A transcript whose `cwd` changes mid-session keeps the first one. 19
 /// of 1,253 real transcripts carry more than one distinct `cwd`.
 #[test]
 fn a_session_whose_cwd_changes_keeps_the_project_it_started_in() {

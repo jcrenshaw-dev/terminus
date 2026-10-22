@@ -1,4 +1,4 @@
-//! Exclusion on the READ path (ING-08, D-23).
+//! Exclusion on the READ path.
 //!
 //! The ingest half - never opening a file under an excluded project - lives in
 //! `tests/pass.rs`. This file covers the half that is easy to leave out and
@@ -83,7 +83,7 @@ impl Tree {
     /// One search over this tree, run the way a read command runs it.
     ///
     /// The read path this file is about now has two halves - listing sessions
-    /// and searching turns - and D-21 routes both through `config::visible`.
+    /// and searching turns - and both go through `config::visible`.
     /// A search that honored exclusion by a rule of its own is the drift the
     /// module note forbids, so the search is asserted here beside the listing.
     fn found(&self, exclusions: &[&str], scope: Scope, raw: &str) -> Response {
@@ -160,8 +160,8 @@ fn a_project_excluded_after_ingest_disappears_from_the_read_path() {
     assert!(tree.archived(&alpha));
 }
 
-/// D-23 from the worktree side: either of a session's two project keys may be
-/// the one the user excluded, so the predicate is applied to both.
+/// From the worktree side: either of a session's two project keys may be the
+/// one the user excluded, so the predicate is applied to both.
 #[test]
 fn a_worktree_session_is_hidden_under_either_of_its_two_keys() {
     let tree = tree();
@@ -327,7 +327,7 @@ fn an_excluded_project_disappears_from_search_too() {
     );
 }
 
-/// D-23 from the worktree side, on the search path: a session folded into its
+/// From the worktree side, on the search path: a session folded into its
 /// parent repo is still hidden by excluding the worktree path alone.
 ///
 /// `project` alone could not answer this - it holds the repo for both sessions -
