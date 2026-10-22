@@ -15,13 +15,6 @@
 //! the half claude-mem gets wrong. The visible listing is the outer loop here
 //! and the table is looked up inside it, so a session the gate does not return
 //! cannot appear whatever the table holds.
-//!
-//! **A store older than the table is an answer, not a SQLite line.** Left to
-//! the query, a missing table surfaces as `no such table: observations` inside
-//! an operational failure that never learns `--json` was asked for, so the
-//! envelope the contract promises is never written at all.
-//! [`terminus_core::Store::missing_tables`] is asked first, the way
-//! `read::decision_log` asks it.
 
 use std::collections::BTreeMap;
 
@@ -44,14 +37,6 @@ const COMMAND: &str = "observations";
 /// what a caller typed and `docs/json-shapes.md` documents the two shapes apart.
 const REGENERATE_COMMAND: &str = "observations regenerate";
 
-/// What a store written before this build says instead of naming SQLite.
-///
-/// It names the table, because the difference between "nothing has been
-/// observed" and "this build's table is not here yet" is the difference between
-/// waiting for the next ingest and filing a bug.
-const NO_TABLE: &str = "this store predates the `observations` table, so nothing has been \
-                        observed yet; the next `terminus ingest` creates it";
-
 pub fn run(args: Args) -> Result<(), Failure> {
     match args {
         Args::List(args) => list(args),
@@ -66,10 +51,6 @@ fn list(args: List) -> Result<(), Failure> {
     };
     let conn = reader.store().conn();
     let config = reader.config();
-
-    if reader.store().missing_tables().contains(&"observations") {
-        return read::empty(document(&[]), NO_TABLE, args.json);
-    }
 
     let scoped = scope::resolve(conn, config, &read::scope(args.project.as_deref())?)?;
     if let Some(reason) = scoped.reason() {

@@ -449,41 +449,6 @@ fn an_empty_data_directory_is_a_reason_and_creates_nothing() {
     );
 }
 
-/// A store written before this build carries no `observations` table. That is a
-/// reason naming the table and exit 0 - never `no such table: observations`
-/// escaping the envelope inside an operational failure that never learned
-/// `--json` was asked for.
-#[test]
-fn a_store_older_than_the_table_names_it_rather_than_naming_sqlite() {
-    let bench = bench();
-    bench.ingest_the_finalized_session();
-    bench
-        .conn()
-        .execute("DROP TABLE observations", [])
-        .expect("the premise: the table was there to drop");
-
-    let out = bench.run(&["observations", "--project", "*", "--json"]);
-    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-
-    let value = document(&out);
-    assert_eq!(value["ok"], true, "{value}");
-    let reason = value["reason"].as_str().unwrap_or_default();
-    assert!(
-        reason.contains("observations"),
-        "the reason does not name the table: {value}"
-    );
-    assert_eq!(
-        value["data"]["observations"],
-        serde_json::json!([]),
-        "{value}"
-    );
-    assert!(
-        !stdout(&out).contains("no such table"),
-        "a SQLite message reached stdout: {}",
-        stdout(&out)
-    );
-}
-
 /// AC7: `--since` rebuilds the rows after the bound and leaves every earlier
 /// row byte for byte what it was.
 ///
