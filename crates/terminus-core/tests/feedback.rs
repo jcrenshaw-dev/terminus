@@ -1,16 +1,16 @@
 //! The decision log: what a prompt writes down, the table that survives a
-//! rebuild, and the drain that fills it (FEED-01).
+//! rebuild, and the drain that fills it.
 //!
 //! `decisions` is the one derived-looking table that is not derived. A prompt's
 //! decision is state that existed for a few milliseconds inside a hook - which
 //! spellings it extracted, what the index answered, which thresholds were in
 //! force - and no amount of replaying the session blobs can reconstruct it, so
-//! `reindex` must give the rows back untouched (D-03).
+//! `reindex` must give the rows back untouched.
 //!
 //! The record-writing tests live here rather than in `inject_prompt.rs` beside
 //! the rest of the prompt arm: they are about the log, they run against the same
-//! fixture through the same public entry point, and PLAN-2's labelling and
-//! PLAN-3's replay extend exactly this file.
+//! fixture through the same public entry point, and the replay and report
+//! tests later in the file build on the same bench.
 
 #![cfg(feature = "testkit")]
 
@@ -44,7 +44,7 @@ const SESSION: &str = "0e5e6a1e-9f2b-4c7a-8d31-6b4f2a9c1d55";
 ///
 /// A decision is only ever labelled - and so only ever replayed - against a
 /// session the archive holds and has closed (`label::ELIGIBLE`), and a decision
-/// belongs to a session by `session_id` alone (D-04). So a test about labels
+/// belongs to a session by `session_id` alone. So a test about labels
 /// submits under this id and not under [`SESSION`].
 const FIXTURE_SESSION: &str = "44444444-4444-4444-8444-444444444444";
 
@@ -192,7 +192,7 @@ impl Bench {
     }
 
     /// The highest `sessions.session_no` this store holds: the watermark a
-    /// decision records (D-10).
+    /// decision records.
     fn watermark(&self) -> i64 {
         self.conn()
             .query_row("SELECT max(session_no) FROM sessions", [], |r| r.get(0))
@@ -230,11 +230,11 @@ impl Bench {
     }
 }
 
-/// FEED-01: a prompt that injected something says what it injected, what the
+/// A prompt that injected something says what it injected, what the
 /// candidates matched on, what it spent and under which thresholds.
 ///
 /// The threshold values are asserted as literals on purpose. They are
-/// compile-time constants a build may change (D-08), and the record is the only
+/// compile-time constants a build may change, and the record is the only
 /// place a later analysis can learn which numbers produced a label - so a change
 /// to one of them has to be a deliberate edit here rather than a silently
 /// re-derived expectation.
@@ -254,8 +254,8 @@ fn a_firing_prompt_records_what_it_injected() {
     assert_eq!(record.cwd.as_deref(), Some(cwd.as_str()));
     assert!(record.at_ms > 0, "no wall clock on the anchor: {record:?}");
 
-    // D-10: the store was opened, so the bound was taken here rather than left
-    // for the drain.
+    // The store was opened, so the watermark bound was taken here rather than
+    // left for the drain.
     let sessions: i64 = bench
         .conn()
         .query_row("SELECT max(session_no) FROM sessions", [], |r| r.get(0))
@@ -263,7 +263,7 @@ fn a_firing_prompt_records_what_it_injected() {
     assert_eq!(record.watermark_session_no, Some(sessions));
 
     // What the prompt asked the archive about: the resolved absolute spelling
-    // is in there, which is what D-05 is for.
+    // is in there, which is what resolving a relative path is for.
     assert!(
         record.spellings.contains(&stored),
         "the resolved spelling is not in the record: {:?}",
@@ -310,7 +310,7 @@ fn a_firing_prompt_records_what_it_injected() {
     assert!(!record.compacted, "{record:?}");
 }
 
-/// D-11's two non-fires, which are different facts and must read differently.
+/// Two kinds of non-fire, which are different facts and must read differently.
 ///
 /// One reached the index and was refused by the threshold; the other never
 /// opened the store at all. A log that could not tell them apart would put every
@@ -364,7 +364,7 @@ fn a_non_fire_records_how_far_it_got() {
     assert_eq!(record.prompt, bare);
 }
 
-/// A prompt whose every candidate was refused by INJ-04 records the refusals
+/// A prompt whose every candidate was suppressed records the refusals
 /// with their reasons.
 ///
 /// The record's list is THIS prompt's, which is what the session state file's
@@ -381,7 +381,7 @@ fn a_suppressed_prompt_records_the_refusals_and_why() {
         bench.submit(&cwd, &raw).is_some(),
         "the first prompt has to inject something"
     );
-    // The same session and the same question: INJ-04 refuses what it was
+    // The same session and the same question: suppression refuses what it was
     // already given.
     assert_eq!(
         bench.submit(&cwd, &raw),
@@ -477,8 +477,8 @@ fn row_of(conn: &Connection, prompt: &str) -> (String, Option<i64>, i64, String,
     .unwrap_or_else(|e| panic!("no decisions row for {prompt:?}: {e}"))
 }
 
-/// D-01's other half: the files the prompt path wrote become rows on the next
-/// pass, and stop being files.
+/// The drain: the files the prompt path wrote become rows on the next pass,
+/// and stop being files.
 ///
 /// The pass is the whole entry point under test. `ingest::run`'s single-file
 /// path deliberately does not drain - the hook only ever spawns the pass - so a
@@ -537,7 +537,7 @@ fn a_pass_drains_every_decision_file_into_the_table() {
     let injected: serde_json::Value = serde_json::from_str(&injected).unwrap();
     assert!(injected[0]["chars"].as_i64().unwrap() > 0, "{injected}");
 
-    // D-10: the prompt that never opened the store had no bound of its own, so
+    // The prompt that never opened the store had no bound of its own, so
     // the drain stamped the archive as it stood before this pass walked.
     let (_, stamped, chars, spellings, _, _) = row_of(&conn, bare);
     assert_eq!(stamped, Some(sessions));
@@ -787,7 +787,7 @@ fn a_drained_decision_keeps_its_compaction() {
     );
 }
 
-/// D-03: a rebuild returns the decision log exactly as it was.
+/// A rebuild returns the decision log exactly as it was.
 ///
 /// The comparison is every column of the row rather than a count of rows: a
 /// `reindex` that recreated the table and lost the JSON payload would keep the
@@ -829,7 +829,7 @@ fn reindex_gives_back_every_logged_decision() {
 }
 
 // ---------------------------------------------------------------------------
-// FEED-03: the index as it stood
+// Replay against the index as it stood
 // ---------------------------------------------------------------------------
 
 /// A `Read` tool call, which is what leaves a `path` entity behind.
@@ -842,7 +842,7 @@ fn read_call(path: &str) -> serde_json::Value {
     })
 }
 
-/// D-10: a search bounded by a watermark answers about the archive as it stood,
+/// A search bounded by a watermark answers about the archive as it stood,
 /// and a session ingested afterwards is invisible to it.
 ///
 /// Two sessions naming the same file, archived in order. The bound is
@@ -993,14 +993,13 @@ fn movement(replayed: &Replayed, label: &str) -> (usize, usize) {
 }
 
 /// Replay this store under `thresholds`, through the read-only open the command
-/// uses (D-15).
+/// uses.
 fn replayed(bench: &Bench, thresholds: &Thresholds) -> Replayed {
     let store = Store::open_read_only(&bench.data_dir).unwrap();
     replay::replay(&store, &Config::default(), thresholds).unwrap()
 }
 
-/// FEED-03: replaying the shipped thresholds over freshly-written labels moves
-/// nothing.
+/// Replaying the shipped thresholds over freshly-written labels moves nothing.
 ///
 /// The zero diff is the whole assertion and it is not vacuous: the counts it
 /// compares are non-zero, so a replay that re-extracted a different spelling,
@@ -1035,8 +1034,8 @@ fn replaying_the_shipped_thresholds_moves_nothing() {
     assert_eq!(replayed(&bench, &Thresholds::default()), diff);
 }
 
-/// FEED-03: a turn that sat one place below the rank threshold is injected under
-/// a widened one, and the label that would have earned is what the diff reports.
+/// A turn that sat one place below the rank threshold is injected under a
+/// widened one, and the label that would have earned is what the diff reports.
 ///
 /// The decision under test refused everything the default admits - the three
 /// suppressions are read off the ranked order the store actually produces, not
@@ -1131,7 +1130,7 @@ fn a_widened_rank_threshold_moves_a_decision_from_silence_to_a_hit() {
     assert_eq!(movement(&diff, "wasted budget"), (0, 0), "{diff:?}");
 }
 
-/// D-10: a decision is scored against the archive as it stood, so a session
+/// A decision is scored against the archive as it stood, so a session
 /// ingested after it cannot be offered to it however well it matches.
 ///
 /// The two halves are one test on purpose. Raising the stored watermark and
@@ -1260,8 +1259,8 @@ fn archive_records_at(
     }
 }
 
-/// D-01, D-04 (AC2): replay credits a decision with the turns the live hook
-/// would inject, and a Read result is not one of them.
+/// Replay credits a decision with the turns the live hook would inject, and a
+/// Read result is not one of them.
 ///
 /// The session's only turns naming the file are a Read and the result
 /// answering it, written in the shape Claude Code writes a Read result, so the
@@ -1379,8 +1378,8 @@ fn replay_never_credits_a_tool_result_the_hook_refuses() {
     assert_eq!(injected_total(&diff).1, live.hits.len(), "{live:?}");
 }
 
-/// D-06: under a `prompt_chars` too small for the frame the live hook hands
-/// over nothing, and replay credits nothing either.
+/// Under a `prompt_chars` too small for the frame the live hook hands over
+/// nothing, and replay credits nothing either.
 ///
 /// One Read naming the file, replayed at the default budget and at 200, with
 /// the budget loaded from `terminus.toml` the way the binary loads it. Each
@@ -1456,7 +1455,7 @@ fn replay_credits_nothing_when_the_budget_cannot_hold_the_frame() {
     }
 }
 
-/// #40, D-13: a decision made under the compacted pool replays through the
+/// #40: a decision made under the compacted pool replays through the
 /// compacted window and its own dropped set, so `compacted_ranked` moves it,
 /// and decisions recorded as ordinary or of unknown kind replay as they always
 /// have.
@@ -1587,7 +1586,7 @@ fn a_compacted_decision_replays_through_the_compacted_pool() {
 }
 
 // ---------------------------------------------------------------------------
-// FEED-04: what the log adds up to
+// What the log adds up to
 // ---------------------------------------------------------------------------
 
 /// A decision and its labels, written straight into both tables.
@@ -1633,7 +1632,7 @@ fn logged(
     }
 }
 
-/// The known outcome mix AC5 asks for, placed in one store.
+/// A known outcome mix, placed in one store.
 ///
 /// Three decisions: one that injected two turns and was right about one of
 /// them, one that injected a turn and was right about nothing, and one non-fire
@@ -1656,7 +1655,7 @@ fn known_mix(bench: &Bench) {
     logged(bench, "the non-fire", 0, &[], &[("miss", -1)]);
 }
 
-/// FEED-04: the numbers, against a mix a reader can add up by hand.
+/// The report's numbers, against a mix a reader can add up by hand.
 ///
 /// Every one of them is written out as a literal rather than derived, which is
 /// the whole value of the test: an aggregation asserted against an expression
@@ -1668,7 +1667,7 @@ fn the_report_adds_up_the_known_mix() {
 
     let counted = stats::stats(&Store::open_read_only(&bench.data_dir).unwrap()).unwrap();
 
-    // Three prompts, including the one that injected nothing (D-11).
+    // Three prompts, including the one that injected nothing.
     assert_eq!(counted.decisions, 3, "{counted:?}");
     assert_eq!(counted.injected_turns, 3, "{counted:?}");
     assert_eq!(counted.hits, 1, "{counted:?}");
@@ -1683,7 +1682,7 @@ fn the_report_adds_up_the_known_mix() {
     assert_eq!(counted.chars_referenced, 60, "{counted:?}");
 }
 
-/// #40, D-12: compacted decisions are counted apart from ordinary ones, and a
+/// #40: compacted decisions are counted apart from ordinary ones, and a
 /// decision whose kind was never recorded is in neither count while still being
 /// one of `decisions`.
 #[test]

@@ -1,10 +1,10 @@
-//! FEED-02: what a logged decision turned out to be worth.
+//! What a logged decision turned out to be worth.
 //!
 //! Two steps run at the far end of every ingest pass, after the walk. The idle
-//! rule decides which sessions are over (D-06) - there is no event that says so,
+//! rule decides which sessions are over - there is no event that says so,
 //! since `SessionEnd` does not fire on a crash - and the label join then asks,
 //! entirely in SQL over `decisions`, `entities` and `turns`, whether the turns
-//! that followed a decision ever used what it injected (D-07).
+//! that followed a decision ever used what it injected.
 //!
 //! Every test here drives `pass::run_with` over a real transcript tree it wrote
 //! itself, because the ordering is half of what is under test: a labelling step
@@ -102,7 +102,7 @@ fn read(path: &str) -> serde_json::Value {
 /// harness registers an MCP tool with.
 ///
 /// Synthesized because it has to be: zero `recall_search` calls exist across the
-/// 3,217 transcripts measured on 2026-08-20 (D-13), so no fixture taken from
+/// 3,217 transcripts measured on 2026-08-20, so no fixture taken from
 /// real history can carry one.
 fn recall(query: &str) -> serde_json::Value {
     serde_json::json!({
@@ -217,7 +217,7 @@ impl Bench {
     }
 
     /// One decision written the way a prompt writes it: a file under the data
-    /// directory, for a later pass to drain (D-01).
+    /// directory, for a later pass to drain.
     ///
     /// The wall clock is set rather than read, which is the only liberty taken
     /// with the record - a decision the injector stamped with `now` would sit
@@ -299,8 +299,8 @@ impl Bench {
     }
 }
 
-/// D-06: a pass closes the sessions that have gone quiet, leaves the live one
-/// open, and does not touch a session it already closed.
+/// The idle rule: a pass closes the sessions that have gone quiet, leaves the
+/// live one open, and does not touch a session it already closed.
 ///
 /// This is the only thing in the product that writes `is_final`, so the live
 /// session's `NULL` is as load-bearing as the idle session's `1`: a rule that
@@ -337,7 +337,7 @@ fn the_idle_rule_closes_a_quiet_session_and_leaves_a_live_one_open() {
     assert_eq!(bench.is_final(LIVE), None);
 }
 
-/// D-07: the four labels, off a session whose turns the test wrote and whose
+/// The four labels, off a session whose turns the test wrote and whose
 /// decisions the test placed against a clock it chose.
 ///
 /// The two injected turns of the first decision differ in exactly one thing -
@@ -427,13 +427,13 @@ fn a_finalized_decision_is_labelled_by_what_the_session_did_next() {
     assert_eq!(bench.labels_of(open), Vec::new());
 }
 
-/// AC2, through every seam at once: a prompt writes a file, a pass drains it
+/// End to end, through every seam: a prompt writes a file, a pass drains it
 /// into a row, the idle rule closes the session, and the join labels it.
 ///
 /// The labelling pass walks a tree with nothing new in it, and that is the
-/// assertion about D-07 rather than a detail of the setup: it commits no file
-/// and reads no bytes, so the labels it wrote came out of `entities` and
-/// `turns` and out of no blob.
+/// assertion that the join is pure SQL rather than a detail of the setup: it
+/// commits no file and reads no bytes, so the labels it wrote came out of
+/// `entities` and `turns` and out of no blob.
 #[test]
 fn a_logged_decision_is_labelled_end_to_end() {
     let bench = bench();
@@ -527,18 +527,18 @@ fn a_logged_decision_is_labelled_end_to_end() {
             ("wasted budget".to_owned(), None, Some("104".to_owned())),
         ]
     );
-    // AC2's other half: the session younger than the threshold is not closed and
+    // The other half: the session younger than the threshold is not closed and
     // its decision is not judged.
     assert_eq!(bench.is_final(LIVE), None);
     assert_eq!(bench.labels_of(bench.decision_of(young)), Vec::new());
 }
 
-/// AC3: the model went to recall for something this prompt had named and this
+/// The model went to recall for something this prompt had named and this
 /// decision declined to hand over, which is what a `miss` is.
 ///
 /// It is reachable only because a `recall_search` call leaves what it searched
 /// for in `entities` - the join may not open the blob to read the query out of
-/// it (D-07), so the premise is asserted before the label is.
+/// it, so the premise is asserted before the label is.
 #[test]
 fn a_recall_call_for_something_the_injector_declined_is_a_miss() {
     let bench = bench();
