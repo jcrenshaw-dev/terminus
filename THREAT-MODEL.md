@@ -262,7 +262,7 @@ A same-user process that can already write `~/.claude/projects` or the data dire
 - **`recall_search`.**
   - `query` is required and has no length cap; it is tokenized as above.
   - `paths` is cut to 25, and `limit` is clamped to 50.
-  - `tool` and `kind` are bound parameters, and `kind: "observation"` is refused.
+  - `tool` and `kind` are bound parameters.
   - `since` and `until` must be `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SS.mmmZ`.
 - **`recall_context`.** `turn_id` must be an integer, and `before` and `after` are clamped to 25 each.
 - **`recall_get`.** `turn_ids` is cut to 25. Each `body` is the whole archived JSON line, with no size cap.

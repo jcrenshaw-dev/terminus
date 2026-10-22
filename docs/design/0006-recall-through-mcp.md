@@ -124,7 +124,7 @@ The opening on 2026-07-28. It replaces `initialize` for that revision, and nothi
 - **Inputs:** `params.name`, one of the three tool names, and `params.arguments`, an object. Absent or null arguments read as an empty object, so a call with none is told which argument it needed.
 - **Outputs:** a tool result. The server reads only the argument names below and ignores any other key. A tool call opens the store read-only through `cmd/read.rs`; `initialize`, `server/discover`, `ping` and `tools/list` never open it.
 - **Refusals:** a `tools/call` can get two protocol errors. `-32022` when `_meta` names a revision other than `2026-07-28`, checked before the tool name is read, so an unknown tool on another revision gets this one. And `-32602` for a missing `params.name`, or a name that is not one of the three tools. Everything else a call cannot do comes back as the tool's own empty document with a `reason`:
-  - With `isError` true when the arguments could not be used as given: `arguments` that is not an object, a required argument that is missing, null, blank or of the wrong JSON type, a count that is negative or not a whole number, a `limit` of 0, a time bound that is not one of the two forms, and a `kind` of `observation`.
+  - With `isError` true when the arguments could not be used as given: `arguments` that is not an object, a required argument that is missing, null, blank or of the wrong JSON type, a count that is negative or not a whole number, a `limit` of 0, and a time bound that is not one of the two forms.
   - With `isError` false when the archive had no answer: no store yet, a store that cannot be read, a working directory the server cannot read, nothing archived, no archived project covering the scope's path, or a scope whose project is excluded. These are answers, not mistakes to retry.
 
 Each tool's empty document has the same keys as its full one, with every list empty, so a client reads one shape either way.
@@ -141,7 +141,7 @@ The search `terminus search` runs, with the same ranking, in [0005: Search](0005
   | `project` | string | A path inside one project, or `"*"` for every project. Absent means the project the server's working directory is in. |
   | `paths` | array of strings | Only turns that touched one of these files, as recorded in `paths`. At most `MAX_PATHS`, 25: a longer list is cut to its first 25. |
   | `tool` | string | Only turns using this tool, such as `Bash` or `Read`. |
-  | `kind` | string | Only turns of this record type: `user`, `assistant`, `system` or `attachment`. `observation` is refused. |
+  | `kind` | string | Only turns of this record type: `user`, `assistant`, `system` or `attachment`. |
   | `since` | string | Inclusive lower bound, `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SS.mmmZ`. A bare date means the start of that day. |
   | `until` | string | Inclusive upper bound, in the same two forms. A bare date means the end of that day. |
   | `limit` | integer | How many hits, `DEFAULT_HITS`, 10, when absent. A larger number than `MAX_HITS`, 50, is lowered to 50. |
