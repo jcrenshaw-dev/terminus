@@ -990,9 +990,8 @@ pub fn schema(path: &std::path::Path) -> Vec<String> {
     rows
 }
 
-/// A format-2 store an older build wrote: `derived_schema` one behind, and
-/// `decisions` without the two columns that arrived after it. A writable open
-/// would add them back.
+/// Put the store one `derived_schema` behind this build's, so it reads as older
+/// than the binary.
 pub fn age(path: &std::path::Path) {
     let conn = rusqlite::Connection::open(path).unwrap();
     conn.execute(
@@ -1001,11 +1000,6 @@ pub fn age(path: &std::path::Path) {
             (crate::DERIVED_SCHEMA - 1).to_string(),
             crate::store::META_DERIVED_SCHEMA.to_owned(),
         ],
-    )
-    .unwrap();
-    conn.execute_batch(
-        "ALTER TABLE decisions DROP COLUMN compacted;
-         ALTER TABLE decisions DROP COLUMN dropped;",
     )
     .unwrap();
 }

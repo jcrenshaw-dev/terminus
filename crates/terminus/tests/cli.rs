@@ -1045,10 +1045,8 @@ fn verify_against_a_database_with_no_tables_is_no_store() {
     assert_eq!(tables, 0, "verify created a table");
 }
 
-/// #77: on a format-2 store an older build wrote - `derived_schema` one behind,
-/// `decisions` without the two columns that arrived after it - `verify` says
-/// so in both modes and leaves the schema as it found it. A writable open would
-/// have added the columns back.
+/// #77: on a store one `derived_schema` behind this build's, `verify` says so
+/// in both modes and leaves the schema as it found it.
 #[test]
 fn verify_on_an_older_store_says_so_and_changes_nothing() {
     let bench = bench();
