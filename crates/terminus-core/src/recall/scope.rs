@@ -1,7 +1,7 @@
 //! Two rules over one projection: which project a search is in, and which
 //! projects it may never see.
 //!
-//! **Scoping (D-12).** The project a read command means by default is the one
+//! **Scoping.** The project a read command means by default is the one
 //! the process is standing in, and it is found by a longest-prefix match of the
 //! working directory against the project keys `session_meta` already holds -
 //! never by resolving the directory afresh through [`crate::project::Resolver`].
@@ -12,7 +12,7 @@
 //! the identity fragmentation the incumbent suffers from.
 //! Matching against stored keys cannot disagree with them.
 //!
-//! **Exclusion (D-21, D-23).** Applied to `project` and to
+//! **Exclusion.** Applied to `project` and to
 //! `project_pre_worktree` both, because either alone leaks a worktree session,
 //! and a session whose `project` is null stays visible because nothing can say
 //! it is excluded. It stays in force under every scope, including `*`.
@@ -66,7 +66,7 @@ impl Scope {
 /// Why a scoped search can return nothing at all.
 ///
 /// A value rather than a formatted string, for the same reason
-/// [`crate::Error::StoreNotFound`] is a variant: RCL-10 renders an empty result
+/// [`crate::Error::StoreNotFound`] is a variant: an empty result is answered
 /// with a reason, and a caller must not have to match on message text to tell
 /// one empty result from another.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,7 +154,7 @@ impl Scoped {
     /// Writes only `AND` clauses, each starting with a space, so the caller's
     /// SQL is already inside a `WHERE`.
     ///
-    /// Both exclusions are written even under a project. ING-08 holds on the
+    /// Both exclusions are written even under a project. Exclusion holds on the
     /// read path as well as on ingest, and [`resolve`] only rejects a scope
     /// whose own project is excluded: a session of a visible project whose
     /// pre-worktree key is excluded is still in the table and is filtered here.
@@ -211,9 +211,9 @@ impl Scoped {
 
 /// Resolve a scope against the project keys the archive holds.
 pub fn resolve(conn: &Connection, config: &Config, scope: &Scope) -> Result<Scoped> {
-    // The short circuit D-21 asks for. An exclusion of the filesystem root is
-    // "read nothing", and answering it with a query would be asking the store
-    // for rows it may not return.
+    // The short circuit for excluding everything. An exclusion of the
+    // filesystem root is "read nothing", and answering it with a query would be
+    // asking the store for rows it may not return.
     if config.excludes_everything() {
         return Ok(Scoped::nothing(Reason::EverythingExcluded));
     }
@@ -274,13 +274,13 @@ pub fn resolve(conn: &Connection, config: &Config, scope: &Scope) -> Result<Scop
 /// Both stored keys are candidates and both resolve to the row's `project`. A
 /// hit on `project_pre_worktree` resolving to the worktree path instead would
 /// show only the sessions run from inside the worktree and hide the repository's
-/// own, which is the fragmentation phase 2 D-06 folded the two keys together to
+/// own, which is the fragmentation folding the two keys together exists to
 /// prevent.
 ///
 /// **At equal depth the folded key wins.** One directory is routinely both one
 /// row's `project` and another row's `project_pre_worktree`: that is the
-/// ordinary state of a machine that ingested from a worktree before phase 2
-/// folded the two keys together and again after. Both hits then score the same
+/// ordinary state of a machine that ingested from a worktree both before and
+/// after the two keys were folded together. Both hits then score the same
 /// depth, and breaking that tie by the projection's `ORDER BY` resolves to
 /// whichever project string sorted first - which is not the caller's own, so
 /// the search returns another project's turns and hides theirs. Deterministic,

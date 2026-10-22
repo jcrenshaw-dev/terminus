@@ -1,21 +1,21 @@
-//! RCL-09: the whole verbatim record behind a turn id.
+//! The whole verbatim record behind a turn id.
 //!
 //! This is the read that answers "what exactly was said". A search returns an
 //! excerpt - a projection, windowed around the match - and a context window
 //! returns projections of its neighbours; this returns the record's **own
 //! bytes**, read at the `stream_offset` and `byte_len` stored on the turn row.
-//! The blob is truth (D-13) and this is the one path
+//! The blob is truth and this is the one path
 //! that hands the truth back unaltered - unless `[privacy] redact_recall` says
 //! otherwise, and then only for this answer: see [`Record::body`].
 //!
-//! **Only the covering block rows, once per request (D-13, D-20).** Each
+//! **Only the covering block rows, once per request.** Each
 //! record reads only the block rows its range covers. Ids are grouped by
 //! `session_key`, so a row two records share is fetched and decompressed once,
 //! and [`Fetched::reads`] counts both.
 //!
-//! **An evicted body is read off the column, never off a failed read
-//! (D-08).** `session_meta.is_evicted` stays null until retention lands in
-//! phase 8, and it is the only thing that produces [`Record::body_evicted`].
+//! **An evicted body is read off the column, never off a failed read.**
+//! `session_meta.is_evicted` is set only when retention evicts a session's
+//! body, and it is the only thing that produces [`Record::body_evicted`].
 //! A block that will not decompress is what `terminus verify` exists to report;
 //! letting it look like an eviction would report silent data loss as retention
 //! working correctly.
@@ -56,12 +56,12 @@ pub struct Record {
     /// through the egress filter, so the byte-for-byte promise above is what the
     /// default answers and not what every answer does; the archive itself is
     /// never touched, and the same read with the knob absent still returns the
-    /// stored line unchanged (phase 4 D-04).
+    /// stored line unchanged.
     ///
     /// `None` when the body was not read: the session is evicted, or its blocks
     /// would not give the range up.
     pub body: Option<Vec<u8>>,
-    /// The session's body has been evicted by retention (D-08). No block read
+    /// The session's body has been evicted by retention. No block read
     /// was attempted for this record.
     pub body_evicted: bool,
 }
@@ -92,8 +92,9 @@ pub struct Fetched {
 
 /// Read the verbatim record behind each id.
 ///
-/// Scoped exactly the way a search and a context window are (RCL-10 auto-scopes
-/// all three MCP tools, with `project: "*"` opting out). Ids are densely
+/// Scoped exactly the way a search and a context window are (all three MCP
+/// tools are scoped to the current project, with `project: "*"` opting out).
+/// Ids are densely
 /// enumerable - `session_no << 24 | turn_seq` - so a get that scoped nothing
 /// would walk out of the caller's project one id at a time, which is the door
 /// [`crate::recall::context::window`] closes for the same reason. An id outside
@@ -181,12 +182,12 @@ pub fn records(conn: &Connection, config: &Config, scope: &Scope, ids: &[i64]) -
     }
 
     // Resolved once for the whole request, at the entry point that holds the
-    // `Config` (phase 4 D-01). `recall_get`'s body is hook and MCP output like
+    // `Config`. `recall_get`'s body is hook and MCP output like
     // every other projection, so the knob reaches it too - and the conversion it
     // needs happens HERE and not per renderer, because `terminus show` writes
     // these bytes with `write_all` while the MCP tool renders them lossily, and
     // a filter applied separately in each would let the two `body` values
-    // diverge (D-04).
+    // diverge.
     let redaction = Redaction::of(config);
     for (session_key, ranges) in by_session {
         let wanted: Vec<(u64, u64)> = ranges

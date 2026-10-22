@@ -1,5 +1,5 @@
-//! RCL-01's expansion: the extra tokens that let a query for one component find
-//! the whole.
+//! Identifier expansion: the extra tokens that let a query for one component
+//! find the whole.
 //!
 //! The design bars a custom FTS5 tokenizer precisely so
 //! every rule here stays an ordinary function with an input and an answer.
@@ -7,20 +7,21 @@
 //! `unicode61`, which means both query shapes hit: the whole token, because it
 //! is in the projected text, and each component, because it is appended here.
 //!
-//! **Case boundaries are the only rule that changes recall (D-13).** Measured on
+//! **Case boundaries are the only rule that changes recall.** Measured on
 //! sqlite 3.53.4 against the table `crates/terminus-core/src/store/schema.rs`
 //! declares: `MATCH 'manager'` returns a `search_manager_new` row and does *not*
 //! return a `SearchManager` row, `MATCH 'worker'` returns `src/worker/S.ts`,
 //! `MATCH 'sources'` returns `--setting-sources`. So snake, kebab and path
 //! components are already reachable - `unicode61` splits on `_`, `-`, `/` and
-//! `.` by itself - and RCL-01 names them for completeness rather than for reach.
+//! `.` by itself - and they are named here for completeness rather than for
+//! reach.
 //!
 //! They are still a rule here, in [`separator_components`], and it is the rule
 //! that decides what counts as *already present*. Emitting a token the body
 //! already carries would double its term frequency and buy nothing under BM25
 //! except body bytes, so the separator rule feeds the dedup set and the case
 //! rule feeds the output. On this tokenizer the separator rule therefore emits
-//! nothing, which is not a gap: it is D-13's measurement, expressed as code.
+//! nothing, which is not a gap: it is that measurement, expressed as code.
 
 use std::collections::BTreeSet;
 
@@ -28,11 +29,11 @@ use super::text::MAX_BODY_BYTES;
 
 /// How many bytes of expansion tokens one turn's body may gain.
 ///
-/// D-14 measured full camel+snake+kebab+path expansion of per-turn-unique tokens
-/// at +37.2% of turn bytes and camel-only at +15.7%, against the brief's
-/// 1.3-1.6x budget, so half the projection budget is headroom rather than a
-/// constraint. It exists so one pathological token soup cannot make an FTS row
-/// grow without limit after [`MAX_BODY_BYTES`] has already bounded the text.
+/// Full camel+snake+kebab+path expansion of per-turn-unique tokens measured at
+/// +37.2% of turn bytes and camel-only at +15.7%, against the brief's 1.3-1.6x
+/// budget, so half the projection budget is headroom rather than a constraint.
+/// It exists so one pathological token soup cannot make an FTS row grow without
+/// limit after [`MAX_BODY_BYTES`] has already bounded the text.
 pub const MAX_EXPANSION_BYTES: usize = MAX_BODY_BYTES / 2;
 
 /// Append the expansion tokens a body needs, in place.
@@ -58,7 +59,7 @@ pub fn append_to(body: &mut String) {
 ///
 /// Order is text order and the dedup is exact, so the same body always expands
 /// to the same tokens - which is what lets a rebuild reproduce a byte-identical
-/// FTS row (AC3).
+/// FTS row.
 pub fn expansion_tokens(text: &str) -> Vec<String> {
     // What `unicode61` will already index, folded the way it folds. Seeding the
     // dedup set with this is the snake/kebab/path rule doing its work: those
@@ -78,10 +79,10 @@ pub fn expansion_tokens(text: &str) -> Vec<String> {
 
 /// The snake, kebab and path rule: the pieces `unicode61` splits a text into.
 ///
-/// One function for three of RCL-01's four rules because on this tokenizer they
-/// are one rule - `_`, `-`, `/`, `\` and `.` are all separators, as is every
-/// other non-alphanumeric character - and writing them as three would be three
-/// spellings of `is_alphanumeric` pretending to be independent.
+/// One function for three of the four expansion rules because on this tokenizer
+/// they are one rule - `_`, `-`, `/`, `\` and `.` are all separators, as is
+/// every other non-alphanumeric character - and writing them as three would be
+/// three spellings of `is_alphanumeric` pretending to be independent.
 pub fn separator_components(text: &str) -> impl Iterator<Item = &str> {
     text.split(|c: char| !c.is_alphanumeric())
         .filter(|piece| !piece.is_empty())

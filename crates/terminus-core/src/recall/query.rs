@@ -1,13 +1,13 @@
-//! D-09: the user's string is tokenized and rebuilt in Rust, and a raw query
-//! never reaches `MATCH`.
+//! The user's string is tokenized and rebuilt in Rust, and a raw query never
+//! reaches `MATCH`.
 //!
 //! Measured on sqlite 3.53.4 against the table
 //! `crates/terminus-core/src/store/schema.rs` declares: `MATCH 'src/worker/S.ts'`
 //! fails with `fts5: syntax error near "/"` and exit 1, and `MATCH 'foo AND
 //! (bar'` and `MATCH '"unbalanced'` fail the same way. None of the three returns
-//! an empty result - they return an error - and RCL-06 forbids a non-zero exit
-//! for a query that simply found nothing. Searching for a path is this phase's
-//! own headline case, so the most natural command in the product is exactly the
+//! an empty result - they return an error - and a query that simply found
+//! nothing must never exit non-zero. Searching for a path is search's own
+//! headline case, so the most natural command in the product is exactly the
 //! one that would fail.
 //!
 //! The rule is therefore: split the user's string on the separators the index
@@ -37,7 +37,7 @@ use crate::index::expand::separator_components;
 /// one asked for rather than wrong in an unpredictable direction.
 pub const MAX_QUERY_TOKENS: usize = 32;
 
-/// How a query matched one stored `entities.value_norm` (RCL-04).
+/// How a query matched one stored `entities.value_norm`.
 ///
 /// The comparison is between the query and a WHOLE stored value, never between
 /// one query token and a whole value: `path` and `error` values are multi-token

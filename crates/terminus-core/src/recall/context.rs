@@ -1,12 +1,12 @@
-//! RCL-08: the turns around a hit, in the order they happened.
+//! The turns around a hit, in the order they happened.
 //!
-//! **`turn_seq` order, never timestamp (D-22).** 31 of 62 sampled real
+//! **`turn_seq` order, never timestamp.** 31 of 62 sampled real
 //! transcripts carry a record whose timestamp goes backwards, so a timestamp
 //! sort would show a reply before the prompt it answers in half of all
 //! sessions. `turns` carries `UNIQUE (session_key, turn_seq)`, which is the
 //! covering index this window reads through.
 //!
-//! **The window stops at the session (D-06).** It does not follow
+//! **The window stops at the session.** It does not follow
 //! `continues_from` and it does not follow `parent_session_key`: continuation
 //! is a fan-out with zero, one or many successors, 2 of 173 real files name a
 //! predecessor that was never ingested, and `parent_session_key` is a different
@@ -57,13 +57,13 @@ pub struct Window {
     /// The window reaches the last turn of the session.
     pub at_session_end: bool,
     /// The session this one continues from, when it names one - returned and
-    /// NOT followed (D-06). A caller that wants the turns before the start of
+    /// NOT followed. A caller that wants the turns before the start of
     /// this file resolves this itself and issues a second call.
     pub continues_from: Option<String>,
     /// Set when the window is empty for a reason rather than by accident.
     pub reason: Option<Reason>,
     /// Block rows fetched and blocks decompressed to fill the turns' text: only
-    /// the rows the window's turns cover (D-13, D-14).
+    /// the rows the window's turns cover.
     pub reads: excerpt::Reads,
 }
 
@@ -78,8 +78,8 @@ impl Window {
 
 /// The turns around `anchor`, `before` of them earlier and `after` later.
 ///
-/// Exclusion is applied on the same projection the search scopes through
-/// (D-21): a turn of an excluded project returns an empty window answered as
+/// Exclusion is applied on the same projection the search scopes through: a
+/// turn of an excluded project returns an empty window answered as
 /// `NoSuchTurn`, because a context call that answered would be the read-path half of
 /// exclusion leaking through a second door.
 pub fn window(
@@ -121,8 +121,8 @@ pub fn window(
     // anywhere, would confirm the turn exists and say what the project is
     // called.
     //
-    // Scope is in the check as well as exclusion. RCL-10 auto-scopes all three
-    // MCP tools to the current project with `project: "*"` opting out, and this
+    // Scope is in the check as well as exclusion. All three MCP tools are
+    // scoped to the current project with `project: "*"` opting out, and this
     // is the only place the context tool can enforce it: a caller supplies a
     // turn id, not a search, and ids are densely enumerable (`session_no << 24
     // | turn_seq`), so a window that scoped nothing would walk out of the
@@ -172,8 +172,8 @@ pub fn window(
     )?;
 
     let mut turns: Vec<ContextTurn> = rows.iter().map(|(turn, _)| turn.clone()).collect();
-    // Resolved here and carried down, never read inside the projection (phase 4
-    // D-01). A context window is model-facing - `recall_context` is one of the
+    // Resolved here and carried down, never read inside the projection. A
+    // context window is model-facing - `recall_context` is one of the
     // three MCP tools - so its turns are an egress boundary in exactly the way
     // a search excerpt is, and they go through the same argument.
     let reads = fill_text(
@@ -203,10 +203,10 @@ pub fn window(
 /// only the rows those turns cover, each once.
 ///
 /// One read for the whole window, which is free here in a way it is not for a
-/// search: a context window is one session by definition (D-06).
+/// search: a context window is one session by definition.
 ///
 /// `redaction` is the caller's, and it is applied by [`excerpt::of_record_with`]
-/// to the FULL projection before the window is cut (phase 4 D-02) - the same
+/// to the FULL projection before the window is cut - the same
 /// argument on the same call the search path makes, so a turn reads the same
 /// way whichever tool asked for it. Nothing scrubs [`ContextTurn::text`]
 /// afterwards: a second pass over an already-filtered projection would run the

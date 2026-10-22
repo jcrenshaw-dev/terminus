@@ -21,8 +21,8 @@ pub use text::{MAX_BODY_BYTES, MAX_DEPTH};
 
 use serde_json::Value;
 
-/// The whole `turns_fts.body` value for one turn record: D-01's text projection
-/// followed by RCL-01's expansion tokens.
+/// The whole `turns_fts.body` value for one turn record: the text projection
+/// followed by the expansion tokens.
 ///
 /// One column and not two. A second FTS column would change the table
 /// declaration at `crates/terminus-core/src/store/schema.rs` and the
@@ -34,7 +34,7 @@ pub fn project(record: &Value) -> String {
     body
 }
 
-/// Every entity one turn record leaves behind (RCL-02, RCL-03), deduplicated
+/// Every entity one turn record leaves behind, deduplicated
 /// and capped at [`MAX_ENTITIES_PER_TURN`].
 ///
 /// The same parsed record the body came from, so a turn is read once and every

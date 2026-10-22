@@ -1,14 +1,14 @@
-//! The text a turn contributes to `turns_fts.body` (D-01).
+//! The text a turn contributes to `turns_fts.body`.
 //!
 //! A per-record-type projection of what the turn actually *said*, never the raw
-//! transcript line. Phase 1 indexed `String::from_utf8_lossy(record)`, the whole
-//! line, which put every JSON key and every record-type literal in the index, so
-//! `MATCH 'assistant'` returned every assistant record on the strength of
-//! `"type":"assistant"`, and BM25 ranked turns by how much scaffolding they
-//! carried. Phase 5's structural rank-1..3 threshold reads those ranks, so the
-//! noise would not have stayed in search.
+//! transcript line. Indexing the whole line, `String::from_utf8_lossy(record)`,
+//! would put every JSON key and every record-type literal in the index, so
+//! `MATCH 'assistant'` would return every assistant record on the strength of
+//! `"type":"assistant"`, and BM25 would rank turns by how much scaffolding they
+//! carry. The injection's structural rank-1..3 threshold reads those ranks, so
+//! the noise would not stay in search.
 //!
-//! Four subtrees are read and nothing else (D-01, D-02):
+//! Four subtrees are read and nothing else:
 //!
 //! - `message.content` - a plain string, or an array whose `text` blocks give
 //!   their text, whose `tool_use` blocks give the tool name and the string
@@ -39,10 +39,10 @@ pub const MAX_DEPTH: usize = 8;
 /// How many bytes of projected text one turn may contribute.
 ///
 /// One FTS row per turn is the schema, so an unbounded projection makes one row
-/// as large as its record - and phase 1 measured records up to 205 KB, with a
-/// whole session reaching 10.1 MB. The blob still holds every byte; this bounds
-/// only what is *searchable*, and a turn that needs 256 KB of matching text to
-/// be found is not a turn recall was going to find.
+/// as large as its record - and records measure up to 205 KB, with a whole
+/// session reaching 10.1 MB. The blob still holds every byte; this bounds only
+/// what is *searchable*, and a turn that needs 256 KB of matching text to be
+/// found is not a turn recall was going to find.
 pub const MAX_BODY_BYTES: usize = 256 * 1024;
 
 /// The searchable text of one turn record.
@@ -118,7 +118,7 @@ impl Projector {
         self.full = take < value.len() || self.remaining == 0;
     }
 
-    /// `message.content`, per D-01's block rules.
+    /// `message.content`, per the block rules in the module doc.
     fn message(&mut self, message: &Value) {
         match message.get("content") {
             Some(Value::String(text)) => self.push(text),

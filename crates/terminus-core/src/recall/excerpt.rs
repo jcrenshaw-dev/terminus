@@ -1,6 +1,6 @@
 //! The text under each hit, cut from the archive.
 //!
-//! **Never from FTS5 (D-05).** Measured on sqlite 3.53.4 against the
+//! **Never from FTS5.** Measured on sqlite 3.53.4 against the
 //! contentless table `crates/terminus-core/src/store/schema.rs` declares,
 //! `snippet(f,0,'[',']','...',8)` returns an empty string with exit 0 while
 //! `bm25(f)` still ranks - because `content=''` means the table holds no text
@@ -14,7 +14,7 @@
 //! knows a `tool_use` block's text from its scaffolding, and writing a second
 //! one here would be a second definition of what a turn said.
 //!
-//! **Only the covering block rows, once per search (D-13, D-20).** Each turn
+//! **Only the covering block rows, once per search.** Each turn
 //! reads only the block rows its `stream_offset` and `byte_len` cover. Hits are
 //! grouped by session, so a row that several hits share is fetched and
 //! decompressed once per search, and [`Reads`] counts both.
@@ -47,7 +47,7 @@ pub const EXCERPT_CHARS: usize = 240;
 pub const ELISION: &str = "...";
 
 /// What a read cost: block rows fetched from the database and blocks
-/// decompressed (D-14).
+/// decompressed.
 ///
 /// An instrument, not an answer, and in the normal build for the same reason
 /// [`archive::Ranges::blocks_decompressed`] is: "a turn read fetches only the
@@ -75,7 +75,7 @@ impl Reads {
 /// verify` is - and failing the whole search because one session of many is
 /// corrupt would hide the results that are fine.
 ///
-/// `redaction` is the CALLER's (phase 4 D-01). Nothing here reads a `Config`,
+/// `redaction` is the CALLER's. Nothing here reads a `Config`,
 /// so whether a surface filters stays a property of its own call site and is
 /// reviewable there: `search::run` here and `inject::prompt` through
 /// [`attach_scrubbed`] each resolve `Redaction::of` from the config they
@@ -110,8 +110,8 @@ pub fn attach_scrubbed(
 
     let coordinates = coordinates(conn, hits)?;
 
-    // Grouped by session, which is the whole of D-20: each covering row is
-    // fetched once and every turn of that session is cut out of it.
+    // Grouped by session, so that each covering row is fetched once and
+    // every turn of that session is cut out of it.
     let mut by_session: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (index, hit) in hits.iter().enumerate() {
         by_session
@@ -145,7 +145,7 @@ pub fn attach_scrubbed(
 
 /// `(stream_offset, byte_len)` for every hit, in one statement.
 ///
-/// D-04: both address the UNCOMPRESSED session stream, never a block row.
+/// Both address the UNCOMPRESSED session stream, never a block row.
 fn coordinates(conn: &Connection, hits: &[Hit]) -> Result<BTreeMap<i64, (i64, i64)>> {
     let ids: Vec<i64> = hits.iter().map(|hit| hit.turn_id).collect();
     let placeholders = std::iter::repeat_n("?", ids.len())
@@ -171,7 +171,7 @@ fn coordinates(conn: &Connection, hits: &[Hit]) -> Result<BTreeMap<i64, (i64, i6
 
 /// One record's bytes, as the sentence a reader should see - unfiltered.
 ///
-/// Public because a context window projects its turns the same way (RCL-08):
+/// Public because a context window projects its turns the same way:
 /// one rule for what a turn said, whatever asked for it.
 ///
 /// This is [`of_record_with`] under [`Redaction::none`], and it is the
@@ -181,13 +181,12 @@ pub fn of_record(query: &Query, record: &[u8]) -> String {
     of_record_with(query, record, &Redaction::none())
 }
 
-/// One record's projection, with the caller's redaction applied to it
-/// (PRIV-03).
+/// One record's projection, with the caller's redaction applied to it.
 ///
-/// **The filter runs over the FULL projection, before the window is cut**
-/// (phase 4 D-02). Every value-shape rule in `observe::egress` needs a
-/// secret's NAME and its VALUE in the same string - `Authorization: Bearer
-/// <v>`, `--token <v>`, `"password": "<v>"` - and [`EXCERPT_CHARS`] is a
+/// **The filter runs over the FULL projection, before the window is cut.**
+/// Every value-shape rule in `observe::egress` needs a secret's NAME and its
+/// VALUE in the same string - `Authorization: Bearer <v>`, `--token <v>`,
+/// `"password": "<v>"` - and [`EXCERPT_CHARS`] is a
 /// 240-character window centred on the first query token, so a name that falls
 /// outside the cut is a value no rule can see. Filtering the window afterwards
 /// would leave exactly the secrets whose labels were trimmed off, and would
@@ -220,7 +219,7 @@ pub fn of_record_scrubbed(
     scrub: fn(&str) -> Cow<'_, str>,
 ) -> String {
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(record) else {
-        // A line that is not JSON is archived verbatim all the same (D-13), and
+        // A line that is not JSON is archived verbatim all the same, and
         // it has no projection. Nothing to excerpt is an empty excerpt.
         return String::new();
     };
