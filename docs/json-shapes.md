@@ -52,7 +52,7 @@ disagree. `verify --json` on a damaged store writes its document **and** exits
 **Most operational failures write no document.** The ones that do are named
 under their commands: `verify` with a failure, `reindex` with a skipped session,
 a held ingest lock in `reindex`, `observations regenerate` and `compact`, a
-decision log missing one of its two tables in `stats` and `replay`, and a
+decision log missing either or both of its tables in `stats` and `replay`, and a
 `problem` check in `doctor`. Every other operational failure is reported on
 stderr with exit 1, and stdout stays empty:
 
@@ -140,9 +140,6 @@ file it points at, and a path outside those two shapes, such as a file under no
 - `--kind` is matched against `record_type` exactly, and any value is accepted.
   The record types are `user`, `assistant`, `system` and `attachment`; any other
   value matches nothing, so a misspelled kind is an empty result with exit 0.
-  Only `observation` is refused, as misuse (exit 2) from `terminus search` and
-  as `isError` from `recall_search`, because Terminus stores no session
-  summaries.
 
 ### `show`
 
@@ -342,9 +339,9 @@ and unchanged.
   idle rule has closed, which is exactly the set the labeller was allowed to
   judge. A decision of a live session has no stored label to diff against.
 - `labels` is one entry per label, all four in that order, whenever replay ran
-  against the decision log, even one with no decision to score. With no store,
-  or a store with no decision log, `labels` is `[]`, and it is `[]` in the
-  failure document for a damaged log too. `old` is what the store holds, `new`
+  against the decision log, even one with no decision to score. With no store
+  `labels` is `[]`, and it is `[]` in the failure document for a damaged log
+  too. `old` is what the store holds, `new`
   is what the replayed rules produce.
 - `changed` names the decision ids whose label set moved, in id order, so a diff
   can be followed back into the prompts behind it.
@@ -390,9 +387,6 @@ and unchanged.
 - `session_id` is null when the session's `session_meta` row holds none.
   `generated_at` and `mechanical` are null only when their column is; the ingest
   step writes both.
-- A store written before this build carries no `observations` table. That is an
-  empty answer with a reason naming the table and exit 0, never a SQLite
-  message: the next `terminus ingest` creates it.
 
 ### `observations regenerate`
 
@@ -683,8 +677,8 @@ tool result:
   is not an object; a required argument that is missing or null, or a `query`
   that is empty or only whitespace; an argument of the wrong JSON type; a count
   that is negative or not a whole number; a `since` or `until` in neither time
-  form; a `limit` of 0; a `kind` of `observation`; a `turn_ids` that is empty
-  or holds anything but integers. The document's `reason` says which.
+  form; a `limit` of 0; a `turn_ids` that is empty or holds anything but
+  integers. The document's `reason` says which.
 - `isError` is false for everything else, an empty answer included: no store
   yet, a directory no archived project covers, a store that cannot be opened or
   read, a SQLite error, and a server working directory that cannot be read. Each

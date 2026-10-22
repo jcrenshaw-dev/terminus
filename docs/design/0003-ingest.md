@@ -109,7 +109,7 @@ Options are in [commands.md](../commands.md#archiving), and the `--json` fields 
 
 - **Inputs:** the project scope, as in [0005: Search](0005-search.md), and the store, opened read-only.
 - **Outputs:** the observation of each final session in the project, listed through the same visibility check every read uses, so an excluded project's sessions never appear.
-- **Refusals:** none beyond the read commands' own. A store with no `observations` table is an empty answer with a reason, and exit 0.
+- **Refusals:** none beyond the read commands' own.
 
 ### `terminus observations regenerate`
 

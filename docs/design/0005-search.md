@@ -101,7 +101,7 @@ Options are in [commands.md](../commands.md#reading-the-archive), and the `--jso
 
 - **Inputs:** the words, the scope, and the filters `--tool`, `--kind`, `--path`, `--since` and `--until`, with `--limit`, which defaults to 10 here and is cut to `MAX_RESULTS`, 50.
 - **Outputs:** the hits, ranked as in Figure 1, each with its turn id, session, record type, time, project, whether it is a sidechain, and its excerpt. With `[privacy] redact_recall` on, the excerpts are filtered, and `--raw` prints them unfiltered for that one run. When a query is cut at 32 tokens, stderr says so.
-- **Refusals:** a string with nothing searchable in it, such as pure punctuation, is an empty result with a reason. `--limit 0` and `--kind observation` exit 2.
+- **Refusals:** a string with nothing searchable in it, such as pure punctuation, is an empty result with a reason. `--limit 0` exits 2.
 
 ### `terminus show <id>...`
 
