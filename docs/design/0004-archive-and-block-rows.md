@@ -30,7 +30,7 @@ The store lives in the library crate, `crates/terminus-core`. The commands that 
 | Module | What it does |
 |---|---|
 | [`crates/terminus-core/src/store/mod.rs`](../../crates/terminus-core/src/store/mod.rs) | The store's public face: `Store`, `turn_id`, `TABLES` and `DERIVED_TABLES`. |
-| [`crates/terminus-core/src/store/open.rs`](../../crates/terminus-core/src/store/open.rs) | `ARCHIVE_FORMAT` and `DERIVED_SCHEMA`, the version gate, the writable and read-only opens, bringing an older store's tables and columns forward, and resolving the data directory. |
+| [`crates/terminus-core/src/store/open.rs`](../../crates/terminus-core/src/store/open.rs) | `ARCHIVE_FORMAT` and `DERIVED_SCHEMA`, the version gate, the writable and read-only opens, creating a table the store lacks, and resolving the data directory. |
 | [`crates/terminus-core/src/store/schema.rs`](../../crates/terminus-core/src/store/schema.rs) | Every table, column and index, in one `CREATE_SQL`, and `TABLES`, `DERIVED_TABLES`, `BRING_FORWARD_COLUMNS` and the turn-id encoding. |
 | [`crates/terminus-core/src/store/archive.rs`](../../crates/terminus-core/src/store/archive.rs) | Every read and write of a session's block rows. A reader asks for a range of the session stream and gets back only the blocks that range covers. It checks no hash. |
 | [`crates/terminus-core/src/blob/mod.rs`](../../crates/terminus-core/src/blob/mod.rs) | `BLOCK_SIZE` and `ZSTD_LEVEL`, and the bounds on a block size read from a column. |
@@ -241,7 +241,7 @@ An append, which is how every pass after a session's first adds to it, rewrites 
 
 - An archive format other than 2, older or newer, is refused, and the store is not changed. There is no conversion.
 - A derived schema other than 5, older or newer, opens and is marked as needing a rebuild. The next ingest pass rebuilds every derived table from the block rows before it reads any transcript, and `terminus reindex` does the same.
-- Every writable open of an existing store creates any table in `TABLES` the store lacks and adds any column in `BRING_FORWARD_COLUMNS` it lacks, with `ALTER TABLE ADD COLUMN`. Those columns are `session_meta`'s `agent_meta`, `transcript_diverged`, `project_pre_worktree` and `capture_mode`, `runs`'s `files_committed`, `files_failed` and `notes`, `turns`'s `is_typed`, and `decisions`'s `compacted` and `dropped`. Each is declared last in its table, so a new store and a brought-forward one have the same column order. The same open drops the observation columns in `DROPPED_OBSERVATION_COLUMNS` and the `meta` key in `DROPPED_META_KEY` where a store still has them. A read-only open changes nothing and reports what is missing.
+- Every writable open of an existing store creates any table in `TABLES` the store lacks. A read-only open changes nothing and reports what is missing.
 
 ## 5. Commands and operations
 
