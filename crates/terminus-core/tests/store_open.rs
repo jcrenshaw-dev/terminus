@@ -1,4 +1,4 @@
-//! Opening the store, and the D-09 version gate that guards every open.
+//! Opening the store, and the version gate that guards every open.
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -44,7 +44,7 @@ fn with_env<T>(data: Option<&Path>, config: Option<&Path>, body: impl FnOnce() -
     out
 }
 
-/// STOR-07 / D-06, the whole order in one case: the environment override
+/// Where the store is, the whole order in one case: the environment override
 /// outranks the pointer, the pointer outranks the platform location, and an
 /// empty pointer is no pointer at all.
 ///
@@ -109,7 +109,7 @@ fn the_location_pointer_sits_below_the_environment_and_above_the_platform() {
 ///
 /// Falling through to the platform location for either of these would start a
 /// SECOND store beside the one the user moved, and both would be written to -
-/// the split-brain STOR-07 exists to prevent.
+/// the split-brain the location pointer exists to prevent.
 #[test]
 fn a_pointer_that_cannot_be_honored_fails_rather_than_resolving_elsewhere() {
     let config = tempfile::tempdir().unwrap();
@@ -182,8 +182,8 @@ fn data_dir_env_var_decides_where_the_store_lands() {
     assert!(dir.path().join(DB_FILE_NAME).is_file());
 }
 
-/// AC5. A store one archive format ahead of this build is refused, the message
-/// names both versions, and nothing on disk moves.
+/// A store one archive format ahead of this build is refused, the message names
+/// both versions, and nothing on disk moves.
 ///
 /// The store under test is a *copy* taken while another connection held the
 /// WAL open, so it carries a hot, non-empty WAL with no live connection - the
@@ -252,7 +252,7 @@ fn a_newer_archive_format_is_refused_without_touching_the_store() {
         "wrong error variant: {err:?}"
     );
 
-    // Byte equality, not a digest of it: this is the whole of AC5's "unchanged".
+    // Byte equality, not a digest of it: this is the whole of "nothing moves".
     assert!(
         std::fs::read(&target_db).unwrap() == before_db,
         "terminus.db changed on a refused open"
@@ -268,8 +268,9 @@ fn a_newer_archive_format_is_refused_without_touching_the_store() {
     assert_eq!(runs_count(&after), 1, "runs changed on a refused open");
 }
 
-/// STOR-05's other half: an older store opens, and says so, without rebuilding
-/// anything here. The rebuild itself is PLAN-2's.
+/// An older derived schema opens, and says so, without rebuilding anything
+/// here. The rebuild itself is tested in
+/// `crates/terminus-core/tests/reindex.rs`.
 #[test]
 fn an_older_derived_schema_opens_with_a_rebuild_outcome() {
     let dir = tempfile::tempdir().unwrap();
@@ -325,7 +326,7 @@ fn table_list(db: &Path) -> Vec<String> {
     names
 }
 
-/// STOR-10: an older archive format is refused by both opens, before any
+/// An older archive format is refused by both opens, before any
 /// writable connection, with the clean-install steps. There is no conversion,
 /// and a rebuild would stamp the new format over bytes only the old one reads.
 #[test]
@@ -398,7 +399,8 @@ fn a_file_that_is_not_a_store_is_named_as_such() {
     assert!(matches!(err, Error::NotAStore { .. }), "{err:?}");
 }
 
-/// D-10's first half: a read never creates the store it did not find.
+/// The read-only open's first rule: a read never creates the store it did not
+/// find.
 ///
 /// Asserted on the filesystem rather than on the error, because the failure
 /// this prevents - `terminus search` on a machine that has never ingested
@@ -424,8 +426,9 @@ fn a_read_only_open_of_a_missing_store_creates_nothing() {
     );
 }
 
-/// D-10's second half: the connection cannot write, whatever the caller asks of
-/// it. `readOnlyHint` is a claim about this flag and nothing else.
+/// The read-only open's second rule: the connection cannot write, whatever the
+/// caller asks of it. `readOnlyHint` is a claim about this flag and nothing
+/// else.
 #[test]
 fn a_read_only_connection_refuses_every_write() {
     let dir = tempfile::tempdir().unwrap();
@@ -453,7 +456,7 @@ fn a_read_only_connection_refuses_every_write() {
     }
 }
 
-/// D-18: a store written before this build opens, reports itself, and is left
+/// A store written before this build opens, reports itself, and is left
 /// exactly as it was - no bring-forward, no pragma, no byte of the store.
 ///
 /// **What "untouched" can mean for a WAL database.** Measured here: a read-only
@@ -549,8 +552,9 @@ fn directory_bytes(dir: &std::path::Path) -> Vec<(String, Vec<u8>)> {
     out
 }
 
-/// D-02: phase 6's two tables reach a store a phase-5 binary initialized, on the
-/// next ordinary `Store::open`, and nothing is rebuilt to get them there.
+/// The `decisions` and `labels` tables reach a store initialized before they
+/// existed, on the next ordinary `Store::open`, and nothing is rebuilt to get
+/// them there.
 ///
 /// The store under test is aged by dropping exactly the two tables, which is
 /// what a store written before they existed looks like. The assertion that
@@ -733,10 +737,10 @@ fn a_foreign_sqlite_database_is_refused_rather_than_initialized_over() {
     assert_eq!(rows, 1, "the refused open wrote over somebody else's data");
 }
 
-/// Owner-only from creation (PRIV-02), asserted path by path under the umask a
+/// Owner-only from creation, asserted path by path under the umask a
 /// default install actually runs at.
 ///
-/// The parent assertion is D-04: a directory terminus had to create on the way
+/// The parent assertion: a directory terminus had to create on the way
 /// to its own is NOT narrowed - a user whose `~/.local/share` did not exist
 /// must not find it 0700 after the first ingest.
 ///
@@ -770,7 +774,7 @@ fn a_fresh_store_and_its_sidecars_are_owner_only() {
     assert_eq!(
         mode(&parent),
         0o755,
-        "a parent created on the way keeps the umask's default (D-04)"
+        "a parent created on the way lost the umask's default"
     );
 
     let db = data.join(DB_FILE_NAME);
@@ -786,9 +790,9 @@ fn a_fresh_store_and_its_sidecars_are_owner_only() {
     }
 }
 
-/// AC3 and AC4 at the library boundary: a store an earlier build left wide is
-/// narrowed by one writable open, is not narrowed twice, and is not touched at
-/// all by a read-only one (D-05, D-06).
+/// At the library boundary: a store an earlier build left wide is narrowed by
+/// one writable open, is not narrowed twice, and is not touched at all by a
+/// read-only one.
 ///
 /// The symlink is the case the repair must refuse. `set_permissions` follows
 /// one, so a link left in `snapshots/` would otherwise hand a chmod to a file
@@ -884,9 +888,9 @@ fn a_wide_store_is_tightened_by_a_writable_open_and_by_nothing_else() {
         "the repair followed a symlink out of the data directory"
     );
 
-    // D-06: the second open finds every bit already right and issues no chmod,
-    // which is what leaves ctime alone. A chmod to the mode a file already has
-    // would move it.
+    // The second open finds every bit already right and issues no chmod, which
+    // is what leaves ctime alone. A chmod to the mode a file already has would
+    // move it.
     let before: Vec<(std::path::PathBuf, i64, i64)> = files
         .iter()
         .chain(directories.iter())
@@ -906,7 +910,7 @@ fn a_wide_store_is_tightened_by_a_writable_open_and_by_nothing_else() {
         );
     }
 
-    // D-05: a read-only open repairs nothing at all.
+    // A read-only open repairs nothing at all.
     widen();
     drop(Store::open_read_only(&data).expect("a read-only open of a wide store"));
     for dir in &directories {

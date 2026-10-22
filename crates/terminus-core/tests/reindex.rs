@@ -1,9 +1,9 @@
-//! AC4 / STOR-04: the derived tables come back from the blobs alone.
+//! The derived tables come back from the blobs alone.
 //!
 //! The comparison is byte-identical JSON for a fixed query set, and it carries
 //! turn ids rather than counts: a rebuild that renumbered turns would return
 //! the same number of hits pointing at different records, which is precisely
-//! what D-10's deterministic `turns.id` exists to prevent.
+//! what the deterministic `turns.id` exists to prevent.
 //!
 //! `terminus reindex` invoked as a *command* is asserted in
 //! `crates/terminus/tests/cli.rs`; this crate cannot spawn the binary.
@@ -53,7 +53,7 @@ impl Bench {
         Store::open(&self.data_dir).unwrap()
     }
 
-    /// Drop every derived table outright, as AC4 specifies.
+    /// Drop every derived table outright.
     ///
     /// Children first, so in reverse: `DERIVED_TABLES` is in creation order and
     /// the bundled SQLite enforces foreign keys, so dropping `turns` while
@@ -74,8 +74,8 @@ fn count(conn: &Connection, table: &str) -> i64 {
         .unwrap()
 }
 
-/// AC4. Drop `turns`, `turns_fts`, `entities` and `paths`, rebuild, and the
-/// fixed query set's JSON is byte-identical.
+/// Drop `turns`, `turns_fts`, `entities` and `paths`, rebuild, and the fixed
+/// query set's JSON is byte-identical.
 #[test]
 fn the_fixed_query_set_is_byte_identical_across_a_rebuild() {
     let bench = bench();
@@ -87,9 +87,9 @@ fn the_fixed_query_set_is_byte_identical_across_a_rebuild() {
     let hits: usize = before.matches(", ").count();
     assert!(hits > 10, "the query set returns too little to compare");
 
-    // And the same premise for the sections phase 3 added. Two empty sections
+    // And the same premise for the entity and path sections. Two empty sections
     // compare byte-identically across a rebuild that extracted nothing at all,
-    // which is exactly the extractor failure AC3 is meant to catch.
+    // which is exactly the extractor failure this comparison is meant to catch.
     let section = |name: &str| {
         let body = before
             .split_once(&format!("\"{name}\": [\n"))
@@ -117,7 +117,7 @@ fn the_fixed_query_set_is_byte_identical_across_a_rebuild() {
 
     assert_eq!(rebuilt.sessions, testkit::TRANSCRIPT_FIXTURES.len());
     assert!(rebuilt.turns > 0);
-    assert_eq!(testkit::query_set_json(&bench.conn()), before, "AC4");
+    assert_eq!(testkit::query_set_json(&bench.conn()), before, "the rebuild changed the query set");
     assert_eq!(
         testkit::archive_digest(&bench.conn()),
         archive_before,
@@ -126,7 +126,7 @@ fn the_fixed_query_set_is_byte_identical_across_a_rebuild() {
 }
 
 /// A rebuild over an intact index changes nothing either: the seam is
-/// idempotent, so `reindex` is safe to run whenever (D-10).
+/// idempotent, so `reindex` is safe to run whenever.
 #[test]
 fn rebuilding_an_intact_index_changes_nothing() {
     let bench = bench();
@@ -137,8 +137,8 @@ fn rebuilding_an_intact_index_changes_nothing() {
     assert_eq!(testkit::query_set_json(&bench.conn()), before);
 }
 
-/// STOR-04's actual claim: the blobs are the only input. If the derived tables
-/// were consulted, dropping them would change what comes back.
+/// What a rebuild actually claims: the blobs are the only input. If the derived
+/// tables were consulted, dropping them would change what comes back.
 #[test]
 fn the_rebuild_reads_nothing_but_the_blobs() {
     let bench = bench();
@@ -166,9 +166,8 @@ fn the_rebuild_reads_nothing_but_the_blobs() {
     }
 
     // The invented rows are counted BEFORE the rebuild, so "they are gone" is a
-    // claim about these rows and not about the table being empty - which it no
-    // longer is, since phase 3 fills `paths` from the blobs like everything
-    // else.
+    // claim about these rows and not about the table being empty - which it is
+    // not, since the rebuild fills `paths` from the blobs like everything else.
     let invented: i64 = bench
         .conn()
         .query_row(
@@ -202,7 +201,7 @@ fn the_rebuild_reads_nothing_but_the_blobs() {
     );
 }
 
-/// STOR-05's older-format branch, in the caller rather than in `Store::open`:
+/// The older-schema branch, in the caller rather than in `Store::open`:
 /// opening a store older than this build rebuilds its derived tables, leaves
 /// the archive alone and brings `meta` forward.
 ///
@@ -302,7 +301,7 @@ fn an_ingest_brings_an_older_store_forward_first() {
 /// to date whose rebuild rolled back is the state this must not produce.
 ///
 /// Only `derived_schema` is lowered: an older `archive_format` is refused by the
-/// open itself (STOR-10) and never reaches a rebuild.
+/// open itself and never reaches a rebuild.
 #[test]
 fn the_version_integers_move_with_the_rebuild() {
     let bench = bench();
@@ -331,7 +330,7 @@ fn the_version_integers_move_with_the_rebuild() {
 /// A `?` on the decompression aborted the whole rebuild on the first bad blob
 /// and named no session. Worse, `open_up_to_date` runs on the ingest path, so
 /// once `DERIVED_SCHEMA` was bumped a single corrupt session stopped every
-/// future ingest of every other transcript, with no repair path in phase 1.
+/// future ingest of every other transcript, with no repair path.
 /// `DESIGN-BRIEF.md:98`: "this session is damaged", never "the store is gone".
 #[test]
 fn a_corrupt_blob_is_skipped_and_named_rather_than_stopping_the_rebuild() {
@@ -392,8 +391,8 @@ fn a_corrupt_blob_is_skipped_and_named_rather_than_stopping_the_rebuild() {
     );
 }
 
-/// D-02, as the failure it prevents: a `reindex` must leave every observation
-/// row exactly where it was.
+/// `observations` is an archival table: a `reindex` must leave every
+/// observation row exactly where it was.
 ///
 /// The facts in these rows come off the session's block rows, and retention
 /// eviction deletes those rows, so a `reindex` that dropped the table would silently lose
@@ -449,7 +448,7 @@ fn a_reindex_leaves_every_observation_row_untouched() {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 8 D-03: the one case where the blob cannot answer.
+// The one case where the blob cannot answer.
 //
 // An evicted session has no blob and its `turns_fts` row cannot be
 // reconstructed by any other means - the table is `content=''`, so the

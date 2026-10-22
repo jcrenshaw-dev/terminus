@@ -60,8 +60,8 @@ fn a_fresh_store_carries_exactly_the_phase_two_tables() {
     }
 }
 
-/// D-10: `turns_fts` must be contentless *and* deletable, or a rebuild cannot
-/// be idempotent.
+/// `turns_fts` must be contentless *and* deletable, or a rebuild cannot be
+/// idempotent.
 #[test]
 fn turns_fts_is_contentless_and_deletable() {
     let (_dir, store) = fresh();
@@ -77,20 +77,20 @@ fn turns_fts_is_contentless_and_deletable() {
     assert!(sql.contains("contentless_delete=1"), "{sql}");
 }
 
-/// D-11 keeps two lineage signals apart, and each lives on its own table.
+/// Two lineage signals are kept apart, and each lives on its own table.
 #[test]
 fn the_two_lineage_columns_exist_on_their_own_tables() {
     let (_dir, store) = fresh();
     assert!(columns(store.conn(), "turns").contains("parent_uuid"));
     assert!(columns(store.conn(), "session_meta").contains("continues_from"));
 
-    // The point of D-11 is that neither replaces the other.
+    // The point of keeping them apart is that neither replaces the other.
     assert!(!columns(store.conn(), "turns").contains("continues_from"));
     assert!(!columns(store.conn(), "session_meta").contains("parent_uuid"));
 }
 
-/// D-04: turn coordinates address the uncompressed stream, so no column here
-/// may name a compressed position.
+/// Turn coordinates address the uncompressed stream, so no column here may
+/// name a compressed position.
 #[test]
 fn turn_coordinates_are_uncompressed_stream_coordinates() {
     let (_dir, store) = fresh();
@@ -144,8 +144,8 @@ fn a_turn_seq_past_the_reserved_space_panics_rather_than_folding() {
     turn_id(1, MAX_TURNS_PER_SESSION);
 }
 
-/// The FTS5 round trip D-10 depends on, against the real table rather than a
-/// scratch one: insert at an explicit rowid, match, delete, match again.
+/// The FTS5 round trip a rebuild depends on, against the real table rather
+/// than a scratch one: insert at an explicit rowid, match, delete, match again.
 #[test]
 fn an_fts_row_at_an_explicit_rowid_matches_then_deletes() {
     let (_dir, store) = fresh();
@@ -166,8 +166,8 @@ fn an_fts_row_at_an_explicit_rowid_matches_then_deletes() {
     assert!(matching(conn, "brillig").is_empty());
 }
 
-/// Derived tables start empty; phase 1 owns the tables and the rebuild path,
-/// not what fills them.
+/// Derived tables start empty: opening a store creates them, and only ingest
+/// or a rebuild fills them.
 #[test]
 fn derived_tables_start_empty() {
     let (_dir, store) = fresh();
@@ -321,7 +321,7 @@ fn index_count(conn: &Connection, name: &str) -> i64 {
     .unwrap()
 }
 
-/// D-19: an index added in a later phase reaches an existing store because
+/// An index added in a later build reaches an existing store because
 /// `reindex` runs the whole `CREATE_SQL` batch, and not because `Store::open`
 /// creates it.
 ///
@@ -346,7 +346,7 @@ fn the_project_index_reaches_a_store_that_predates_it() {
     assert_eq!(index_count(store.conn(), "idx_session_meta_project"), 1);
 }
 
-/// D-01: `observations` reaches a store written before it existed through
+/// `observations` reaches a store written before it existed through
 /// `bring_forward`'s missing-table arm, and costs no rebuild to get there.
 ///
 /// The alternative was a `DERIVED_SCHEMA` bump, which forces a full blob replay
@@ -378,7 +378,7 @@ fn the_observations_table_reaches_a_store_that_predates_it() {
     );
 }
 
-/// D-02: the table is archival. A `DERIVED_TABLES` entry would make `reindex`
+/// `observations` is archival. A `DERIVED_TABLES` entry would make `reindex`
 /// drop it, and an evicted session's row cannot be recomputed from its emptied
 /// blob.
 #[test]
@@ -390,7 +390,7 @@ fn observations_is_not_a_derived_table() {
     assert!(schema::TABLES.contains(&"observations"));
 }
 
-/// D-03: no column of `observations` may reference `turns`, which `reindex`
+/// No column of `observations` may reference `turns`, which `reindex`
 /// drops - the bundled SQLite enforces foreign keys, so the first `reindex`
 /// after the first observation would fail outright.
 #[test]
@@ -411,7 +411,7 @@ fn observations_declares_no_reference_to_turns() {
     assert!(sql.contains("REFERENCES sessions"), "{sql}");
 }
 
-// --- Phase 8: session_meta.capture_mode (ING-07, D-13, D-19) -----------------
+// --- session_meta.capture_mode -----------------------------------------------
 
 /// A config directory holding one `terminus.toml` naming a capture mode.
 #[cfg(feature = "testkit")]
@@ -427,7 +427,8 @@ fn mode_config(mode: &str) -> (tempfile::TempDir, terminus_core::Config) {
     (dir, config)
 }
 
-/// D-13's rule, both directions: `full` only while every append was full.
+/// The capture-mode rule, both directions: `full` only while every append was
+/// full.
 ///
 /// The asymmetry is the point. A `full` pass over a session already captured
 /// lean must NOT move the column back, because `blob::append` copies completed

@@ -1,4 +1,4 @@
-//! Recovery at the top of every run (ING-03, D-24).
+//! Recovery at the top of every run.
 //!
 //! Every case here is a state a killed pass can leave behind, and the assertion
 //! is always the same shape: the watermark comes back to what the committed
@@ -158,9 +158,10 @@ fn a_pass_lowers_an_overrun_watermark_and_drops_an_orphaned_one() {
     assert!(summary.failures.is_empty(), "{:?}", summary.failures);
 }
 
-/// ING-03 says every run, and single-file `terminus ingest <path.jsonl>` is a
-/// run. Wiring only the pass would leave this entry point resuming from an
-/// offset the archive never reached, losing the gap from the blob in silence.
+/// Recovery runs at the top of every run, and a single-file
+/// `terminus ingest <path.jsonl>` is a run. Wiring only the pass would leave
+/// this entry point resuming from an offset the archive never reached, losing
+/// the gap from the blob in silence.
 #[test]
 fn single_file_ingest_recovers_before_it_reads_the_transcript() {
     let bench = bench();
@@ -232,7 +233,7 @@ fn a_zero_watermark_naming_no_session_is_left_alone() {
     assert_eq!(bench.watermarks(), before);
 }
 
-/// A session archived with no `session_meta` row is the damaged state phase 1
+/// A session archived with no `session_meta` row is the damaged state ingest
 /// refuses to guess at and `verify` reports. Recovery must not touch its
 /// watermark either - that would be the same guess, made somewhere quieter.
 #[test]

@@ -1,9 +1,10 @@
 //! The seam ingest and reindex share.
 //!
-//! Two properties matter in this phase and neither is about what the FTS row
-//! contains: re-deriving a turn is idempotent (D-10, which is what makes AC4's
-//! rebuild safe), and the seam is the only writer, so calling it directly
-//! reproduces exactly what ingest wrote.
+//! Two properties matter here and neither is about what the FTS row contains:
+//! re-deriving a turn is idempotent, because the FTS rowid is the deterministic
+//! `turns.id`, which is what makes a `reindex` rebuild safe; and the seam is
+//! the only writer, so calling it directly reproduces exactly what ingest
+//! wrote.
 
 #![cfg(feature = "testkit")]
 
@@ -96,7 +97,7 @@ fn ingest_writes_one_fts_row_per_turn_at_the_turn_id() {
         .unwrap()
         .map(Result::unwrap)
         .collect();
-    assert_eq!(ids, rowids, "rowid IS turns.id (D-10)");
+    assert_eq!(ids, rowids, "an FTS rowid is not its turns.id");
 }
 
 /// A token that appears in exactly one turn across the whole fixture corpus
@@ -118,7 +119,8 @@ fn a_unique_token_matches_exactly_one_turn() {
 }
 
 /// The eleven state record types produce no FTS row, so a token that only ever
-/// appears in one of them is unfindable. This is D-03 seen from the index side.
+/// appears in one of them is unfindable. A record without both a `uuid` and a
+/// `timestamp` is not a turn, and this is that rule seen from the index side.
 #[test]
 fn state_records_contribute_no_fts_row() {
     let bench = bench();
@@ -159,8 +161,9 @@ fn re_derive_every_turn(bench: &Bench, conn: &Connection) {
     tx.commit().unwrap();
 }
 
-/// D-10's idempotence, which is what makes AC4's rebuild safe: re-deriving a
-/// turn leaves the row count and the matching rowid unchanged.
+/// Re-deriving a turn leaves the row count and the matching rowid unchanged.
+/// That idempotence, from a deterministic `turns.id`, is what makes a `reindex`
+/// rebuild safe.
 #[test]
 fn re_deriving_a_turn_changes_nothing() {
     let bench = bench();
@@ -219,10 +222,10 @@ fn the_seam_reproduces_what_ingest_wrote_for_one_turn() {
 /// it writes: re-deriving a turn must not double its rows, and a value that
 /// stopped being extracted must stop having one.
 ///
-/// Phase 1 asserted the opposite here - that neither table ever gained a row -
-/// which was true of a phase that had no extractor. What survives from it is the
-/// half that still matters: no second writer exists, so every row in either
-/// table came through `derive_turn` and a rebuild reproduces it.
+/// The rows are known exactly, and re-deriving every turn the way a rebuild
+/// does leaves the same rows and not twice as many. No second writer exists, so
+/// every row in either table came through `derive_turn` and a rebuild
+/// reproduces it.
 #[test]
 fn the_seam_owns_the_entity_and_path_rows() {
     let bench = bench();
@@ -268,8 +271,8 @@ fn entity_rows(conn: &Connection) -> Vec<(i64, String, String)> {
 }
 
 /// The seam must not open a transaction of its own: ingest commits the blob,
-/// the turn rows and the watermark together (STOR-02), so a rollback of the
-/// caller's transaction has to take the derived rows with it.
+/// the turn rows and the watermark together, so a rollback of the caller's
+/// transaction has to take the derived rows with it.
 #[test]
 fn the_seam_writes_inside_the_callers_transaction() {
     let dir = tempfile::tempdir().unwrap();
@@ -278,8 +281,8 @@ fn the_seam_writes_inside_the_callers_transaction() {
     testkit::plant_session(conn, "k", 0, &[0]);
 
     // A real record shape rather than a bare `"message": "quixotic"`: the body
-    // is a projection of `message.content` and the three other subtrees D-01
-    // names (`crates/terminus-core/src/index/text.rs`), so a string sitting
+    // is a projection of `message.content` and the three other subtrees
+    // `crates/terminus-core/src/index/text.rs` reads, so a string sitting
     // where every real record carries an object projects to nothing and this
     // test would assert the rollback of a row that was never written.
     let record = br#"{"type":"user","uuid":"u1","timestamp":"t","message":{"role":"user","content":[{"type":"text","text":"quixotic"}]}}"#;
@@ -329,9 +332,9 @@ fn one_turn_row(conn: &Connection, id: i64) -> (i64, i64, String, i64, i64) {
         .unwrap_or_else(|| panic!("no turn row {id}"))
 }
 
-/// D-21 through the seam itself: the boundary row is written by `derive_turn`
-/// and by nothing else, and it is cleared the same way `entities` and `paths`
-/// are - so a turn that stops being a boundary stops having one.
+/// The compaction boundary row, through the seam itself: it is written by
+/// `derive_turn` and by nothing else, and it is cleared the same way `entities`
+/// and `paths` are - so a turn that stops being a boundary stops having one.
 ///
 /// The clearing arm is not hypothetical bookkeeping. A rebuild re-derives every
 /// turn at a *known* id, so a row left behind by an earlier derive would
@@ -403,14 +406,15 @@ fn the_seam_owns_the_boundary_row_and_clears_it_when_the_turn_is_not_one() {
     );
 }
 
-/// INJ-07 through the one seam: every `user` row of a freshly ingested store
-/// carries a classification and every other row carries none.
+/// Whether a `user` row is a prompt someone typed, through the one seam: every
+/// `user` row of a freshly ingested store carries that classification and every
+/// other row carries none.
 ///
 /// Two count queries and no exceptions, which is what "exactly two states and
 /// no third" has to mean if it is to mean anything - a `NOT NULL DEFAULT` would
 /// satisfy the first of them while quietly reading every underived row as one
-/// class (phase 1 D-04). The store holds every transcript fixture, so the
-/// claim covers the sidecars and the compacted session too and not one file.
+/// class. The store holds every transcript fixture, so the claim covers the
+/// sidecars and the compacted session too and not one file.
 #[test]
 fn every_user_row_of_a_fresh_store_is_classified_and_nothing_else_is() {
     let dir = tempfile::tempdir().unwrap();
@@ -451,8 +455,8 @@ fn every_user_row_of_a_fresh_store_is_classified_and_nothing_else_is() {
 
     // The two fixtures the values are known for, by name. `session-errors-a`
     // is three tool results and nothing else - it is the "no typed prompt at
-    // all" fixture the brief's silent arm is built on (D-13) - and
-    // `session-recall` is one prompt someone typed.
+    // all" fixture the brief's silent arm is built on - and `session-recall` is
+    // one prompt someone typed.
     assert_eq!(
         classified(&conn, "session-errors-a.jsonl"),
         vec![Some(false), Some(false), Some(false)]
