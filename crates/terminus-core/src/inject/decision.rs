@@ -1,4 +1,4 @@
-//! What one `UserPromptSubmit` decided, written down (FEED-01).
+//! What one `UserPromptSubmit` decided, written down.
 //!
 //! One JSON file per prompt event, under a `decisions` subdirectory of the data
 //! directory, drained into the `decisions` table by a later ingest pass. It
@@ -6,14 +6,14 @@
 //! scored and what it matched on, the turns injected and what they cost, the
 //! turns refused and why, and the threshold values that were in force.
 //!
-//! **A file and not a table (D-01).** The hook never writes SQLite. An ingest
+//! **A file and not a table.** The hook never writes SQLite. An ingest
 //! or a backfill was measured holding the store for 49 s over the real corpus,
 //! and a write on the prompt path would put the user behind exactly the machine
 //! state that provoked it - while a read at worst returns nothing. So the prompt
 //! path spends one `write` plus one `rename` on a thread the binary never joins,
 //! and the pass that already holds the lock does the insert.
 //!
-//! **Every prompt writes one, including the ones that inject nothing (D-11).**
+//! **Every prompt writes one, including the ones that inject nothing.**
 //! A prompt that named no path and no identifier-shaped token never opens the
 //! store at all, and it still leaves a record: non-fires are where the miss data
 //! lives (`DESIGN-BRIEF.md:272`), and precision computed only over the prompts
@@ -25,7 +25,7 @@
 //! file per prompt, and joined against the transcripts that follow.
 //!
 //! **This is the one place injection reads a clock.** A decision anchors to its
-//! session by `session_id` plus wall clock and never by a turn index (D-04),
+//! session by `session_id` plus wall clock and never by a turn index,
 //! because the injector deliberately never reads the live transcript and so
 //! cannot know one. The clock is read as unix milliseconds and formatted by
 //! SQLite at drain time, which keeps one spelling of a stored timestamp in the
@@ -81,7 +81,7 @@ pub struct Candidate {
     pub relevance: f64,
     pub entity_score: f64,
     pub entity_count: usize,
-    /// The distinct `(kind, value_norm)` pairs this candidate matched (D-05).
+    /// The distinct `(kind, value_norm)` pairs this candidate matched.
     /// Without them a replayed label change cannot be attributed to a path rule
     /// rather than a symbol rule, which is the question replay exists to answer.
     #[serde(default)]
@@ -92,11 +92,11 @@ pub struct Candidate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Injected {
     pub turn_id: i64,
-    /// Characters, never tokens (D-12): the same proxy the budget is spent in.
+    /// Characters, never tokens: the same proxy the budget is spent in.
     pub chars: usize,
 }
 
-/// The threshold values in force when this decision was taken (D-08).
+/// The threshold values in force when this decision was taken.
 ///
 /// Logged per decision because they are compile-time constants: they are not
 /// configurable by design, so the only way a later analysis can know which
@@ -125,18 +125,19 @@ pub struct Decision {
     /// The Claude Code session, which is also what names the file.
     pub session_id: Option<String>,
     /// Wall clock, unix milliseconds, read once when the prompt arrived. Half of
-    /// D-04's anchor; the drain formats it into the stored timestamp shape.
+    /// the record's anchor, with `session_id`; the drain formats it into the
+    /// stored timestamp shape.
     pub at_ms: i64,
     pub cwd: Option<String>,
     /// The prompt as submitted. Stored whole: the archive already holds every
     /// prompt verbatim, so a truncated copy here would be a second, lossier
     /// record of something the store has losslessly.
     pub prompt: String,
-    /// Max `sessions.session_no` when the decision was taken (D-10), or `None`
+    /// Max `sessions.session_no` when the decision was taken, or `None`
     /// when the prompt never opened the store - the drain stamps it then.
     pub watermark_session_no: Option<i64>,
     /// The spellings the prompt was asked about, strongest first. Empty is the
-    /// common case and the one D-11 exists for.
+    /// common case and the one recording every prompt exists for.
     #[serde(default)]
     pub spellings: Vec<String>,
     #[serde(default)]
@@ -151,7 +152,7 @@ pub struct Decision {
     /// state file's cumulative, capped list.
     #[serde(default)]
     pub suppressed: Vec<Suppressed>,
-    /// Whether the compacted pool was in force (INJ-05), and what it admitted.
+    /// Whether the compacted pool was in force, and what it admitted.
     #[serde(default)]
     pub compacted: bool,
     #[serde(default)]
@@ -189,9 +190,9 @@ impl Decision {
     /// row in a log nothing decides on yet.
     ///
     /// **It never creates the data directory itself**, which is the one bound
-    /// D-11's "every prompt writes a record" gives way to. A hook must not leave
-    /// a directory behind on a machine that has installed terminus and never
-    /// ingested - INJ-06, and `inject`'s own
+    /// "every prompt writes a record" gives way to. A hook must not leave a
+    /// directory behind on a machine that has installed terminus and never
+    /// ingested - injection's silence rule, and `inject`'s own
     /// `a_data_directory_with_no_store_is_nothing_and_creates_nothing`. Nothing
     /// is lost that could have been analysed: a decision is only ever read
     /// beside the archive it was taken against, the hook spawns the ingest that
@@ -315,8 +316,8 @@ fn write_file(dir: &Path, decision: &Decision) -> Option<PathBuf> {
     // and no `join` at all.
     let stem = file_stem(decision.session_id.as_deref()?)?;
     // `decisions/` alone: [`Decision::save`] refuses a data directory that does
-    // not exist (INJ-06), so the parent is never this call's to create and the
-    // leaf is the only thing here to narrow (D-04).
+    // not exist, so the parent is never this call's to create and the
+    // leaf is the only thing here to narrow.
     crate::owner_only::create_dir_all(dir).ok()?;
     let bytes = serde_json::to_vec(decision).ok()?;
 
@@ -471,8 +472,8 @@ mod tests {
         assert!(found[0].path.starts_with(dir.path().join(DIR_NAME)));
     }
 
-    /// D-11's shape: a prompt that never opened the store still writes a record,
-    /// and it is a record of nothing having happened.
+    /// A prompt that never opened the store still writes a record, and it is a
+    /// record of nothing having happened.
     #[test]
     fn a_non_fire_is_a_record_like_any_other() {
         let dir = tempfile::tempdir().unwrap();
@@ -530,9 +531,9 @@ mod tests {
         assert!(data_dir.join(DIR_NAME).is_dir());
     }
 
-    /// PRIV-02, PRIV-04: a decision record carries the prompt's spellings, its
-    /// candidates and what was injected, so neither the directory nor the file
-    /// is readable by group or world.
+    /// A decision record carries the prompt's spellings, its candidates and
+    /// what was injected, so neither the directory nor the file is readable by
+    /// group or world.
     ///
     /// The data directory is made by hand at the umask's own 0755 and stays
     /// there: [`Decision::save`] refuses a data directory that does not exist,
@@ -564,8 +565,8 @@ mod tests {
         assert_eq!(std::fs::read_dir(&decisions).unwrap().count(), 1);
     }
 
-    /// INJ-06: a machine that has installed terminus and never ingested is left
-    /// exactly as it was, decision log included.
+    /// A machine that has installed terminus and never ingested is left exactly
+    /// as it was, decision log included.
     #[test]
     fn a_data_directory_that_does_not_exist_is_not_created_to_hold_a_record() {
         let dir = tempfile::tempdir().unwrap();

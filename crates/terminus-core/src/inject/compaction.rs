@@ -1,16 +1,16 @@
-//! The turns that fell out of the model's context (INJ-05, D-07).
+//! The turns that fell out of the model's context.
 //!
 //! A compaction rewrites what the session is carrying and appends one
 //! `compact_boundary` record saying which messages survived. Ingest stored that
-//! record's `compactMetadata` object verbatim in `compactions.metadata`
-//! and derived nothing from it (phase 2 D-08), deliberately: the format has
-//! exactly one real example across 300,556 measured records, and a wrong
-//! reading derived at ingest would cost a reingest to correct while a wrong
-//! reading derived here costs a query.
+//! record's `compactMetadata` object verbatim in `compactions.metadata` and
+//! derived nothing from it, deliberately: the format has exactly one real
+//! example across 300,556 measured records, and a wrong reading derived at
+//! ingest would cost a reingest to correct while a wrong reading derived here
+//! costs a query.
 //!
 //! **The dropped set is the complement of `preservedMessages.uuids`**, over the
 //! session's own turns before the boundary, where "before" is a lower
-//! `stream_offset` (D-21). A boundary sits at its own byte offset whether or
+//! `stream_offset`. A boundary sits at its own byte offset whether or
 //! not it is a turn. Three other readings are available
 //! in the same object and all three are wrong, measured on 2026-08-20 against
 //! the one real boundary in the corpus:
@@ -25,7 +25,7 @@
 //!   it is not: the preserved records sat at indices 31-35 and 41, while record
 //!   43 preceded the boundary and was not preserved. That record's whole class
 //!   of turn - recent, dropped, and the most likely thing the session was just
-//!   working on - is exactly what INJ-05 exists to offer back.
+//!   working on - is exactly what the compacted pool exists to offer back.
 //!
 //! **Every failure is an empty set, never an error.** A boundary whose
 //! metadata is null, bytes that are not JSON, JSON that is not an object and an
@@ -35,10 +35,11 @@
 //! turn a shape change upstream into a prompt that fails.
 //!
 //! **A session with no boundary row is `None`, not an empty set**, and the
-//! difference is what D-08's flag turns on: an empty set means the compaction
-//! is accounted for and the debt is paid, while no row at all may only mean the
-//! ingest that commits it is still running. Collapsing the two would drop a
-//! compaction's turns on exactly the contended machine that produced them.
+//! difference is what the compaction flag turns on: an empty set means the
+//! compaction is accounted for and the debt is paid, while no row at all may
+//! only mean the ingest that commits it is still running. Collapsing the two
+//! would drop a compaction's turns on exactly the contended machine that
+//! produced them.
 
 use std::collections::BTreeSet;
 
@@ -54,10 +55,10 @@ use rusqlite::{Connection, OptionalExtension};
 ///
 /// **The most recent boundary and not every boundary.** A session compacted
 /// twice dropped the first boundary's turns long ago and the model has been
-/// through a whole context since; what INJ-05 is about is what fell out just
-/// now. Ordered by `stream_offset`, which is byte order within the session
-/// stream and total, rather than by `ts` - 31 of 62 sampled real transcripts
-/// carry a record whose timestamp runs backwards.
+/// through a whole context since; what the compacted pool is about is what fell
+/// out just now. Ordered by `stream_offset`, which is byte order within the
+/// session stream and total, rather than by `ts` - 31 of 62 sampled real
+/// transcripts carry a record whose timestamp runs backwards.
 pub fn dropped(conn: &Connection, session_key: &str) -> Option<BTreeSet<i64>> {
     let (stream_offset, metadata) = boundary(conn, session_key)?;
     let preserved = preserved_uuids(metadata.as_deref());
@@ -135,7 +136,7 @@ fn preserved_uuids(metadata: Option<&[u8]>) -> BTreeSet<String> {
 /// than the boundary's.
 ///
 /// Strictly lower, which is what keeps the boundary record itself out of the
-/// dropped set when it is a turn (phase 2 D-21): it is the one record of the
+/// dropped set when it is a turn: it is the one record of the
 /// compaction the model definitely still has. Turns are written in stream
 /// order, so for a boundary that is a turn this is the same set a `turn_seq`
 /// comparison gives.

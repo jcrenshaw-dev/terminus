@@ -1,12 +1,12 @@
-//! The `SessionStart` resume brief (INJ-01, INJ-02).
+//! The `SessionStart` resume brief.
 //!
 //! What a session opens knowing: where the last session in this project left
 //! off - its date, the branch it ended on, the last thing said in either
 //! direction - and how much of the project is archived and reachable. Every
 //! value comes from a stored row, so two runs against an unchanged store render
-//! the same bytes (INJ-02).
+//! the same bytes.
 //!
-//! **The quoted prompt is a turn the person typed (INJ-07).** "The last thing
+//! **The quoted prompt is a turn the person typed.** "The last thing
 //! said" in the user's direction is not the last `user` record: the harness
 //! writes tool results, `isMeta` command caveats and `<task-notification>`
 //! envelopes as `user` records as well, and 12.3% of measured sessions end on
@@ -14,7 +14,7 @@
 //! `parse::record` and rebuilt from the archive alone, and the brief spends exactly
 //! one `AND` on it - see [`last_turn`].
 //!
-//! The counts are read the way D-09 requires: the project-only projection
+//! The counts are read one way only: the project-only projection
 //! `scope::resolve` has already run, plus one targeted `count(*)` per number,
 //! and never `config::visible::sessions`. Measured on a store shaped like the
 //! real one - 2,000 sessions, 250,000 turns, warm - `sessions()` costs 6.2-6.8
@@ -23,16 +23,16 @@
 //! budget here is single digit milliseconds, so a brief built on it would spend
 //! the budget before reading a useful row.
 //!
-//! **The working-state delta is the branch and nothing else (D-10).**
+//! **The working-state delta is the branch and nothing else.**
 //! `session_meta.branch` is the only git fact the archive holds, and
 //! `DESIGN-BRIEF.md:230` asks for HEAD-then-versus-now and a dirty-file list as
 //! well. Both need `git`, whose 10-30 ms process spawn is the whole budget
-//! several times over - phase 3 D-12 already bars `project::Resolver` from the
+//! several times over - `project::Resolver` is already kept off the
 //! cold-start path for the same reason. So no `std::process::Command` appears
 //! anywhere in this module; the model can check live git itself in one cheap
 //! tool call, and this brief tells it what the archive knew.
 //!
-//! **Nothing here reads a clock (INJ-02).** No `SystemTime`, no `Instant`, no
+//! **Nothing here reads a clock.** No `SystemTime`, no `Instant`, no
 //! elapsed-time or "as of" phrasing, and no count that depends on when the read
 //! happened: every value is a stored one, dates are rendered at day resolution,
 //! and anything ordered is ordered by a stored key with a TOTAL order - the
@@ -42,7 +42,7 @@
 //! prefix cache, which nothing local can observe; the byte identity is the
 //! property actually built here and it stands on its own.
 //!
-//! **The whole brief is framed (D-02, D-08).** A header line saying the block
+//! **The whole brief is framed.** A header line saying the block
 //! is quoted history and not instructions, then everything below between the
 //! `inject` module's fixed tags, the closing tag last. No turn is excluded
 //! here: the brief quotes the last typed prompt and the last assistant turn,
@@ -51,7 +51,7 @@
 //! **The one thing it writes is which turns it quoted.** A brief that rendered
 //! records its turn ids in the session's [`super::state`] file, so that the
 //! prompt arm does not spend a prompt re-injecting a turn already sitting on
-//! screen above it (INJ-04). Nothing else here writes anything, and a brief
+//! screen above it. Nothing else here writes anything, and a brief
 //! that rendered nothing writes nothing at all.
 //!
 //! **Nothing here fails.** Every block is an `Option` and the brief is the ones
@@ -77,17 +77,17 @@ use crate::store::archive;
 /// failure: see the module doc on `inject`.
 pub fn session_start(data_dir: &Path, config: &Config, payload: &Payload) -> Option<String> {
     // First, and before anything that can decline to render: the flag is what
-    // INJ-05 is owed, and a machine whose store is not there yet still just
-    // compacted a session (D-08).
+    // the prompt after a compaction is owed, and a machine whose store is not
+    // there yet still just compacted a session.
     if payload.source == Some(super::COMPACT_SOURCE) {
         owe_compaction(data_dir, payload);
     }
     let store = super::open(data_dir)?;
     let scoped = super::scoped(store.conn(), config, payload)?;
-    // Resolved at the entry point that holds the `Config` and carried down
-    // (phase 4 D-01). A brief is hook stdout, which is the model's first
-    // context of the session, so its quotations are an egress boundary in
-    // exactly the way a search excerpt is.
+    // Resolved at the entry point that holds the `Config` and carried down. A
+    // brief is hook stdout, which is the model's first context of the session,
+    // so its quotations are an egress boundary in exactly the way a search
+    // excerpt is.
     let brief = render(
         store.conn(),
         &scoped,
@@ -99,8 +99,8 @@ pub fn session_start(data_dir: &Path, config: &Config, payload: &Payload) -> Opt
 }
 
 /// What the brief [`session_start`] would render read from the archive: the
-/// block rows fetched and blocks decompressed for the two turns it quotes
-/// (D-14). Renders the same brief, writes no state and emits nothing, so the
+/// block rows fetched and blocks decompressed for the two turns it quotes.
+/// Renders the same brief, writes no state and emits nothing, so the
 /// hook's output stays exactly what it was. Test support only.
 #[cfg(feature = "testkit")]
 pub fn session_start_reads(
@@ -119,7 +119,7 @@ pub fn session_start_reads(
     Some(brief.reads)
 }
 
-/// Leave the next prompt an injection to make (INJ-05, D-08).
+/// Leave the next prompt an injection to make.
 ///
 /// A compaction fires a `SessionStart` of its own, and the brief it renders is
 /// the ordinary one - what changed is that the model just lost most of its
@@ -141,7 +141,7 @@ fn owe_compaction(data_dir: &Path, payload: &Payload) {
     state.save(data_dir, payload.session_id);
 }
 
-/// Tell this session's state file which turns the brief just quoted (INJ-04).
+/// Tell this session's state file which turns the brief just quoted.
 ///
 /// The one write this arm makes, and the reason it exists is on the other side:
 /// the prompt arm refuses to inject a turn the session already has, and a turn
@@ -175,8 +175,8 @@ pub const MAX_BRIEF_CHARS: usize = 10_000;
 /// A rendered brief: the text the hook emits and the turns it quoted.
 ///
 /// The ids travel with the text rather than being recovered from it, because
-/// the brief does not name them - it is prose, and INJ-01 wants it to stay
-/// prose - while INJ-04 still has to know which turns this session was handed.
+/// the brief does not name them - it is prose, and stays prose - while the
+/// prompt arm still has to know which turns this session was handed.
 struct Brief {
     text: String,
     /// The turns quoted in [`Brief::text`], after the budget had its say.
@@ -192,9 +192,9 @@ struct Brief {
 /// session is resuming, and the pointer is the standing fact that outlives it.
 /// A block that cannot be rendered is dropped rather than failing the brief.
 ///
-/// `redaction` reaches the quotes before this function measures anything, which
-/// is phase 4 D-06: the filter is spent out of the budget rather than applied to
-/// what the budget left. A marker consuming room a quotation would otherwise
+/// `redaction` reaches the quotes before this function measures anything, on
+/// purpose: the filter is spent out of the budget rather than applied to what
+/// the budget left. A marker consuming room a quotation would otherwise
 /// have had is the decided behaviour. Filtering after [`clip`] is what it buys
 /// out - a marker cut in half leaves a nameless partial value no shape rule can
 /// catch, and the brief would be the one output where a long turn leaks.
@@ -202,9 +202,9 @@ struct Brief {
 /// The head line, the branch and the index pointer are built here out of
 /// `session_meta` and counts and are not redacted. The day, the branch and the
 /// project label are archived strings all the same, so each has any closing tag
-/// neutralized where it is built (D-05).
+/// neutralized where it is built.
 ///
-/// **All of it goes inside the frame (D-02, D-06).** The header and both tags
+/// **All of it goes inside the frame.** The header and both tags
 /// are a fixed cost that comes off first; a budget they do not fit renders no
 /// brief at all, so [`remember`] writes nothing. Nor does a budget whose room
 /// after the frame cannot hold more than [`excerpt::ELISION`]: any cut there
@@ -296,7 +296,7 @@ fn assemble(continuity: Option<&Continuity>, pointer: Option<&str>) -> String {
     blocks.join("\n\n")
 }
 
-/// INJ-01's continuity block, kept in pieces until the budget is known.
+/// The continuity block, kept in pieces until the budget is known.
 ///
 /// The head is fixed-length in everything but the project key and the branch
 /// name; the two quoted turns are whatever the archive holds. Rendering them
@@ -311,7 +311,7 @@ struct Continuity {
 ///
 /// The id is never rendered - the brief is prose - and is carried only so that
 /// [`remember`] can tell the prompt arm what this session has already been
-/// shown (INJ-04).
+/// shown.
 struct Quote {
     turn_id: i64,
     text: String,
@@ -427,7 +427,7 @@ struct LastSession {
     branch: Option<String>,
 }
 
-/// INJ-01's continuity blocks: which session was last here, when it ended, on
+/// The continuity blocks: which session was last here, when it ended, on
 /// what branch, and the last thing said in each direction, with what reading
 /// those two turns cost.
 fn last_session(
@@ -439,7 +439,7 @@ fn last_session(
         return (None, excerpt::Reads::default());
     };
     // Archived strings, every one: the label is a `cwd` out of a transcript,
-    // the day is cut from a stored `ts` and the branch is `gitBranch` (D-05).
+    // the day is cut from a stored `ts` and the branch is `gitBranch`.
     let project = super::neutralize(project_label(scoped));
     let day = row
         .last_turn_at
@@ -468,16 +468,16 @@ fn last_session(
 ///
 /// Three things this query is not. It is not `is_final`: that column is
 /// declared in the schema and never written, so ordering by it would name a
-/// session for a reason nothing establishes (D-17). It is not a date
+/// session for a reason nothing establishes. It is not a date
 /// comparison: 22,412 turns of a 180-file sample carry exactly the shape
-/// `NNNN-NN-NNTNN:NN:NN.NNNZ` (phase 3 D-23), which sorts lexicographically, so
+/// `NNNN-NN-NNTNN:NN:NN.NNNZ`, which sorts lexicographically, so
 /// no parsing happens on the stored side. And it does not consider sidecars: a
 /// session with a `parent_session_key` is a subagent transcript, and the brief
 /// carries no subagent turns (`DESIGN-BRIEF.md:239`).
 ///
-/// The tie-break on `session_key` is INJ-02's, not SQL's: two sessions whose
-/// last turn carries the same timestamp must not be ordered by whatever the
-/// query planner did that run, or the brief changes without the archive
+/// The tie-break on `session_key` is the brief's own, not SQL's: two sessions
+/// whose last turn carries the same timestamp must not be ordered by whatever
+/// the query planner did that run, or the brief changes without the archive
 /// changing.
 ///
 /// A null `last_turn_at` sorts last under `DESC`, so a session that has one
@@ -507,7 +507,7 @@ fn last_session_row(
     Ok(row)
 }
 
-/// The day of a stored timestamp, at day resolution (INJ-02).
+/// The day of a stored timestamp, at day resolution.
 ///
 /// `get` and not `&ts[..10]`, for the reason `cmd::search::day` states: `len`
 /// counts bytes, the slice needs a char boundary, and a stored `ts` is any JSON
@@ -522,7 +522,7 @@ fn day(ts: &str) -> &str {
 /// The last turn the person TYPED and the last assistant turn of one session,
 /// as text.
 ///
-/// The prompt side is not the last `user` record (INJ-07): Claude Code writes
+/// The prompt side is not the last `user` record: Claude Code writes
 /// tool results, `isMeta` command caveats and `<task-notification>` envelopes as
 /// `user` records too, and one session in eight ends on one of them. Quoting
 /// that back is a brief that opens by telling the model a file listing was the
@@ -530,13 +530,13 @@ fn day(ts: &str) -> &str {
 /// typed `user` record at all renders no "It last asked" line, because the
 /// lookup returns nothing and [`Continuity::text`] omits what it has not got.
 ///
-/// **One read for the pair, of only the rows it covers (D-13).** Both turns are
+/// **One read for the pair, of only the rows it covers.** Both turns are
 /// in the same session, so one read fetches and decompresses each block row the
 /// two turns cover once - usually the session's last row - on the path with the
 /// tightest budget in the product. What it cost comes back beside the quotes.
 ///
 /// `turn_seq` order and never `ts` order: 31 of 62 sampled real transcripts
-/// carry a record whose timestamp runs backwards (phase 3 D-22), so the last
+/// carry a record whose timestamp runs backwards, so the last
 /// turn by clock is not the last turn of the conversation.
 ///
 /// The text is cut through [`excerpt::of_record_with`] under the caller's
@@ -587,12 +587,12 @@ fn last_exchange(
 }
 
 /// `(id, stream_offset, byte_len)` of one session's last turn of a record type,
-/// skipping the `user` records nobody typed (INJ-07).
+/// skipping the `user` records nobody typed.
 ///
-/// D-04: both offsets address the UNCOMPRESSED session stream, never a block.
+/// Both offsets address the UNCOMPRESSED session stream, never a block.
 /// `UNIQUE (session_key, turn_seq)` covers the lookup. The id comes back too
-/// because INJ-04 suppresses a turn the brief quoted and cannot recognize one
-/// from its text.
+/// because the prompt arm suppresses a turn the brief quoted and cannot
+/// recognize one from its text.
 ///
 /// **`is_typed IS NOT 0` and not `is_typed = 1`**, which is what lets one
 /// statement serve all three callers. `IS NOT` is SQLite's null-safe
@@ -607,7 +607,7 @@ fn last_exchange(
 /// (450,834 turns), the lookup costs 0.002 ms and a variant forced to scan a
 /// 2,465-turn session backwards without matching costs 0.362 ms, both planned
 /// as `SEARCH turns USING INDEX sqlite_autoindex_turns_1`, against a 10 ms
-/// wall; real scan depth is p50 27, p90 181, p99 404, max 520 rows (D-11).
+/// wall; real scan depth is p50 27, p90 181, p99 404, max 520 rows.
 fn last_turn(conn: &Connection, session_key: &str, record_type: &str) -> Option<(i64, i64, i64)> {
     conn.query_row(
         "SELECT id, stream_offset, byte_len FROM turns \
@@ -621,7 +621,7 @@ fn last_turn(conn: &Connection, session_key: &str, record_type: &str) -> Option<
     .flatten()
 }
 
-/// INJ-01's index pointer: how much of this project is archived, and that there
+/// The index pointer: how much of this project is archived, and that there
 /// are tools to reach it with.
 ///
 /// The tool names are spelled here rather than taken from the MCP module

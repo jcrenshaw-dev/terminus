@@ -1,4 +1,4 @@
-//! The `UserPromptSubmit` relevance injection (INJ-03, INJ-04, INJ-05).
+//! The `UserPromptSubmit` relevance injection.
 //!
 //! Silence is the answer this arm gives most of the time and the one it is
 //! built to protect: three near-misses are worse than nothing at all
@@ -6,20 +6,20 @@
 //! a rank-1-to-3 exact entity, or two independent entities co-occurring - and
 //! never on a BM25 score, which is not comparable across queries.
 //!
-//! **What has already been given is never given again (INJ-04).** Three
+//! **What has already been given is never given again.** Three
 //! suppressions, applied to the turns that passed the threshold and BEFORE the
 //! cap of three, so a refused turn does not spend a slot: a turn an earlier
 //! prompt of this session already injected, a turn of the session the user is
 //! looking at, and a turn the resume brief quoted. Each is written into the
-//! session's [`state`] file with its reason, which is the file AC4 asks to be
-//! able to read.
+//! session's [`state`] file with its reason, which is the file a person reads
+//! to see why a turn was not given.
 //!
 //! **What a prompt is asked about.** Not the sentence. A `Query` is
-//! conjunctive by construction (D-09), so handing the whole prompt to
+//! conjunctive by construction, so handing the whole prompt to
 //! `MATCH` asks for a turn that repeats the prompt, which is silence for
 //! anything a person would actually type. The candidates come from the
-//! spellings a prompt names - its paths, resolved against the payload's `cwd`
-//! (D-05), and its identifier-shaped tokens - each conjoined within itself and
+//! spellings a prompt names - its paths, resolved against the payload's `cwd`,
+//! and its identifier-shaped tokens - each conjoined within itself and
 //! disjoined across, which is `DESIGN-BRIEF.md`'s own signal hierarchy: exact
 //! matches on rare tokens, never a sentence-level similarity. A prompt naming
 //! none of those never opens the store at all.
@@ -33,16 +33,16 @@
 //! scores are not comparable across queries, and free text is the weakest
 //! signal in the hierarchy and the one that fires the most false positives.
 //!
-//! **The one prompt after a compaction asks a different pool (INJ-05).** A
+//! **The one prompt after a compaction asks a different pool.** A
 //! `SessionStart` whose `source` is `compact` leaves a flag in the session's
 //! state file; the next prompt spends it, looks through a wider ranked window,
-//! and keeps only the turns that just fell out of the model's context (D-07).
+//! and keeps only the turns that just fell out of the model's context.
 //! The threshold is NOT relaxed inside that pool and the suppressions still
 //! apply - one definition of relevance for both paths - and the flag clears
 //! only once a boundary row was actually there to read, so a prompt that beat
 //! the ingest to it carries the debt forward rather than losing it.
 //!
-//! **Tool results are never injected (D-01).** A tool result is text Claude
+//! **Tool results are never injected.** A tool result is text Claude
 //! read - a file, a web page, a command's output - and quoting it on a later
 //! prompt hands it to the model as this project's own history, planted
 //! instructions included. So the hits the threshold admits lose every `user`
@@ -53,7 +53,7 @@
 //! back to those turns. A named file still fires, because a Read matches on its
 //! tool-call turn as well as on its result.
 //!
-//! **What it hands over is framed (D-02, D-06).** A header line saying the block
+//! **What it hands over is framed.** A header line saying the block
 //! is quoted history and not instructions, the turn lines between the
 //! `inject` module's fixed tags, and the closing tag last. Every archived string
 //! in the lines, the excerpt and the day, has any closing tag neutralized, and a
@@ -61,7 +61,7 @@
 //!
 //! **Nothing decompresses a session until something has fired.** One excerpt
 //! materializes a whole compressed session - p90 1.03 MB, max 10.1 MB over the
-//! real corpus - so the search runs with excerpts off (D-13) and the at most
+//! real corpus - so the search runs with excerpts off and the at most
 //! three turns that survive the threshold get theirs afterwards.
 
 use std::collections::BTreeSet;
@@ -85,28 +85,27 @@ use crate::recall::{excerpt, Hit, Query, Scope};
 /// re-rank already fixes: ten rows of eight small columns, no blob touched.
 pub const RANKED: usize = 10;
 
-/// How many ranked hits the one prompt after a compaction looks through
-/// (INJ-05).
+/// How many ranked hits the one prompt after a compaction looks through.
 ///
 /// Wider than [`RANKED`] because that window is about to be cut down to one
 /// session's dropped turns, and a window of ten would mostly return turns the
 /// pool then discards. It costs what a wider window costs and no more: the
-/// excerpt step is already skipped until the threshold has fired (D-13), so
+/// excerpt step is already skipped until the threshold has fired, so
 /// these are small columns and no blob is touched. It is [`search::MAX_RESULTS`]
 /// because that is the ceiling `search::run` clamps to anyway, and asking for
 /// more would be a number that reads as a decision and is not one.
 pub const COMPACTED_RANKED: usize = search::MAX_RESULTS;
 
-/// The rank within which one matched entity is enough (INJ-03).
+/// The rank within which one matched entity is enough.
 pub const ENTITY_RANK: usize = 3;
 
-/// How many distinct entities make a hit eligible wherever it ranks (INJ-03).
+/// How many distinct entities make a hit eligible wherever it ranks.
 ///
 /// Not a subset of the rank condition: corroboration by two independent facts
 /// is evidence that bm25's ordering may have got this one wrong.
 pub const CO_OCCURRING: usize = 2;
 
-/// The most turns one prompt may ever be given (INJ-03).
+/// The most turns one prompt may ever be given.
 pub const MAX_TURNS: usize = 3;
 
 /// How many spellings one prompt may ask the archive about.
@@ -117,13 +116,13 @@ pub const MAX_TURNS: usize = 3;
 /// typed - so the cut falls on the weakest.
 pub const MAX_CANDIDATES: usize = 8;
 
-/// The six numbers INJ-03's decision is taken under.
+/// The six numbers the firing decision is taken under.
 ///
 /// **The live path constructs [`Thresholds::default`] and nothing else**, which
 /// is exactly the six constants above: no [`Config`] field reaches it, no flag
 /// detunes it and no `terminus.toml` key names it, because
-/// `DESIGN-BRIEF.md:245` keeps the precision-first defaults non-detunable
-/// (D-08). Three near-misses are worse than silence, and a threshold a user can
+/// `DESIGN-BRIEF.md:245` keeps the precision-first defaults non-detunable.
+/// Three near-misses are worse than silence, and a threshold a user can
 /// lower is a threshold a user lowers once and never raises.
 ///
 /// What the type buys is `terminus replay`: one build can score the whole
@@ -195,7 +194,7 @@ pub struct Fired {
     pub hits: Vec<Hit>,
     /// Block rows fetched and blocks decompressed to produce them. An
     /// instrument, not an answer: a prompt that fires on nothing must read
-    /// none, and that is a claim about a number (D-13).
+    /// none, and that is a claim about a number.
     pub reads: excerpt::Reads,
 }
 
@@ -205,7 +204,7 @@ pub struct Fired {
 /// hook then writes nothing at all and exits 0, which is what every prompt that
 /// names something the archive has not seen gets.
 ///
-/// **Every call leaves a decision record (FEED-01, D-11).** Including the ones
+/// **Every call leaves a decision record.** Including the ones
 /// that inject nothing, and including the ones that return before the store is
 /// opened at all: non-fires are where the miss data lives, and a precision
 /// computed only over the prompts that fired has no denominator. The record is
@@ -220,7 +219,7 @@ pub fn user_prompt_submit(data_dir: &Path, config: &Config, payload: &Payload) -
         payload.prompt.unwrap_or_default(),
     );
     let budget = budget(config);
-    // D-08: the compiled-in values, constructed here and configurable nowhere.
+    // The compiled-in values, constructed here and configurable nowhere.
     let thresholds = Thresholds::default();
     decision.thresholds = thresholds.recorded(budget);
 
@@ -241,7 +240,7 @@ fn budget(config: &Config) -> usize {
     config.prompt_chars().min(MAX_PROMPT_CHARS)
 }
 
-/// Whether this arm's budget can hold the frame at all (D-06). The live arm and
+/// Whether this arm's budget can hold the frame at all. The live arm and
 /// `terminus replay` both ask here, so a budget too small for the frame injects
 /// nothing in either.
 pub(crate) fn frame_fits(config: &Config) -> bool {
@@ -260,7 +259,7 @@ pub const MAX_PROMPT_CHARS: usize = 10_000;
 ///
 /// Deterministic: the ranked order, stored timestamps at day resolution, no
 /// clock read anywhere. Two runs of one prompt against an unchanged store
-/// render the same bytes, which is the same property INJ-02 asks of the brief
+/// render the same bytes, which is the same property the resume brief keeps
 /// and is worth as much here - an injection that changes while the archive does
 /// not is one nobody can reason about.
 /// `budget` is the effective one - see [`budget`] - and is not clamped again
@@ -269,13 +268,13 @@ pub const MAX_PROMPT_CHARS: usize = 10_000;
 /// It also completes `decision`: the per-turn shares and the whole injection's
 /// character count are produced by exactly this arithmetic and nowhere else, so
 /// counting them anywhere but here would be a second, drifting account of what a
-/// prompt spent (D-12).
+/// prompt spent.
 fn render(hits: &[Hit], budget: usize, decision: &mut Decision) -> Option<String> {
     if hits.is_empty() {
         return None;
     }
 
-    // The frame is a fixed cost and comes off first (D-06). Then what the lines
+    // The frame is a fixed cost and comes off first. Then what the lines
     // cost with no text in them: the ids and the dates. Both measured rather
     // than estimated, so the share below is what is actually left.
     let room = budget.saturating_sub(super::frame_cost(DESCRIPTION));
@@ -320,7 +319,7 @@ const DESCRIPTION: &str =
 /// The turn id is first on each line and unmissable, because it is the argument
 /// `recall_get` and `terminus show` take: the model that wants the whole turn
 /// rather than the sentence has to be able to ask for it. The day is archived
-/// text like the excerpt and is neutralized like it (D-05).
+/// text like the excerpt and is neutralized like it.
 fn assemble(hits: &[Hit], texts: &[String]) -> String {
     let mut lines: Vec<String> = Vec::new();
     for (hit, text) in hits.iter().zip(texts) {
@@ -346,7 +345,7 @@ fn day(ts: &str) -> &str {
     ts.get(..10).unwrap_or(ts)
 }
 
-/// The turns one prompt fires on: the whole of INJ-03's decision.
+/// The turns one prompt fires on: the whole of the firing decision.
 ///
 /// Every failure is an empty [`Fired`] rather than an error, for the reason the
 /// module doc on [`super`] gives: a missing, unreadable, busy or outdated store
@@ -398,7 +397,7 @@ fn selected(
 
     let store = super::open(data_dir)?;
     let conn = store.conn();
-    // D-10: the bound a replay needs to score this prompt against the index as
+    // The bound a replay needs to score this prompt against the index as
     // it stood, taken on the connection that is already open. A record whose
     // prompt never reached here keeps a null watermark for the drain to stamp.
     decision.watermark_session_no = watermark(conn);
@@ -406,13 +405,13 @@ fn selected(
     let mut state = State::load(data_dir, payload.session_id);
     let before = state.clone();
     let current = current_session(payload);
-    // D-08: what a compaction owes this session, or nothing. Derived before the
+    // What a compaction owes this session, or nothing. Derived before the
     // search because it is what decides how wide the search is.
     let dropped = owed(conn, &mut state, current.as_deref());
     if let Some(dropped) = &dropped {
-        // INJ-05's one prompt per compaction. Recorded because it changes both
-        // the window and the pool, so a decision taken under it is not
-        // comparable to the ordinary ones.
+        // The one prompt per compaction that asks the compacted pool. Recorded
+        // because it changes both the window and the pool, so a decision taken
+        // under it is not comparable to the ordinary ones.
         decision.compacted = true;
         decision.dropped = dropped.iter().copied().collect();
     }
@@ -425,7 +424,7 @@ fn selected(
         })
         .candidates(candidates)
         .excerpts(false);
-    // D-12: the scope is the payload's `cwd` and `search::run` resolves it,
+    // The scope is the payload's `cwd` and `search::run` resolves it,
     // which is also where an excluded project becomes an empty result.
     let response = match search::run(conn, config, &request) {
         Ok(response) => response.hits,
@@ -441,8 +440,8 @@ fn selected(
     decision.candidates = response.iter().map(scored).collect();
 
     let threshold = eligible(response, thresholds);
-    // D-01, after the threshold so no rank is renumbered and before the cap so
-    // a tool result never spends a slot.
+    // Tool results out, after the threshold so no rank is renumbered and before
+    // the cap so a tool result never spends a slot.
     let quoted = quotable(threshold);
     let pooled = within(quoted, dropped.as_ref());
     let mut hits = surviving(
@@ -457,30 +456,30 @@ fn selected(
     // Now, and only now, is a session worth decompressing - and only for the
     // turns that survived both the threshold and the suppressions, since a
     // suppressed turn is not injected and its blob is not read. Nor is one
-    // when the budget cannot hold the frame (D-06): [`render`] would emit
+    // when the budget cannot hold the frame: [`render`] would emit
     // nothing, and a turn the model was never shown must not be remembered as
     // injected, the rule `brief::quoted` follows too.
     let fired = if hits.is_empty() || !frame_fits(config) {
         None
     } else {
-        // The knob governs this surface too. The per-prompt injection is the
-        // fifth surface phase 4 D-01 names, and D-01's PLACEMENT half is what
-        // is honoured here rather than its scope half: the decision is resolved
-        // at this entry point, which already holds the `&Config`, and never
-        // inside `excerpt::of_record`/`attach`, which read no config at all.
-        // Filtering it is not optional. What this path writes goes onto hook
-        // stdout as the model's next context, which is exactly the destination
-        // `egress::for_model_context` exists for; leaving it raw would mean a
-        // user who set `[privacy] redact_recall` still has every secret in a
-        // matched turn copied verbatim into the model on the next prompt, with
-        // the four filtered surfaces making it look as though the knob held.
-        // The other half is upstream: this path and `feedback::replay` both
-        // build their `Request` with `.excerpts(false)`, so `search::run` never
-        // attaches for either of them and this call is the only one that can.
-        // With the knob off `Redaction::of` is `Redaction::none`, so the
-        // default path is byte-identical to what it was and still borrows.
-        // The closing-tag neutralizer rides in redaction's position (D-02),
-        // and only on this call: search, context and get render unchanged.
+        // The knob governs this surface too: the per-prompt injection is one of
+        // the surfaces `[privacy] redact_recall` covers. The decision is
+        // resolved at this entry point, which already holds the `&Config`, and
+        // never inside `excerpt::of_record`/`attach`, which read no config at
+        // all. Filtering it is not optional. What this path writes goes onto
+        // hook stdout as the model's next context, which is exactly the
+        // destination `egress::for_model_context` exists for; leaving it raw
+        // would mean a user who set `[privacy] redact_recall` still has every
+        // secret in a matched turn copied verbatim into the model on the next
+        // prompt, with the four filtered surfaces making it look as though the
+        // knob held. The other half is upstream: this path and
+        // `feedback::replay` both build their `Request` with
+        // `.excerpts(false)`, so `search::run` never attaches for either of
+        // them and this call is the only one that can. With the knob off
+        // `Redaction::of` is `Redaction::none`, so the default path is
+        // byte-identical to what it was and still borrows. The closing-tag
+        // neutralizer rides in redaction's position, and only on this call:
+        // search, context and get render unchanged.
         match excerpt::attach_scrubbed(
             conn,
             &request.query,
@@ -502,9 +501,9 @@ fn selected(
     };
 
     // After the outcome is known and whatever it was: the prompt that injected
-    // nothing because everything was suppressed is exactly the one AC4 reads
-    // this file for. Written only when this prompt changed it, so a session
-    // whose every prompt fires on nothing acquires no file at all.
+    // nothing because everything was suppressed is exactly the one a person
+    // reads this file for. Written only when this prompt changed it, so a
+    // session whose every prompt fires on nothing acquires no file at all.
     if state != before {
         state.save(data_dir, payload.session_id);
     }
@@ -515,7 +514,7 @@ fn selected(
 ///
 /// Everything the threshold reads and nothing it does not: the excerpt is
 /// deliberately absent, because the search runs with excerpts off until
-/// something has fired (D-13) and a record carrying transcript text would be a
+/// something has fired and a record carrying transcript text would be a
 /// second copy of the archive in the data directory.
 fn scored(hit: &Hit) -> Candidate {
     Candidate {
@@ -529,7 +528,7 @@ fn scored(hit: &Hit) -> Candidate {
 
 /// The highest `sessions.session_no` this store holds, or `None`.
 ///
-/// D-10's monotone bound. `session_no` is assigned in ingest order and survives
+/// A monotone bound. `session_no` is assigned in ingest order and survives
 /// a rebuild, which is what makes it answer "was this row indexed yet" -
 /// `turns.ts` is transcript time and cannot. `None` for an empty archive and for
 /// a query that failed: a bound nothing can state is better left for the drain
@@ -540,13 +539,13 @@ fn watermark(conn: &Connection) -> Option<i64> {
         .flatten()
 }
 
-/// INJ-03's threshold, applied over the ranked order.
+/// The firing threshold, applied over the ranked order.
 ///
 /// The rank is the position in that order and nothing else - `recall::search`'s
 /// order is total on purpose, so two runs over an unchanged store agree about
 /// which turns were in the top three.
 ///
-/// **The cap is not applied here.** INJ-04's suppressions run between the two
+/// **The cap is not applied here.** The suppressions run between the two
 /// (see [`surviving`]), so that a turn this session has already been given does
 /// not consume one of the three slots on its way to being refused.
 ///
@@ -566,11 +565,11 @@ pub fn eligible(hits: Vec<Hit>, thresholds: &Thresholds) -> Vec<Hit> {
         .collect()
 }
 
-/// `hits` without the tool results, in the ranked order (D-01).
+/// `hits` without the tool results, in the ranked order.
 ///
 /// A tool result is a `user` row with `turns.is_typed` = 0. Not keyed on
 /// [`Hit::record_type`], which is `user` for a typed prompt too, nor on the
-/// `toolUseResult` key, which some result records do not carry (D-03). A null
+/// `toolUseResult` key, which some result records do not carry. A null
 /// `is_typed` is left alone: nothing derived it, so nothing can say it was a
 /// tool result.
 ///
@@ -604,7 +603,7 @@ pub fn capped(hits: Vec<Hit>, refused: &BTreeSet<i64>, max_turns: usize) -> Vec<
         .collect()
 }
 
-/// What a compaction owes this session, consuming the flag that says so (D-08).
+/// What a compaction owes this session, consuming the flag that says so.
 ///
 /// `None` on the ordinary path, which is every prompt but one per compaction:
 /// no flag, no query, no cost. `None` too when the flag is set and the answer
@@ -615,8 +614,8 @@ pub fn capped(hits: Vec<Hit>, refused: &BTreeSet<i64>, max_turns: usize) -> Vec<
 ///
 /// `Some` means a boundary row was there and the compaction is accounted for,
 /// so the flag clears - even when the set is empty, and even if nothing that
-/// follows passes the threshold. INJ-05 is one prompt's worth of debt, not a
-/// standing mode the session never leaves.
+/// follows passes the threshold. A compaction is one prompt's worth of debt,
+/// not a standing mode the session never leaves.
 fn owed(conn: &Connection, state: &mut State, current: Option<&str>) -> Option<BTreeSet<i64>> {
     if !state.compaction_owed {
         return None;
@@ -632,7 +631,7 @@ fn owed(conn: &Connection, state: &mut State, current: Option<&str>) -> Option<B
 /// what fell out of the model's context - and applied AFTER the threshold, on
 /// purpose: filtering first would renumber the ranks, and a turn that placed
 /// twentieth overall would arrive at the threshold looking like a rank-1 hit.
-/// One definition of relevance for both paths (INJ-03), and "never on a
+/// One definition of relevance for both paths, and "never on a
 /// free-text-only match" is not conditioned on a compaction having happened.
 ///
 /// Public for the reason [`eligible`] is: `terminus replay` filters a
@@ -647,18 +646,18 @@ pub fn within(hits: Vec<Hit>, dropped: Option<&BTreeSet<i64>>) -> Vec<Hit> {
         .collect()
 }
 
-/// The turns that pass INJ-04, capped at [`MAX_TURNS`], recording every refusal
-/// in `state`.
+/// The turns that pass the suppressions, capped at [`MAX_TURNS`], recording
+/// every refusal in `state`.
 ///
-/// The reasons are checked in the order INJ-04 lists them and the first one
-/// that answers is the one recorded: they can overlap - the brief's own session
-/// can be the one the user is looking at after a resume - and a turn refused
-/// twice for two reasons would say no more than a turn refused once.
-/// `recorded` collects THIS prompt's refusals for the decision record. The
-/// session state file keeps its own list and is not the same thing: that one is
-/// cumulative across the session and capped at a hundred, so reading it back
-/// would attribute another prompt's refusals to this one and silently drop the
-/// oldest.
+/// The reasons are checked in the order `state::Reason` declares them and the
+/// first one that answers is the one recorded: they can overlap - the brief's
+/// own session can be the one the user is looking at after a resume - and a
+/// turn refused twice for two reasons would say no more than a turn refused
+/// once. `recorded` collects THIS prompt's refusals for the decision record.
+/// The session state file keeps its own list and is not the same thing: that
+/// one is cumulative across the session and capped at a hundred, so reading it
+/// back would attribute another prompt's refusals to this one and silently drop
+/// the oldest.
 fn surviving(
     state: &mut State,
     hits: Vec<Hit>,
@@ -689,11 +688,12 @@ fn surviving(
 /// Why this turn may not be injected, or `None` if it may.
 ///
 /// "Visible in this session" means in this session AND not known to have fallen
-/// out of the model's context. Without that second half INJ-04 would suppress
-/// the whole of INJ-05: every turn a compaction dropped belongs to the session
-/// the user is looking at, which is exactly why it is worth offering back. On
-/// the ordinary path no dropped set is derived - that is a query per prompt for
-/// a fact almost every prompt has no use for - so nothing is exempt there.
+/// out of the model's context. Without that second half the suppressions would
+/// refuse the whole compacted pool: every turn a compaction dropped belongs to
+/// the session the user is looking at, which is exactly why it is worth
+/// offering back. On the ordinary path no dropped set is derived - that is a
+/// query per prompt for a fact almost every prompt has no use for - so nothing
+/// is exempt there.
 fn refusal(
     state: &State,
     hit: &Hit,
@@ -713,12 +713,12 @@ fn refusal(
     None
 }
 
-/// The `session_key` of the session the user is looking at, or nothing (D-15).
+/// The `session_key` of the session the user is looking at, or nothing.
 ///
 /// The archive's own key for the payload's `transcript_path`: canonicalized,
 /// then through `ingest::path_key`, the one function ingest keys a session
 /// with. Keyed any other way, the compaction lookup finds no boundary and the
-/// live session's own turns are injected back into it (D-05).
+/// live session's own turns are injected back into it.
 ///
 /// `None` for a payload with no `transcript_path`, and for a path that will not
 /// canonicalize - a session whose file Claude Code has not created yet, or one
@@ -730,7 +730,7 @@ fn refusal(
 /// measured p90 of 1.03 MB per prompt to learn something a string comparison
 /// already answers. The archive lags the file by whatever the last ingest
 /// missed, so a turn written seconds ago may not be keyed yet: that is the
-/// small duplication window at the head of a session D-15 accepts.
+/// small duplication window at the head of a session, and it is accepted.
 fn current_session(payload: &Payload) -> Option<String> {
     let canonical = Path::new(payload.transcript_path?).canonicalize().ok()?;
     crate::ingest::path_key(&canonical).ok()
@@ -740,20 +740,21 @@ fn current_session(payload: &Payload) -> Option<String> {
 /// the query it became.
 ///
 /// A path counts twice: as the absolute spelling the archive almost certainly
-/// stored (D-05) and as the relative one the user typed, because the two are
+/// stored and as the relative one the user typed, because the two are
 /// different token sets and the second is what a turn quoting the short form
 /// carries. An identifier-shaped token is `DESIGN-BRIEF.md`'s third signal and
 /// is judged by exactly the rule the extractor judges a `Grep` pattern by, so a
 /// prompt cannot ask about `the` or `should`.
 ///
-/// The spellings travel beside the queries because FEED-01 logs them: a `Query`
-/// keeps only its tokens, and "what this prompt was asked about" reads as the
-/// text the extraction produced rather than as a token list.
+/// The spellings travel beside the queries because the decision record logs
+/// them: a `Query` keeps only its tokens, and "what this prompt was asked
+/// about" reads as the text the extraction produced rather than as a token
+/// list.
 ///
 /// Public because `terminus replay` re-runs exactly this extraction over a
-/// stored prompt and `cwd` (FEED-03). `max_candidates` is
-/// [`Thresholds::max_candidates`], which is [`MAX_CANDIDATES`] on the live path
-/// and whatever a replay was asked for on that one.
+/// stored prompt and `cwd`. `max_candidates` is [`Thresholds::max_candidates`],
+/// which is [`MAX_CANDIDATES`] on the live path and whatever a replay was asked
+/// for on that one.
 pub fn candidates(
     prompt: &str,
     cwd: Option<&str>,
@@ -798,16 +799,16 @@ pub fn candidates(
 }
 
 /// The query one prompt becomes, with every relative path in it resolved
-/// against the payload's `cwd` (D-05).
+/// against the payload's `cwd`.
 ///
 /// **Why the resolution has to happen at all.** A stored `path` entity is
 /// almost always absolute - 1,029 absolute against 2 relative over 120 sampled
 /// real transcripts - while a user types the relative spelling, and
 /// [`Query::matches_entity`] requires EVERY token of the stored value to be
 /// present in the query. So `/home/u/proj/crates/x.rs` cannot be matched by a
-/// query of `crates/x.rs` however obviously the two name one file, and AC3
-/// would be permanent silence that every test written against an absolute-path
-/// fixture still passes.
+/// query of `crates/x.rs` however obviously the two name one file, and a prompt
+/// naming a file by its relative path would meet a permanent silence that every
+/// test written against an absolute-path fixture still passes.
 ///
 /// **The resolved spelling is added, never substituted.** The prose is still
 /// there, because the query is also what weighs and excerpts the turns that
@@ -819,11 +820,10 @@ pub fn candidates(
 /// of the path would otherwise drop exactly the tokens this exists to add.
 ///
 /// **No filesystem is touched.** 52% of the real corpus's `cwd` directories no
-/// longer exist (phase 2 D-05), so a path canonicalized today would key
-/// differently tomorrow and one file would key two ways across one archive.
-/// This is string joining, and `..` is left in place: token containment does
-/// not care, since the tokens of the true path are a subset of the tokens of
-/// the joined one either way.
+/// longer exist, so a path canonicalized today would key differently tomorrow
+/// and one file would key two ways across one archive. This is string joining,
+/// and `..` is left in place: token containment does not care, since the tokens
+/// of the true path are a subset of the tokens of the joined one either way.
 pub fn query_of(prompt: &str, cwd: Option<&str>) -> Query {
     Query::parse(&resolved(prompt, cwd))
 }
@@ -948,7 +948,7 @@ mod tests {
         }
     }
 
-    /// D-01 and D-12: only a `user` hit the harness wrote is dropped. A `user`
+    /// Only a `user` hit the harness wrote is dropped. A `user`
     /// hit whose `is_typed` is null is kept, because nothing can say it was a
     /// tool result, and so is a typed `user` hit and every non-`user` hit. The
     /// ranked order survives the filter.
@@ -964,8 +964,9 @@ mod tests {
         assert_eq!(ids(&quotable(hits)), vec![1, 3, 4, 5]);
     }
 
-    /// D-08's whole point: the same ranked input fires differently under an
-    /// overridden rank threshold, and exactly as before under the default.
+    /// The point of a `Thresholds` value: the same ranked input fires
+    /// differently under an overridden rank threshold, and exactly as before
+    /// under the default.
     ///
     /// The default arm is the load-bearing half. It is what says the live path
     /// did not move when the six constants became a value type, and it fails the

@@ -1,4 +1,4 @@
-//! What one Claude Code session has already been given (INJ-04, INJ-05).
+//! What one Claude Code session has already been given.
 //!
 //! One JSON file per session, under an `injection` subdirectory of the data
 //! directory, keyed on the payload's `session_id`. It carries the turn ids
@@ -6,21 +6,22 @@
 //! turns that were suppressed and why, and the flag a `SessionStart` whose
 //! `source` is `compact` leaves for the next prompt to consume.
 //!
-//! **Not a table (D-06, D-14).** A write on the prompt path is the one thing
-//! INJ-06 cannot tolerate: a backfill was measured holding the store for 49 s
-//! over the real corpus, and a blocked WRITER is strictly worse than a blocked
-//! reader, which is all the read side ever risks. And a new table could not
-//! reach an existing user's store at all - `Store::open` runs `CREATE_SQL` only
-//! against a fresh store and `bring_forward` covers columns, not tables - so it
-//! would arrive either as `no such table` on every upgraded machine or as a
+//! **Not a table.** A write on the prompt path is the one thing its deadline
+//! cannot tolerate: a backfill was measured holding the store for 49 s over the
+//! real corpus, and a blocked WRITER is strictly worse than a blocked reader,
+//! which is all the read side ever risks. And a new table could not reach an
+//! existing user's store at all - `Store::open` runs `CREATE_SQL` only against
+//! a fresh store and `bring_forward` covers columns, not tables - so it would
+//! arrive either as `no such table` on every upgraded machine or as a
 //! `DERIVED_SCHEMA` bump forcing that same ~49 s rebuild on the first
 //! hook-spawned pass after an upgrade.
 //!
-//! **Not phase 6's decision log.** FEED-01 is durable, joined against the
-//! transcripts that follow, and carries the entities, the candidates, the
-//! scores, the thresholds and the tokens spent. This is disposable per-session
-//! scratch and holds only what INJ-04 has to distinguish, which is why the
-//! reasons stop at three.
+//! **Not the decision log.** That log ([`super::decision`]) is durable, joined
+//! against the transcripts that follow, and carries the entities, the
+//! candidates, the scores, the thresholds and the tokens spent. This is
+//! disposable per-session scratch and holds only what it takes to tell a turn
+//! already injected, a turn of the session in view and a turn the brief quoted
+//! apart, which is why the reasons stop at three.
 //!
 //! **Every read fails open.** A missing file, an unreadable one, bytes that are
 //! not JSON and a document this build does not recognize all read as empty
@@ -72,18 +73,18 @@ const MAX_SUPPRESSED: usize = 100;
 pub(crate) const TEMPORARY_PREFIX: &str = ".inject-";
 pub(crate) const TEMPORARY_SUFFIX: &str = ".tmp";
 
-/// Why a candidate turn was not injected (INJ-04).
+/// Why a candidate turn was not injected.
 ///
-/// Exactly the three distinctions INJ-04 draws and no more. Entities,
-/// candidates, scores, thresholds and token counts belong to FEED-01, which
-/// owns them and lands in phase 6; recording them here would be a second,
-/// lossier decision log to keep in step with the real one.
+/// Exactly the three distinctions the suppressions draw and no more. Entities,
+/// candidates, scores, thresholds and token counts belong to the decision log,
+/// which owns them; recording them here would be a second, lossier decision log
+/// to keep in step with the real one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Reason {
     /// An earlier prompt in this session was already given this turn.
     AlreadyInjected,
-    /// The turn is in the session the user is looking at (D-15).
+    /// The turn is in the session the user is looking at.
     VisibleInSession,
     /// The resume brief quoted this turn at `SessionStart`.
     CarriedByBrief,
@@ -112,11 +113,11 @@ pub struct State {
     /// Turn ids the resume brief quoted.
     #[serde(default)]
     pub brief: Vec<i64>,
-    /// Candidates refused, with the reason AC4 asks to be able to read.
+    /// Candidates refused, with the reason, for a person to read.
     #[serde(default)]
     pub suppressed: Vec<Suppressed>,
     /// Set by a `SessionStart` whose `source` is `compact`, consumed by the
-    /// next `UserPromptSubmit` (D-08).
+    /// next `UserPromptSubmit`.
     ///
     /// It persists until it fires rather than being cleared by the prompt that
     /// found no boundary row yet: the ingest that commits that row is racing
@@ -185,7 +186,7 @@ impl State {
     ///
     /// Idempotent, because the list is the answer to `was_injected` and a turn
     /// recorded twice would say nothing the first entry does not. It is not
-    /// capped: it is what INJ-04's first suppression is decided on, and a
+    /// capped: it is what the already-injected suppression is decided on, and a
     /// forgotten id is a turn injected twice - three per prompt, so a session
     /// long enough for the size to matter has other problems.
     pub fn record_injected(&mut self, turn_id: i64) {
@@ -204,7 +205,7 @@ impl State {
     /// Remember that `turn_id` was refused, and why.
     ///
     /// Capped, unlike the two lists above, and that asymmetry is the design:
-    /// this one is a record for a person to read (AC4) rather than a fact
+    /// this one is a record for a person to read rather than a fact
     /// anything decides on, and it grows by up to one entry per ranked
     /// candidate per prompt instead of by at most three. The oldest go first,
     /// so what is in the file is what the session just did.
@@ -260,7 +261,7 @@ fn file_name(session_id: &str) -> Option<String> {
 ///
 /// The same property is what makes this safe on the hook's abandoned thread:
 /// the injection runs on a thread the binary never joins and process exit takes
-/// it wherever it got to (D-03), so a write cut off at the deadline leaves the
+/// it wherever it got to, so a write cut off at the deadline leaves the
 /// target holding its previous content and at worst a `.inject-*.tmp` beside
 /// it - never a document the next prompt reads half of.
 ///
@@ -269,15 +270,15 @@ fn file_name(session_id: &str) -> Option<String> {
 /// per-session scratch whose loss costs one repeated injection - paid for with
 /// a disk flush on the path where the user is waiting.
 ///
-/// Pretty-printed, because AC4 asks for a suppression reason a person can read
-/// out of this file and the whole document is a few hundred bytes.
+/// Pretty-printed, because a person reads suppression reasons out of this file
+/// and the whole document is a few hundred bytes.
 fn write_atomically(path: &Path, state: &State) -> Option<()> {
     let dir = path.parent()?;
     // TWO creations, not one. `injection/`'s parent is terminus's own data
     // directory, and a hook that fires before any ingest ever ran is the first
     // thing to make it - so it has to be asked for by name, because the
     // primitive narrows only the leaf it is given and would otherwise leave the
-    // data directory at the umask (D-04). Everything above it - the user's
+    // data directory at the umask. Everything above it - the user's
     // `~/.local/share` - still keeps their own default, which is the whole
     // reason the mode is not applied recursively.
     if let Some(data_dir) = dir.parent() {
