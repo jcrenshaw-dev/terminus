@@ -6,7 +6,7 @@ mule takes the bugs open at 1.0.0 and the cleanup the 2026-10-22 simplify review
 
 ## Phases
 
-- [ ] **Phase 1: Old store code** - remove upgrade code for store layouts 1.0.0 can't create
+- [x] **Phase 1: Old store code** - remove upgrade code for store layouts 1.0.0 can't create
 - [ ] **Phase 2: Planning tags** - cut the planning tags from comments and keep them out
 - [ ] **Phase 3: Hook tests on macOS Intel** - stop the hook timing tests failing the merge gate
 - [ ] **Phase 4: Search** - unindexable words, real dates, and lists bound as one parameter
