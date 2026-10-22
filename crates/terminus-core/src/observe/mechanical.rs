@@ -1,4 +1,4 @@
-//! OBS-01: what one session did, read off the parser and never off a model.
+//! What one session did, read off the parser and never off a model.
 //!
 //! Every fact here is either a SQL query over tables ingest already wrote or a
 //! value lifted straight out of the session's own bytes. **No model is called
@@ -6,7 +6,7 @@
 //! machine with no network at all still gets an auditable account of every
 //! finalized session.
 //!
-//! **Where each fact comes from (D-04).** `paths` gives the files and
+//! **Where each fact comes from.** `paths` gives the files and
 //! `turns.tool_name` says whether the turn that named one was writing it;
 //! `entities` of kind `tool` and `error` give the tools and the failures;
 //! `session_meta` gives the branch and the two timestamps the duration is the
@@ -73,7 +73,7 @@ const WRITING_TOOLS: [&str; 4] = ["Edit", "MultiEdit", "Write", "NotebookEdit"];
 const DURATION_SQL: &str = "CAST(round((julianday(last_turn_at) - julianday(first_turn_at)) \
                             * 86400000) AS INTEGER) / 1000";
 
-/// The OBS-01 fact set for one session.
+/// The mechanical fact set for one session.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Mechanical {
     pub files_read: Vec<String>,
@@ -122,7 +122,7 @@ impl Mechanical {
     }
 }
 
-/// Compute the OBS-01 facts for one archived session.
+/// Compute the mechanical facts for one archived session.
 ///
 /// The connection is the only input beside the key: this reads and never
 /// writes, so a caller may run it inside its own transaction or outside one.
@@ -217,9 +217,9 @@ fn cap(
 /// The files this session read and the files it changed.
 ///
 /// A file both read and written appears in both lists. Two lists of paths is
-/// what OBS-01 asks for, and "modified" has to mean that a tool which writes
-/// actually named it - so a path an `Edit` and a `Read` both touched is true on
-/// both counts rather than sorted into one.
+/// what an observation reports, and "modified" has to mean that a tool which
+/// writes actually named it - so a path an `Edit` and a `Read` both touched is
+/// true on both counts rather than sorted into one.
 fn files(conn: &Connection, session_key: &str) -> Result<(Vec<String>, Vec<String>)> {
     let mut statement = conn.prepare(
         "SELECT DISTINCT p.path, coalesce(t.tool_name, '')

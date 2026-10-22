@@ -1,4 +1,4 @@
-//! Scoring the logged history again, under different rules (FEED-03).
+//! Scoring the logged history again, under different rules.
 //!
 //! Every `decisions` row carries what its prompt asked about, when it was
 //! asked, and how much of the archive existed at the time. That is enough to
@@ -7,26 +7,28 @@
 //! diffed against the labels actually stored is what makes a retrieval change
 //! testable against history rather than shipped on a hunch.
 //!
-//! **Bounded to the index as it stood (D-10).** Each decision's search is
+//! **Bounded to the index as it stood.** Each decision's search is
 //! capped by [`Request::before_turn_id`] derived from the watermark the prompt
 //! recorded, so a turn archived after the prompt was submitted can never be
 //! offered to it. Without that, every replay would certify on hindsight: the
 //! turns that answer a question tend to be written after it is asked.
 //!
-//! **Suppressions are re-applied, never re-derived.** INJ-04's three refusals
-//! are read out of a session state file that is disposable scratch - capped,
-//! overwritten every prompt, deleted or long stale by the time a replay runs -
-//! so this re-applies the refusals the decision itself recorded. Re-deriving
+//! **Suppressions are re-applied, never re-derived.** The three refusals, of a
+//! turn already injected, already visible in the session or already carried
+//! by the brief, are read out of a session state file that is disposable
+//! scratch - capped, overwritten every prompt, deleted or long stale by the
+//! time a replay runs - so this re-applies the refusals the decision itself
+//! recorded. Re-deriving
 //! them would attribute unreproducible session state to the rule under test,
 //! which is the one thing a diff must not do.
 //!
 //! **Reads only.** Every statement here is a `SELECT`; the caller opens the
 //! store and `terminus replay` opens it with `Store::open_read_only`, so
 //! "without touching the live store" is enforced by connection flags rather
-//! than by discipline (D-15).
+//! than by discipline.
 //!
 //! **The compacted pool is replayed from what the decision stored.** The one
-//! prompt after a compaction (INJ-05) searched a wider window and was offered
+//! prompt after a compaction searched a wider window and was offered
 //! only the turns that had fallen out of context. Whether that was in force and
 //! which turns those were are both columns of the row, `compacted` and
 //! `dropped`, so a decision with `compacted` = 1 replays through
@@ -37,7 +39,7 @@
 //! A decision whose `compacted` is null carries no record of whether it ran
 //! under the pool, and it replays through the ordinary ranked window.
 //!
-//! **A tool result is never credited (D-01).** The live arm drops every turn
+//! **A tool result is never credited.** The live arm drops every turn
 //! the harness wrote before the cap, through `prompt::quotable`, and so does
 //! this.
 
@@ -261,8 +263,8 @@ fn would_inject(
         return Ok((spellings, Vec::new()));
     }
     if !prompt::frame_fits(config) {
-        // D-06, as the live arm decides it: a budget that cannot hold the frame
-        // hands over nothing.
+        // As the live arm decides it: a budget that cannot hold the frame hands
+        // over nothing.
         return Ok((spellings, Vec::new()));
     }
 
@@ -281,8 +283,8 @@ fn would_inject(
 
     let hits = search::run(conn, config, &request)?.hits;
     let admitted = prompt::eligible(hits, thresholds);
-    // D-01, in the live arm's place: after the threshold, before the pool and
-    // the cap.
+    // Tool results dropped in the live arm's place: after the threshold,
+    // before the pool and the cap.
     let quoted = prompt::quotable(admitted);
     // After the threshold, as the live arm filters: see `prompt::within`.
     let pooled = prompt::within(quoted, decision.dropped.as_ref());
@@ -293,7 +295,7 @@ fn would_inject(
     Ok((spellings, injected))
 }
 
-/// A watermark as the exclusive turn-id bound it implies (D-10).
+/// A watermark as the exclusive turn-id bound it implies.
 ///
 /// `turn_id(watermark + 1, 0)` is the first id the session after the watermark
 /// could take, so every turn archived up to and including it sits below.

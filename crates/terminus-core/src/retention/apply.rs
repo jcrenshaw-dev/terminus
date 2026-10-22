@@ -28,7 +28,7 @@ pub struct Applied {
     /// Counted and said out loud because it is the one thing a delete destroys
     /// that no rebuild reproduces: an observation's facts come off the session's
     /// block rows, and the delete takes those too, which is why `reindex`
-    /// deliberately does not touch that table (phase 7 D-02).
+    /// deliberately does not touch that table.
     pub observations_lost: usize,
     /// Eligible sessions the per-pass bound left for the next pass.
     pub over: usize,
@@ -121,7 +121,7 @@ pub fn apply(store: &mut Store, selection: &super::Selection) -> Applied {
     out
 }
 
-/// Delete one session's block rows and mark it evicted (RET-02, D-09).
+/// Delete one session's block rows and mark it evicted.
 ///
 /// The `sessions` row stays, so `session_no` and every derived row keyed on
 /// it stay too.
@@ -155,13 +155,13 @@ fn evict_one(conn: &mut Connection, session_key: &str) -> Result<()> {
 /// `observations` and `session_meta` hang off `sessions(session_key)`, and
 /// `blocks` off `sessions(session_no)`. `compactions` is deleted by
 /// `session_key` and never through the turn ids, because its rows are keyed by
-/// position in the stream and need not have a turn behind them (D-20).
+/// position in the stream and need not have a turn behind them.
 ///
 /// **`decisions` and `labels` are deliberately untouched.** `decisions` is
 /// keyed on `session_id` with no declared reference and `labels.turn_id`
-/// carries no foreign key on purpose (phase 6 D-03), and FEED-03's replay
-/// history has to survive a deletion - it is the record of what injection
-/// decided, which the archive never contained and no reingest can rebuild.
+/// carries no foreign key on purpose, and the replay history has to survive a
+/// deletion - it is the record of what injection decided, which the archive
+/// never contained and no reingest can rebuild.
 ///
 /// The watermark goes last, keyed on the session key: `watermarks` is keyed on
 /// the transcript path, and the session key IS that path (`recover::recover`

@@ -1,15 +1,14 @@
-//! Observations: an auditable account of what happened in a finalized session
-//! (OBS-01..OBS-04).
+//! Observations: an auditable account of what happened in a finalized session.
 //!
 //! **Mechanical facts, one row per session.** [`mechanical`] derives them from
 //! the parsed transcript. No model is involved and no network connection is
 //! opened.
 //!
-//! **Archival, never derived (D-02).** `observations` is deliberately absent
+//! **Archival, never derived.** `observations` is deliberately absent
 //! from [`crate::store::schema::DERIVED_TABLES`]: the facts come off the
 //! session's block rows, and retention eviction deletes those rows, so a
 //! `reindex` that dropped the table could not recompute an evicted session's
-//! row. `terminus observations regenerate` (OBS-07) is the only rebuild path.
+//! row. `terminus observations regenerate` is the only rebuild path.
 //!
 //! **Written by the pass, at the far end of it.** [`observe_new`] runs after
 //! `feedback::outcomes` - which is what sets `session_meta.is_final` - and
@@ -47,7 +46,7 @@ pub use mechanical::{observe, Mechanical};
 /// first pass over a whole backfilled history is the case this exists for.
 pub const MAX_PER_PASS: usize = 100;
 
-/// What one pass's observation step did (OBS-01).
+/// What one pass's observation step did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Observed {
     /// Rows written on this pass, never the number that exist: a session that
@@ -68,7 +67,7 @@ impl Observed {
 /// Write one observation for every visible session that is final and has none.
 ///
 /// **Through `config::visible::sessions`, not straight off `session_meta`.**
-/// Exclusion is retroactive by design (ING-08): a project excluded after its
+/// Exclusion is retroactive by design: a project excluded after its
 /// sessions were archived must stop being read, and this step reads a blob. The
 /// listing costs a few milliseconds on a real store, which is a price a
 /// background pass can pay and a prompt cannot.
@@ -144,7 +143,7 @@ fn pending(conn: &Connection) -> Result<BTreeMap<String, Option<String>>> {
     Ok(out)
 }
 
-/// One row, inserted and never overwritten (D-02).
+/// One row, inserted and never overwritten.
 ///
 /// `DO NOTHING` rather than an upsert, and that is the whole of why this step
 /// is safe to run on every pass: `terminus observations regenerate` is the only
@@ -162,7 +161,7 @@ fn write_one(conn: &Connection, session_key: &str, session_id: Option<&str>) -> 
     Ok(())
 }
 
-/// Which rows a regenerate acts on (OBS-07).
+/// Which rows a regenerate acts on.
 ///
 /// Without a bound it selects every visible session, which is what makes a bare
 /// `terminus observations regenerate` mean "all of them" rather than "none of
@@ -177,7 +176,7 @@ pub struct Selector<'a> {
     pub since: Option<&'a str>,
 }
 
-/// What one regenerate did (OBS-07).
+/// What one regenerate did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Regenerated {
     /// Rows the selector named AND the exclusion gate allows.
@@ -188,9 +187,9 @@ pub struct Regenerated {
     pub notes: Vec<String>,
 }
 
-/// Recompute the mechanical half of the selected rows, in place (OBS-07).
+/// Recompute the mechanical half of the selected rows, in place.
 ///
-/// **The only rebuild path for this table (D-02).** `observations` is out of
+/// **The only rebuild path for this table.** `observations` is out of
 /// `DERIVED_TABLES`, so `reindex` never touches it and the ingest pass inserts
 /// and never overwrites; this is the one place a stored fact set is replaced.
 ///
@@ -201,7 +200,7 @@ pub struct Regenerated {
 /// makes a run under a narrowed selector provably scoped.
 ///
 /// **Through `config::visible::sessions`.** This reads one blob per selected
-/// session, and exclusion is retroactive (ING-08): a project excluded after its
+/// session, and exclusion is retroactive: a project excluded after its
 /// sessions were archived must stop being read, by a rebuild as much as by a
 /// query.
 ///

@@ -1,5 +1,4 @@
-//! Retention: how much of each project's history the store keeps
-//! (RET-01..RET-03).
+//! Retention: how much of each project's history the store keeps.
 //!
 //! **Off unless `terminus.toml` says otherwise.** The resolved policy is the
 //! off state by construction ([`crate::config::RetentionPolicy`]), so a store
@@ -11,7 +10,7 @@
 //! [`evaluate`] names what retention WOULD act on and mutates nothing;
 //! [`apply`] does it. The ingest pass runs both, back to back, under the lock
 //! it already holds; `terminus retention --dry-run` runs the first alone and
-//! prints what it named (D-04). They share the function rather than each
+//! prints what it named. They share the function rather than each
 //! spelling the rule, because two independently written evaluations of a
 //! `'now'`-relative predicate can legitimately disagree by one session and
 //! there would be no way to tell that from a bug.
@@ -83,7 +82,7 @@ pub struct Selection {
     /// Sessions an excluded project holds, which this evaluation passed over.
     ///
     /// Counted rather than silently dropped. Exclusion means never read, on the
-    /// ingest and the read paths both (ING-08), and a delete is the most
+    /// ingest and the read paths both, and a delete is the most
     /// extreme thing that could be done to bytes a user said not to look at -
     /// so retention leaves them alone, exactly as
     /// [`crate::observe::observe_new`] does. The count is what stops that from
@@ -195,10 +194,11 @@ pub fn evaluate(conn: &Connection, config: &Config, now: &str) -> Result<Selecti
                 }
             }
             RetentionAction::Delete => {
-                // D-02, and it is the whole of the delete rule beyond the age:
-                // a session whose transcript is still on disk is rediscovered
-                // by `discover::discover` on the next hook spawn and re-ingested
-                // from offset 0, so deleting it reclaims nothing measurable.
+                // Only once the transcript is gone, and that is the whole of the
+                // delete rule beyond the age: a session whose transcript is still
+                // on disk is rediscovered by `discover::discover` on the next hook
+                // spawn and re-ingested from offset 0, so deleting it reclaims
+                // nothing measurable.
                 if transcript_is_gone(&row.transcript_path) {
                     out.delete.push(row.session_key);
                 }
@@ -237,7 +237,7 @@ fn is_excluded(config: &Config, row: &Candidate) -> bool {
     )
 }
 
-/// Has Claude Code's own cleanup already removed this transcript (D-02)?
+/// Has Claude Code's own cleanup already removed this transcript?
 ///
 /// **Only `NotFound` counts as gone.** A permission error, an unreadable mount
 /// or a path this platform cannot represent all leave the question open, and

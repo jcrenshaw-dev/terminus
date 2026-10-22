@@ -1,16 +1,16 @@
 //! The feedback loop: what injection decided, and what it turned out to be
-//! worth (FEED-01..FEED-04).
+//! worth.
 //!
 //! This half is the drain. The prompt path writes one file per decision under
 //! the data directory ([`crate::inject::decision`]) because a hook must never
-//! write SQLite (D-01), and an ingest pass - which already holds the lock, on a
+//! write SQLite, and an ingest pass - which already holds the lock, on a
 //! process nobody is waiting for - moves those files into the `decisions` table
 //! and deletes them.
 //!
 //! **Before the walk, on purpose.** The drain runs after recovery and before a
 //! single transcript is read, which is what makes the watermark it stamps mean
 //! "the archive as it stood when this pass began" rather than "plus whatever
-//! this pass just admitted" (D-10). A record whose prompt never opened the
+//! this pass just admitted". A record whose prompt never opened the
 //! store has no watermark of its own, and this is the tightest bound anything
 //! can give it.
 //!
@@ -64,7 +64,7 @@ impl Drained {
     }
 }
 
-/// What one pass's outcome step did (FEED-02).
+/// What one pass's outcome step did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Labeled {
     /// Sessions the idle rule closed on this pass, never the number that are
@@ -165,7 +165,7 @@ pub fn drain(conn: &mut Connection, data_dir: &Path) -> Result<Drained> {
     }
 
     // Read once, before anything is inserted and before the walk: this is the
-    // bound D-10 wants for a record that never opened the store.
+    // tightest bound there is for a record that never opened the store.
     let watermark: Option<i64> = conn
         .query_row("SELECT max(session_no) FROM sessions", [], |r| r.get(0))
         .unwrap_or(None);
@@ -283,7 +283,7 @@ fn insert(conn: &Connection, decision: &Decision, watermark: Option<i64>) -> Res
             decision.cwd,
             decision.prompt,
             // The prompt path's own bound when it had one; this pass's
-            // otherwise (D-10).
+            // otherwise.
             decision.watermark_session_no.or(watermark),
             decision.chars_injected as i64,
             document(&decision.spellings),

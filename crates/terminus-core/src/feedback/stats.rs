@@ -1,15 +1,15 @@
-//! Whether injection helps, as numbers rather than as an opinion (FEED-04).
+//! Whether injection helps, as numbers rather than as an opinion.
 //!
 //! Four counts and two sums over `decisions` and `labels`, and the whole point
 //! is what is in the denominators. **Every prompt is a decision, non-fires
-//! included** (D-11), so [`Stats::decisions`] is how often the injector was
+//! included**, so [`Stats::decisions`] is how often the injector was
 //! asked and not how often it answered - a precision computed only over the
 //! prompts that fired would be a number about a subset that flatters itself.
 //! And [`Stats::chars_referenced`] against [`Stats::chars_injected`] is the
 //! question the incumbent cannot ask at all: not "how much context did we add"
 //! but "how much of it was worth adding".
 //!
-//! **Characters, never tokens (D-12).** The same proxy the injection budget is
+//! **Characters, never tokens.** The same proxy the injection budget is
 //! spent in, and the output names them chars - the workspace has no tokenizer
 //! and will not grow one on the cold-start path for a report.
 //!
@@ -26,9 +26,9 @@ use crate::store::Store;
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Stats {
     /// Prompts that produced a record, including every one that injected
-    /// nothing (D-11).
+    /// nothing.
     pub decisions: usize,
-    /// Decisions recorded as made under the compacted pool (INJ-05).
+    /// Decisions recorded as made under the compacted pool.
     pub compacted_decisions: usize,
     /// Decisions recorded as made outside it.
     ///
@@ -51,7 +51,7 @@ pub struct Stats {
     pub precision: Option<f64>,
     /// Decisions where the model went to recall for something the prompt had
     /// named and the injector had declined to give it. Reads zero on real
-    /// history today (D-13).
+    /// history today.
     pub misses: usize,
     /// Decisions that spent characters and earned no hit.
     pub wasted_budget: usize,
