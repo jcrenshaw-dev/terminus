@@ -82,7 +82,7 @@ use crate::recall::{excerpt, Hit, Query, Scope};
 ///
 /// Wider than the cap of three, so a hit that two entities corroborate can be
 /// seen below the top three, and far narrower than `CANDIDATE_POOL`, which the
-/// re-rank already fixes: ten rows of seven small columns, no blob touched.
+/// re-rank already fixes: ten rows of eight small columns, no blob touched.
 pub const RANKED: usize = 10;
 
 /// How many ranked hits the one prompt after a compaction looks through
@@ -442,10 +442,8 @@ fn selected(
 
     let threshold = eligible(response, thresholds);
     // D-01, after the threshold so no rank is renumbered and before the cap so
-    // a tool result never spends a slot. A failed lookup injects nothing rather
-    // than the unfiltered hits, and is not a `?` for the reason the search
-    // above is not.
-    let quoted = quotable(conn, threshold).unwrap_or_default();
+    // a tool result never spends a slot.
+    let quoted = quotable(threshold);
     let pooled = within(quoted, dropped.as_ref());
     let mut hits = surviving(
         &mut state,
@@ -576,30 +574,15 @@ pub fn eligible(hits: Vec<Hit>, thresholds: &Thresholds) -> Vec<Hit> {
 /// `is_typed` is left alone: nothing derived it, so nothing can say it was a
 /// tool result.
 ///
-/// Read here by turn id rather than carried on [`Hit`], because `search::run`'s
-/// projection also feeds `terminus search` and `recall_search`, which still read
-/// stores that predate the column. The caller must hold a store that has it.
+/// Read off [`Hit::is_typed`], which the search projects with every hit, so
+/// this runs no query and cannot fail.
 ///
 /// Public for the reason [`eligible`] is: `terminus replay` must drop exactly
 /// the turns the hook drops.
-pub fn quotable(conn: &Connection, hits: Vec<Hit>) -> rusqlite::Result<Vec<Hit>> {
-    if hits.is_empty() {
-        return Ok(hits);
-    }
-    let ids: Vec<String> = hits.iter().map(|hit| hit.turn_id.to_string()).collect();
-    let ids = format!("[{}]", ids.join(","));
-    let mut statement = conn.prepare(
-        "SELECT id FROM turns \
-         WHERE id IN (SELECT value FROM json_each(?1)) \
-           AND record_type = 'user' AND is_typed = 0",
-    )?;
-    let results = statement
-        .query_map([ids], |row| row.get::<_, i64>(0))?
-        .collect::<rusqlite::Result<BTreeSet<i64>>>()?;
-    Ok(hits
-        .into_iter()
-        .filter(|hit| !results.contains(&hit.turn_id))
-        .collect())
+pub fn quotable(hits: Vec<Hit>) -> Vec<Hit> {
+    hits.into_iter()
+        .filter(|hit| !(hit.record_type == "user" && hit.is_typed == Some(false)))
+        .collect()
 }
 
 /// The eligible turns that are actually injected, once `refused` is taken out
@@ -948,11 +931,37 @@ mod tests {
             matched_on: Vec::new(),
             relevance: 1.0,
             excerpt: String::new(),
+            is_typed: None,
         }
     }
 
     fn ids(hits: &[Hit]) -> Vec<i64> {
         hits.iter().map(|hit| hit.turn_id).collect()
+    }
+
+    /// A hit of `record_type` whose `is_typed` is `is_typed`.
+    fn typed(turn_id: i64, record_type: &str, is_typed: Option<bool>) -> Hit {
+        Hit {
+            record_type: record_type.into(),
+            is_typed,
+            ..hit(turn_id, 1)
+        }
+    }
+
+    /// D-01 and D-12: only a `user` hit the harness wrote is dropped. A `user`
+    /// hit whose `is_typed` is null is kept, because nothing can say it was a
+    /// tool result, and so is a typed `user` hit and every non-`user` hit. The
+    /// ranked order survives the filter.
+    #[test]
+    fn quotable_drops_only_a_user_hit_the_harness_wrote() {
+        let hits = vec![
+            typed(1, "user", None),
+            typed(2, "user", Some(false)),
+            typed(3, "user", Some(true)),
+            typed(4, "assistant", Some(false)),
+            typed(5, "assistant", None),
+        ];
+        assert_eq!(ids(&quotable(hits)), vec![1, 3, 4, 5]);
     }
 
     /// D-08's whole point: the same ranked input fires differently under an

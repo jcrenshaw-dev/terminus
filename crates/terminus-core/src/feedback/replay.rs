@@ -283,7 +283,7 @@ fn would_inject(
     let admitted = prompt::eligible(hits, thresholds);
     // D-01, in the live arm's place: after the threshold, before the pool and
     // the cap.
-    let quoted = prompt::quotable(conn, admitted)?;
+    let quoted = prompt::quotable(admitted);
     // After the threshold, as the live arm filters: see `prompt::within`.
     let pooled = prompt::within(quoted, decision.dropped.as_ref());
     let injected = prompt::capped(pooled, &decision.refused, thresholds.max_turns)

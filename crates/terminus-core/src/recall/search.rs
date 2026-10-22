@@ -253,6 +253,12 @@ pub struct Hit {
     /// The matched text, cut from the session's block rows (D-05). Empty only when the
     /// archive would not give it up - see [`crate::recall::excerpt`].
     pub excerpt: String,
+    /// The turn's `turns.is_typed`: `Some(false)` for a `user` row the harness
+    /// wrote, such as a tool result, `Some(true)` for one a person typed, and
+    /// `None` where nothing derived it. Carried so the injection paths can drop
+    /// tool results without a second query (see
+    /// [`crate::inject::prompt::quotable`]).
+    pub is_typed: Option<bool>,
 }
 
 /// What a search answered.
@@ -288,7 +294,8 @@ const HEAD: &str = "
            t.ts,
            m.project,
            m.parent_session_key IS NOT NULL AS sidechain,
-           -bm25(turns_fts) AS relevance
+           -bm25(turns_fts) AS relevance,
+           t.is_typed
     FROM turns_fts
     JOIN turns t ON t.id = turns_fts.rowid
     LEFT JOIN session_meta m ON m.session_key = t.session_key
@@ -315,7 +322,7 @@ const TAIL: &str = "
 /// The entity weighting can only re-order rows it was given, so a pool no
 /// larger than the limit would mean a turn that carries the exact command the
 /// user asked for could never climb past a turn that merely says the word.
-/// Four times the maximum is a bounded read - the rows are seven small columns
+/// Four times the maximum is a bounded read - the rows are eight small columns
 /// and no blob is touched until after the truncation - and it is the whole of
 /// what a re-rank can reach.
 const CANDIDATE_POOL: usize = MAX_RESULTS * 4;
@@ -374,6 +381,7 @@ pub fn run(conn: &Connection, config: &Config, request: &Request) -> Result<Resp
                 matched_on: Vec::new(),
                 relevance: row.get(6)?,
                 excerpt: String::new(),
+                is_typed: row.get(7)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<Hit>>>()?;
