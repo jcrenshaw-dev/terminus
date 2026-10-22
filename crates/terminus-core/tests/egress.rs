@@ -1,4 +1,4 @@
-//! The shape rules recall applies when `redact_recall` is on (PRIV-03).
+//! The shape rules recall applies when `redact_recall` is on.
 //!
 //! Three claims. The rules take each secret shape out of plain text and leave
 //! the text around it standing. The ingest path cannot reach them, because
@@ -159,7 +159,7 @@ fn nothing_in_the_ingest_path_names_the_egress_filter() {
 }
 
 // ---------------------------------------------------------------------------
-// Every planted shape, on a recall projection (PRIV-03)
+// Every planted shape, on a recall projection
 
 // Gated per item and NOT with a file-level `#![cfg(feature = "testkit")]`: a
 // file-level gate makes `cargo test --test egress` compile an empty binary and
@@ -170,9 +170,9 @@ fn nothing_in_the_ingest_path_names_the_egress_filter() {
 #[cfg(feature = "testkit")]
 const FIXTURE: &str = "session-secrets.jsonl";
 
-/// The transcript with one turn per shape hardin's phase 2 adds: a PEM key, a
-/// bare `sk-` key, a keyed value in each of the three subtrees the projection
-/// drops the keys of, and the curly-quoted `NAME=` turn.
+/// The transcript with one turn per redaction shape the other fixture lacks: a
+/// PEM key, a bare `sk-` key, a keyed value in each of the three subtrees the
+/// projection drops the keys of, and the curly-quoted `NAME=` turn.
 #[cfg(feature = "testkit")]
 const REDACTION_FIXTURE: &str = "session-redaction.jsonl";
 

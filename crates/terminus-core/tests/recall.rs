@@ -96,9 +96,9 @@ impl Bench {
 
     /// A session of `Read` tool calls, one per named path.
     ///
-    /// A path reaches the `entities` table only from a tool call's own input
-    /// (RCL-02), so a document frequency to weight by is something only a real
-    /// tool record can produce.
+    /// A path reaches the `entities` table only from a tool call's own input,
+    /// so a document frequency to weight by is something only a real tool
+    /// record can produce.
     fn reads(&self, name: &str, paths: &[&str]) -> PathBuf {
         let mut body = String::new();
         for (n, file) in paths.iter().enumerate() {
@@ -131,7 +131,7 @@ impl Bench {
     ///
     /// Written so a test can hand it a clock that goes backwards: 31 of 62 real
     /// transcripts carry a record whose timestamp does, which is the whole of
-    /// why D-22 orders a context window by `turn_seq`.
+    /// why a context window is ordered by `turn_seq`.
     fn timeline(&self, name: &str, stamps: &[&str]) -> PathBuf {
         let mut body = String::new();
         for (n, stamp) in stamps.iter().enumerate() {
@@ -154,8 +154,8 @@ impl Bench {
         self.archive(name, &body)
     }
 
-    /// A config that has been through a real `terminus.toml`, with PRIV-03's
-    /// knob written either way.
+    /// A config that has been through a real `terminus.toml`, with the
+    /// `redact_recall` knob written either way.
     ///
     /// Loaded from a file rather than built in memory because there is no
     /// in-memory setter for it: the only thing that can turn the knob on is a
@@ -224,8 +224,8 @@ const INSIDE_WORD: &str = "aardvarkinside";
 
 /// The turn ids one FTS5 expression returns, or the error it raised.
 ///
-/// Deliberately fallible where the rest of the suite unwraps: the whole point of
-/// D-09 is which strings raise and which do not, so the error has to be a value
+/// Deliberately fallible where the rest of the suite unwraps: the whole point
+/// here is which strings raise and which do not, so the error has to be a value
 /// the test can assert on rather than a panic.
 fn matching(conn: &Connection, expression: &str) -> rusqlite::Result<Vec<i64>> {
     conn.prepare("SELECT rowid FROM turns_fts WHERE turns_fts MATCH ?1 ORDER BY rowid")?
@@ -260,8 +260,9 @@ fn turns_whose_record_contains(conn: &Connection, needle: &str) -> Vec<i64> {
         .collect()
 }
 
-/// The strings D-09 measured, plus the two shapes RCL-06 has to survive: a query
-/// that is nothing at all and a query that is nothing but punctuation.
+/// The strings measured to break a raw `MATCH`, plus the two shapes an empty
+/// result has to survive: a query that is nothing at all and a query that is
+/// nothing but punctuation.
 const HOSTILE: &[&str] = &[
     "src/worker/S.ts",
     "foo AND (bar",
@@ -271,15 +272,15 @@ const HOSTILE: &[&str] = &[
     "!@#$%^&*()",
 ];
 
-/// D-09: no raw query reaches `MATCH`, so none of these is an error.
+/// No raw query reaches `MATCH`, so none of these is an error.
 ///
 /// The control is the first half of the loop. "The query layer returned Ok" says
 /// nothing unless the raw string really would have failed, and every one of
 /// these six does - `fts5: syntax error near "/"`, `near ""`, `unterminated
-/// string`, `unknown special query`. RCL-06 forbids a non-zero exit for a query
-/// that simply found nothing, and searching for a path is the phase's headline
-/// case, so the most natural command in the product is exactly the one that
-/// would have failed.
+/// string`, `unknown special query`. A query that simply found nothing must
+/// never exit non-zero, and searching for a path is the headline case, so the
+/// most natural command in the product is exactly the one that would have
+/// failed.
 #[test]
 fn no_raw_query_reaches_fts5() {
     let bench = bench();
@@ -391,7 +392,7 @@ fn tokens_are_quoted_and_conjoined() {
 /// Both halves matter. `SearchManager` stays one term - expanding it into
 /// `Search` and `Manager` would widen a specific query into every turn that
 /// says `manager` - and a query for `manager` still finds the turn, because
-/// `index::expand` put that component in the stored body (D-13).
+/// `index::expand` put that component in the stored body.
 #[test]
 fn query_tokens_are_not_expanded() {
     let bench = bench();
@@ -522,8 +523,8 @@ fn hits_come_back_in_descending_relevance() {
     );
 }
 
-/// D-07: a subagent turn is searchable, and at equal score it sorts below the
-/// turn the user actually watched.
+/// A subagent turn is searchable, and at equal score it sorts below the turn
+/// the user actually watched.
 ///
 /// The two fixture turns carry the same sentence and nothing else, so their
 /// projected bodies are byte-identical and bm25 scores them identically - which
@@ -580,7 +581,7 @@ fn projects_of(response: &Response) -> Vec<String> {
     out
 }
 
-/// D-12: the default scope is the project the caller is standing in, found by
+/// The default scope is the project the caller is standing in, found by
 /// matching the directory against the keys ingest already wrote.
 #[test]
 fn a_search_is_scoped_to_the_project_the_caller_stands_in() {
@@ -639,7 +640,7 @@ fn an_unknown_directory_matches_nothing_and_says_why() {
             named: elsewhere.to_string_lossy().into_owned()
         })
     );
-    // The reason renders: RCL-10 hands this to a caller to print.
+    // The reason renders: an empty result hands it to the caller to print.
     assert!(response
         .reason
         .unwrap()
@@ -713,7 +714,7 @@ fn tool_of(conn: &Connection, turn_id: i64) -> Option<String> {
     .unwrap()
 }
 
-/// D-16: `turns.tool_name` is the whole tool filter.
+/// `turns.tool_name` is the whole tool filter.
 #[test]
 fn a_tool_filter_returns_only_that_tools_turns() {
     let bench = bench();
@@ -826,8 +827,8 @@ fn a_path_filter_is_structural_and_not_textual() {
     assert_eq!(unique, union.hits.len(), "a turn came back twice");
 }
 
-/// D-23: the window is a lexicographic comparison against `turns.ts`, and a
-/// bare date covers its own whole day.
+/// The window is a lexicographic comparison against `turns.ts`, and a bare
+/// date covers its own whole day.
 #[test]
 fn a_time_window_includes_and_excludes_by_timestamp() {
     let bench = bench();
@@ -955,10 +956,10 @@ fn a_malformed_time_is_a_caller_error() {
     }
 }
 
-/// RCL-04 matches a whole stored value, never one query token against one.
+/// An entity match is a whole stored value, never one query token against one.
 ///
 /// `path` and `error` values are multi-token by construction, so a
-/// token-equality rule could never fire for the two kinds this phase headlines.
+/// token-equality rule could never fire for the two kinds search headlines.
 #[test]
 fn an_entity_match_is_against_the_whole_stored_value() {
     let path = "src/worker/S.ts";
@@ -984,7 +985,8 @@ fn an_entity_match_is_against_the_whole_stored_value() {
     assert_eq!(Query::parse("anything").matches_entity("///"), None);
 }
 
-/// RCL-04's point: an exact structural match outranks a free-text one.
+/// The point of entity matching: an exact structural match outranks a free-text
+/// one.
 ///
 /// The assertion is the reordering itself. `cargo` reaches turns that ran it as
 /// a command and turns that merely say the word, and among them is a pair the
@@ -1039,8 +1041,8 @@ fn a_path_in_a_tool_call_outranks_the_same_path_in_prose() {
 /// A value half the corpus carries moves a hit far less than a rare one.
 ///
 /// Nothing is rejected and there is no stop-list: the common value still
-/// matches, and RCL-04 puts the judgement at query time precisely because "too
-/// common" changes as the archive grows.
+/// matches, and the judgement sits at query time precisely because "too common"
+/// changes as the archive grows.
 #[test]
 fn a_rare_entity_value_moves_a_hit_more_than_a_common_one() {
     let bench = bench();
@@ -1073,8 +1075,8 @@ fn a_rare_entity_value_moves_a_hit_more_than_a_common_one() {
 /// `Read` tool call opened.
 ///
 /// **Not `src/worker/S.ts`.** That path is in the fixture too, and it is in
-/// prose only - RCL-02 extracts entities from structured tool records and never
-/// from a sentence - so it is the free-text control below rather than a stored
+/// prose only - entities come from structured tool records and never from a
+/// sentence - so it is the free-text control below rather than a stored
 /// value anything can match structurally.
 const STORED_PATH: &str = "docs/RETRY.md";
 
@@ -1085,9 +1087,9 @@ fn read_hit<'a>(conn: &Connection, hits: &'a [Hit]) -> &'a Hit {
         .unwrap_or_else(|| panic!("no Read turn among {hits:?}"))
 }
 
-/// D-04: a hit says HOW its entities matched, not just how much they scored.
+/// A hit says HOW its entities matched, not just how much they scored.
 ///
-/// The kind is what phase 5's structural threshold reads. `entity_score`
+/// The kind is what injection's structural threshold reads. `entity_score`
 /// collapses it - an IDF times a weight cannot say which of the two weights
 /// produced it - and approximating the threshold with a score cutoff instead is
 /// what `DESIGN-BRIEF.md:245` forbids outright, since bm25 scores are not
@@ -1108,7 +1110,7 @@ fn a_hit_reports_whether_the_query_asked_for_the_whole_stored_value() {
     // stored value is covered rather than asked for.
     //
     // The extra token is one the turn itself carries, because a search query
-    // is conjunctive (D-09): "who edited docs/RETRY.md yesterday" reports no
+    // is conjunctive: "who edited docs/RETRY.md yesterday" reports no
     // kind on that turn for the plainer reason that it returns no hits at all.
     let covered = ranked(&conn, &format!("Read {STORED_PATH}"), MAX_RESULTS);
     assert_eq!(
@@ -1117,11 +1119,11 @@ fn a_hit_reports_whether_the_query_asked_for_the_whole_stored_value() {
     );
 }
 
-/// D-04's other half: how many DISTINCT entities of that turn the query matched.
+/// The other half: how many DISTINCT entities of that turn the query matched.
 ///
-/// One turn naming one file three times is one piece of evidence, and INJ-03's
-/// co-occurrence condition is about two independent facts - so the count is
-/// over distinct `(kind, value_norm)` pairs and never over rows.
+/// One turn naming one file three times is one piece of evidence, and
+/// injection's co-occurrence condition is about two independent facts - so the
+/// count is over distinct `(kind, value_norm)` pairs and never over rows.
 #[test]
 fn a_hit_counts_distinct_matched_entities_and_not_repeats() {
     let bench = bench();
@@ -1182,7 +1184,7 @@ fn a_hit_counts_distinct_matched_entities_and_not_repeats() {
 /// A turn the query reached only through its text reports no kind and no count.
 ///
 /// This is the weakest signal in `DESIGN-BRIEF.md`'s hierarchy and the one
-/// INJ-03 never fires on, so it has to be distinguishable from a weak entity
+/// injection never fires on, so it has to be distinguishable from a weak entity
 /// match rather than a small `entity_score`.
 #[test]
 fn a_free_text_only_hit_reports_no_entity_match_at_all() {
@@ -1199,8 +1201,8 @@ fn a_free_text_only_hit_reports_no_entity_match_at_all() {
     }
 }
 
-/// D-05: every hit carries an excerpt cut from the archive, showing the text
-/// that matched.
+/// Every hit carries an excerpt cut from the archive, showing the text that
+/// matched.
 ///
 /// `snippet()` over the contentless FTS table returns an empty string with exit
 /// 0, so an excerpt built from it would validate against the documented shape
@@ -1246,8 +1248,8 @@ fn every_hit_carries_an_excerpt_from_the_blob() {
     }
 }
 
-/// D-20: several hits from one session fetch and decompress each block row
-/// they cover once, not once per hit.
+/// Several hits from one session fetch and decompress each block row they
+/// cover once, not once per hit.
 #[test]
 fn one_session_is_read_once_however_many_hits_it_answered() {
     let bench = bench();
@@ -1274,8 +1276,8 @@ fn one_session_is_read_once_however_many_hits_it_answered() {
     assert_eq!(response.reads.blocks_decompressed, covered);
 }
 
-/// AC2 for excerpts: a turn inside one block of a session of three or more
-/// fetches that one row and decompresses that one block.
+/// Block reads for excerpts: a turn inside one block of a session of three or
+/// more fetches that one row and decompresses that one block.
 #[test]
 fn an_excerpt_of_a_turn_inside_one_block_reads_one_row() {
     let bench = bench();
@@ -1293,8 +1295,8 @@ fn an_excerpt_of_a_turn_inside_one_block_reads_one_row() {
     assert_eq!(response.reads.blocks_decompressed, 1);
 }
 
-/// AC2 for excerpts: a turn spanning k blocks fetches k rows and decompresses
-/// k blocks, and no other row of its session.
+/// Block reads for excerpts: a turn spanning k blocks fetches k rows and
+/// decompresses k blocks, and no other row of its session.
 #[test]
 fn an_excerpt_of_a_turn_spanning_k_blocks_reads_k_rows() {
     let bench = bench();
@@ -1374,8 +1376,8 @@ fn turn_at(conn: &Connection, fixture: &str, seq: i64) -> i64 {
     .unwrap_or_else(|e| panic!("{fixture} turn {seq}: {e}"))
 }
 
-/// AC2 for context windows: a window of one turn inside one block of a
-/// session of three or more fetches that one row and decompresses that block.
+/// Block reads for context windows: a window of one turn inside one block of
+/// a session of three or more fetches that one row and decompresses that block.
 #[test]
 fn a_context_window_of_a_turn_inside_one_block_reads_one_row() {
     let bench = bench();
@@ -1391,8 +1393,8 @@ fn a_context_window_of_a_turn_inside_one_block_reads_one_row() {
     assert_eq!(window.reads.blocks_decompressed, 1);
 }
 
-/// AC2 for context windows: a window whose turns span k blocks fetches k rows
-/// and decompresses k blocks, each once though two turns share one.
+/// Block reads for context windows: a window whose turns span k blocks fetches
+/// k rows and decompresses k blocks, each once though two turns share one.
 #[test]
 fn a_context_window_spanning_k_blocks_reads_k_rows() {
     let bench = bench();
@@ -1430,7 +1432,7 @@ fn scoped_around(
     context::window(conn, &config(exclusions), scope, anchor, before, after).unwrap()
 }
 
-/// RCL-08: the turns on either side of a hit, in `turn_seq` order.
+/// The turns on either side of a hit, in `turn_seq` order.
 #[test]
 fn a_window_returns_the_requested_turns_in_turn_seq_order() {
     let bench = bench();
@@ -1459,7 +1461,7 @@ fn a_window_returns_the_requested_turns_in_turn_seq_order() {
     assert_eq!(whole.turns.len(), 6);
 }
 
-/// D-22: `turn_seq` order, never timestamp order.
+/// `turn_seq` order, never timestamp order.
 ///
 /// Half of all real sessions carry a record whose timestamp goes backwards, so
 /// a timestamp sort would show a reply before the prompt it answers in half the
@@ -1498,8 +1500,7 @@ fn a_window_is_ordered_by_turn_seq_and_not_by_timestamp() {
     );
 }
 
-/// D-06: the window stops at the session and hands back the link it did not
-/// follow.
+/// The window stops at the session and hands back the link it did not follow.
 #[test]
 fn a_window_stops_at_the_session_boundary() {
     let bench = bench();
@@ -1565,7 +1566,7 @@ fn a_window_into_an_excluded_project_is_empty_with_a_reason() {
 /// row that names it directly.
 ///
 /// This is the ordinary state of a machine that ingested from a worktree before
-/// phase 2 folded the two keys together and again after, not a contrived store.
+/// ingest folded the two keys together and again after, not a contrived store.
 /// Both hits cover the directory at the same depth, so before the folded key
 /// outranked the pre-folding one the tie fell to the projection's `ORDER BY`:
 /// `/home/u/main` sorts before `/home/u/proj`, so a user standing in
@@ -1630,8 +1631,8 @@ fn a_directory_that_is_also_another_rows_pre_worktree_key_scopes_to_itself() {
     assert_eq!(scoped.project(), Some("/home/u/main"));
 }
 
-/// RCL-10 auto-scopes all three MCP tools, and the context window is the one
-/// that takes an id instead of a query.
+/// All three MCP tools scope to the caller's project, and the context window is
+/// the one that takes an id instead of a query.
 ///
 /// Turn ids are densely enumerable - `session_no << 24 | turn_seq` - so a
 /// window that scoped nothing walks out of the caller's project one id at a
@@ -1729,8 +1730,8 @@ fn an_unfiltered_context_window_returns_the_planted_credentials_whole() {
     assert!(text.contains(AUTHZ_SENTINEL), "{text}");
 }
 
-/// PRIV-03 over `recall_context`: a window is hook and MCP output, so the knob
-/// filters it (phase 4 D-01, D-03).
+/// `redact_recall` over `recall_context`: a window is hook and MCP output, so
+/// the knob filters it.
 ///
 /// The filter is applied by the same `excerpt::of_record_with` argument the
 /// search path passes, so it runs over the full projection before any window is
@@ -1811,7 +1812,7 @@ fn the_knob_leaves_an_ordinary_context_window_exactly_as_it_was() {
 }
 
 // ---------------------------------------------------------------------------
-// RCL-09: the verbatim record behind a turn id
+// The verbatim record behind a turn id
 // ---------------------------------------------------------------------------
 
 /// The records for a list of ids, over every project.
@@ -1828,7 +1829,7 @@ fn scoped_fetch(
     get::records(conn, &config(exclusions), scope, ids).unwrap()
 }
 
-/// D-20: ids across three sessions fetch each covering row once, not once per
+/// Ids across three sessions fetch each covering row once, not once per
 /// id. Two ids are taken from one session and one block precisely so "one
 /// fetch per row" and "one fetch per id" give different numbers.
 #[test]
@@ -1933,7 +1934,7 @@ fn body_under(bench: &Bench, conn: &Connection, id: i64, on: bool) -> Vec<u8> {
         .expect("an archived turn has a body")
 }
 
-/// AC2's byte-exactness, restated against the knob: absent, this read is still
+/// Byte-exactness, restated against the knob: absent, this read is still
 /// the archived line and nothing else.
 ///
 /// Separate from `the_returned_bytes_are_the_records_own_line` on purpose. That
@@ -1950,8 +1951,8 @@ fn an_unfiltered_get_returns_the_archived_line_byte_for_byte() {
     assert_eq!(body_under(&bench, &conn, id, false), line.as_bytes());
 }
 
-/// PRIV-03 over `recall_get`: the body is model-facing too, so the knob filters
-/// it - and filters the copy, never the archive (phase 4 D-04).
+/// `redact_recall` over `recall_get`: the body is model-facing too, so the knob
+/// filters it - and filters the copy, never the archive.
 ///
 /// The `"uuid"` and `"type"` assertions are what separate a filtered line from a
 /// stub: this is still the archived record with its JSON scaffolding intact, and
@@ -1990,14 +1991,14 @@ fn the_knob_filters_the_body_and_leaves_the_archived_line_alone() {
     assert_eq!(body_under(&bench, &conn, id, false), line.as_bytes());
 }
 
-/// D-08: `body_evicted` comes off `session_meta.is_evicted` and nowhere else,
-/// and the record still comes back.
+/// `body_evicted` comes off `session_meta.is_evicted` and nowhere else, and the
+/// record still comes back.
 ///
-/// The column is written by this test directly, because retention is phase 8 and
-/// nothing writes it before then. The half that matters is the blob read that
-/// does NOT happen: a corrupt blob is what `terminus verify` reports, and a
-/// failed read allowed to look like an eviction would report silent data loss as
-/// retention working correctly.
+/// The test sets the column directly rather than running retention, so the
+/// blob stays intact and the flag is read off the column alone. The half that
+/// matters is the blob read that does NOT happen: a corrupt blob is what
+/// `terminus verify` reports, and a failed read allowed to look like an
+/// eviction would report silent data loss as retention working correctly.
 #[test]
 fn an_evicted_session_returns_the_record_flagged_and_reads_none_of_its_rows() {
     let bench = bench();
@@ -2084,8 +2085,8 @@ fn a_repeated_id_is_answered_once() {
     );
 }
 
-/// AC2 for `recall_get`: a record inside one block of a session of three or
-/// more fetches that one row and decompresses that one block.
+/// Block reads for `recall_get`: a record inside one block of a session of
+/// three or more fetches that one row and decompresses that one block.
 #[test]
 fn a_get_of_a_turn_inside_one_block_reads_one_row() {
     let bench = bench();
@@ -2100,7 +2101,7 @@ fn a_get_of_a_turn_inside_one_block_reads_one_row() {
     assert_eq!(fetched.reads.blocks_decompressed, 1);
 }
 
-/// AC2 for `recall_get`: a record spanning k blocks fetches k rows and
+/// Block reads for `recall_get`: a record spanning k blocks fetches k rows and
 /// decompresses k blocks.
 #[test]
 fn a_get_of_a_turn_spanning_k_blocks_reads_k_rows() {
@@ -2117,8 +2118,9 @@ fn a_get_of_a_turn_spanning_k_blocks_reads_k_rows() {
     assert_eq!(fetched.reads.blocks_decompressed, k);
 }
 
-/// RCL-10 auto-scopes all three tools, and ids are densely enumerable, so a get
-/// standing in another project may not read this one's turns.
+/// All three tools scope to the caller's project, and ids are densely
+/// enumerable, so a get standing in another project may not read this one's
+/// turns.
 ///
 /// Reported as absent rather than as somebody else's, for the reason
 /// `a_context_window_is_scoped_like_a_search_is` gives: a distinct reason would
@@ -2169,9 +2171,9 @@ fn a_get_is_scoped_like_a_search_is() {
 /// unarchived id gets, so the answer neither confirms the id nor names the
 /// project.
 ///
-/// The read half of ING-08 through this door too: exclusion applies on every
-/// read path, and `recall_get` is the one that would hand back the whole record
-/// rather than a snippet of it.
+/// Exclusion holds through this door too: it applies on every read path, and
+/// `recall_get` is the one that would hand back the whole record rather than a
+/// snippet of it.
 #[test]
 fn a_get_of_an_excluded_projects_turn_is_absent_with_a_reason() {
     let bench = bench();

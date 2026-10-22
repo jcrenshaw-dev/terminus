@@ -1,5 +1,5 @@
 //! The four derived recall projections, pinned byte for byte against a golden
-//! captured before this phase changed anything (phase 4 AC2).
+//! captured before the `redact_recall` knob changed anything.
 //!
 //! **Captured before the first product edit, deliberately.** The criterion this
 //! file exists for is that the default - the new config boolean absent - is
