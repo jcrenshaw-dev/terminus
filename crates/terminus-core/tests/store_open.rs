@@ -954,15 +954,16 @@ fn a_wide_store_is_tightened_by_a_writable_open_and_by_nothing_else() {
     }
 }
 
-/// Several processes opening one older store at once all succeed, and the
-/// column they were missing is added once.
+/// Several processes opening one store that lacks a table this build declares
+/// all succeed, and the table is created once.
 ///
-/// `bring_forward` read what was missing and then altered in a deferred
-/// transaction, so two opens could both see `runs.notes` missing and the second
-/// `ALTER TABLE ADD COLUMN` failed on the column the first had just added. It
-/// now reads the list again under the write lock.
+/// `bring_forward` used to read what was missing and then write in a deferred
+/// transaction, so two opens could both see `labels` missing, and the second
+/// one's read lock could not become a write lock once the first had created the
+/// table: SQLite fails that upgrade at once rather than calling the busy
+/// handler. It now reads the list again under the write lock.
 #[test]
-fn concurrent_opens_of_an_older_store_all_bring_it_forward() {
+fn concurrent_opens_of_a_store_missing_a_table_all_succeed() {
     use std::sync::{Arc, Barrier};
 
     const OPENERS: usize = 8;
@@ -972,8 +973,7 @@ fn concurrent_opens_of_an_older_store_all_bring_it_forward() {
         drop(Store::open(dir.path()).unwrap());
         {
             let conn = Connection::open(dir.path().join(DB_FILE_NAME)).unwrap();
-            conn.execute_batch("ALTER TABLE runs DROP COLUMN notes")
-                .unwrap();
+            conn.execute_batch("DROP TABLE labels").unwrap();
         }
 
         let barrier = Arc::new(Barrier::new(OPENERS));
@@ -989,19 +989,19 @@ fn concurrent_opens_of_an_older_store_all_bring_it_forward() {
             .collect();
         for opener in openers {
             if let Err(e) = opener.join().unwrap() {
-                panic!("round {round}: an open of the older store failed: {e}");
+                panic!("round {round}: an open of the store missing `labels` failed: {e}");
             }
         }
 
         let conn = Connection::open(dir.path().join(DB_FILE_NAME)).unwrap();
-        let has_notes: bool = conn
+        let has_labels: bool = conn
             .query_row(
-                "SELECT count(*) FROM pragma_table_info('runs') WHERE name = 'notes'",
+                "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'labels'",
                 [],
                 |r| r.get::<_, i64>(0),
             )
             .unwrap()
             == 1;
-        assert!(has_notes, "round {round}: runs.notes was not added");
+        assert!(has_labels, "round {round}: labels was not created");
     }
 }
