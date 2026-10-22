@@ -102,12 +102,7 @@ command and in the `recall_search` and `recall_get` results, and it does not
 change when `.claude` moves or is reached through a symlink, or when a project
 folder moves. A transcript that is a symlink shows the key of the
 file it points at, and a path outside those two shapes, such as a file under no
-`projects` folder, shows its canonical path. A stored key that is still an
-absolute path is shown as it is: the next `terminus ingest` moves it to the form
-above, and a read never does. A session keeps its absolute key when another
-session reduces to the same key and the ingest cannot prove the two are one
-transcript; the ingest tests it again and reports it on every run. It is a key,
-not a path to open.
+`projects` folder, shows its canonical path. It is a key, not a path to open.
 
 ### `search`
 

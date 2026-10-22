@@ -119,7 +119,7 @@ Rebuilds every table derived from the archive, the search index among them. Turn
 
 ### `terminus status`
 
-Prints the store's path and size, the number of sessions and turns, how far into the transcripts the archive has read, the excluded projects, and the last ingest pass: when it started, how long it took, the files walked, archived and failed, the bytes read, the turns added, and its notes and errors. The lines recovery leaves, such as the count of sessions it re-keyed, print under `error` even when nothing failed. A pass's failures are recorded here and nowhere else, since there is no log file. It takes no lock, so it works while a pass runs. With no store, it says so and exits 0, and creates no store. On a store older than the binary, it says so on stderr, reports what is there, and changes nothing.
+Prints the store's path and size, the number of sessions and turns, how far into the transcripts the archive has read, the excluded projects, and the last ingest pass: when it started, how long it took, the files walked, archived and failed, the bytes read, the turns added, and its notes and errors. The lines recovery leaves, such as a watermark it lowered, print under `error` even when nothing failed. A pass's failures are recorded here and nowhere else, since there is no log file. It takes no lock, so it works while a pass runs. With no store, it says so and exits 0, and creates no store. On a store older than the binary, it says so on stderr, reports what is there, and changes nothing.
 
 - `--json`
 
