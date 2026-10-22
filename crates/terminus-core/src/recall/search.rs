@@ -188,10 +188,10 @@ impl Request {
 /// The pair itself rather than a count of pairs, because the decision log has
 /// to be able to say WHICH rule produced a candidate: "matched 2 entities"
 /// cannot attribute a replayed label change to a path rule versus a symbol
-/// rule, which is the one question offline replay exists to answer.
-/// `serde` is derived here and on nothing else in this module: a matched pair is
-/// the one part of a hit that outlives the query, because the prompt path writes
-/// it into a decision record and ingest reads it back.
+/// rule, which is the one question offline replay exists to answer. `serde` is
+/// derived here and on nothing else in this module: a matched pair is the one
+/// part of a hit that outlives the query, because the prompt path writes it
+/// into a decision record and ingest reads it back.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct MatchedEntity {
     /// The `entities.kind`: `path`, `command`, `error`, `symbol`, `tool`.
@@ -264,9 +264,9 @@ pub struct Hit {
 
 /// What a search answered.
 ///
-/// An empty `hits` with a `reason` is how an empty answer is given: a search that
-/// could not match anything says so, rather than throwing or looking like an
-/// archive with nothing in it.
+/// An empty `hits` with a `reason` is how an empty answer is given: a search
+/// that could not match anything says so, rather than throwing or looking like
+/// an archive with nothing in it.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Response {
     pub hits: Vec<Hit>,

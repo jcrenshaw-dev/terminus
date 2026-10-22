@@ -16,10 +16,10 @@
 //! [`Config::excludes_encoded_dir`] answers **before any file is opened**. All
 //! it has is the encoded project directory name, because `cwd` only exists on a
 //! parsed record and reading a record means opening the file - which is exactly
-//! what an exclusion forbids: an excluded project is never read. It is therefore
-//! an exact match on the encoded name, plus one fixed-literal worktree clause,
-//! and not a prefix match: the encoding is provably lossy, so an
-//! extension-tolerant rule cannot tell a child directory from a hyphenated
+//! what an exclusion forbids: an excluded project is never read. It is
+//! therefore an exact match on the encoded name, plus one fixed-literal
+//! worktree clause, and not a prefix match: the encoding is provably lossy, so
+//! an extension-tolerant rule cannot tell a child directory from a hyphenated
 //! sibling and `-data-projects-cadence` would silently swallow
 //! `-data-projects-cadence-research`.
 //!
@@ -549,8 +549,9 @@ impl Config {
         config.snapshot = Snapshot {
             enabled: file.snapshot.enabled.unwrap_or(defaults.enabled),
             // Zero would mean "snapshot on every prompt", which is the failure
-            // the interval exists to prevent, so it falls back to the default rather
-            // than being taken literally. Turning snapshots off is `enabled`.
+            // the interval exists to prevent, so it falls back to the default
+            // rather than being taken literally. Turning snapshots off is
+            // `enabled`.
             interval_hours: file
                 .snapshot
                 .interval_hours
