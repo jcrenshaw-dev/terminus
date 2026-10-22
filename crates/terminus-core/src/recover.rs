@@ -3,28 +3,11 @@
 //! No repair command, no external supervisor, no stale-lock handling. The last
 //! of those is not an omission: the ingest lock is an OS lock that dies with the
 //! process (`crate::ingest::lock`), so there is no stale lock to recover from.
-//! What is left is three things, in this order.
-//!
-//! **The re-key** (#57, phase 4). A session used to be keyed on its absolute
-//! path, so a moved or symlinked `.claude` gave every transcript a second key
-//! and archived it twice. The key is now the path below the project folder,
-//! `<uuid>.jsonl` or a sidecar's `<sessionId>/subagents/...` path
-//! ([`crate::ingest::path_key`]), so a moved project folder keeps the key too,
-//! and a store written before that is re-keyed
-//! here, in one transaction, before anything is rebuilt or read. A session with
-//! no twin is re-keyed in place: its key moves in every table that holds it, and
-//! its block rows, `session_no` and turn ids do not change. Twins, sessions that
-//! reduce to one key, are merged into the oldest of them only when one stream
-//! is provably a prefix of the other's (D-10, D-11). The oldest keeps its number
-//! and takes the longer stream, and a twin is deleted only after it holds every
-//! byte the twin held. A twin that fails the test is reported on every run and
-//! left as it is. The steady state reads the stored keys that are still
-//! absolute paths and writes nothing.
+//! What is left is two things, in this order.
 //!
 //! **The rebuild.** `reindex::up_to_date` brings a store older than this build
 //! forward before a single transcript is read, so a walk never appends turn
-//! rows in one shape beside rows written in another. It runs after the re-key,
-//! so it never rebuilds a session the re-key is about to change (D-09).
+//! rows in one shape beside rows written in another.
 //!
 //! **The watermark sweep.** A killed pass can leave a watermark claiming bytes
 //! the committed blob does not hold - that is the state phase 1's crash harness
@@ -35,9 +18,8 @@
 //! which is what ING-03's "every run" requires.
 //!
 //! No archived byte is lost here. A watermark is lowered so the next pass
-//! re-reads the gap, an orphaned watermark is removed because it claims bytes
-//! nothing archived, a session is re-keyed in place, and a twin is deleted only
-//! after the survivor holds every byte it held.
+//! re-reads the gap, and an orphaned watermark is removed because it claims
+//! bytes nothing archived.
 //!
 //! **The sweep's first arm is outside a session that was not captured under
 //! `full`** (ING-07, phase 8 D-05). It compares a FILE offset against a count of
@@ -60,14 +42,10 @@
 //! is wrong under every capture mode - and it is what removes the watermark of a
 //! session retention deleted.
 
-use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use rusqlite::Connection;
-
 use crate::error::Result;
-use crate::ingest::path_key;
 use crate::store::Store;
 
 /// A watermark that claimed more bytes than its blob holds.
@@ -86,58 +64,23 @@ pub struct RemovedWatermark {
     pub byte_offset: u64,
 }
 
-/// A session that reduces to the same key as an older one, left as it is
-/// because the two are not provably one stream (phase 4 D-10).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnmergedTwin {
-    pub session_key: String,
-    /// The group's oldest session, which the twin was tested against.
-    pub survivor_key: String,
-    /// The key both reduce to.
-    pub new_key: String,
-    pub reason: String,
-}
-
 /// What recovery repaired.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Recovered {
     pub lowered: Vec<LoweredWatermark>,
     pub removed: Vec<RemovedWatermark>,
-    /// Sessions whose absolute-path key moved to the path below the project
-    /// folder.
-    pub rekeyed: usize,
-    /// Twins merged into an older session and deleted.
-    pub merged: usize,
-    /// Reported again on every run until they are merged.
-    pub unmerged: Vec<UnmergedTwin>,
-    /// What the repair could not do and carried on past: a decision document
-    /// that does not parse, a drain that failed.
-    pub notes: Vec<String>,
     pub duration: Duration,
 }
 
 impl Recovered {
     pub fn repaired(&self) -> bool {
-        !self.lowered.is_empty()
-            || !self.removed.is_empty()
-            || self.rekeyed > 0
-            || self.merged > 0
-            || !self.unmerged.is_empty()
-            || !self.notes.is_empty()
+        !self.lowered.is_empty() || !self.removed.is_empty()
     }
 
-    /// One line per repair, for a `runs.error` or a `status` report. The re-key
-    /// is one line however many sessions it moved: the first run on a large
-    /// store moves thousands.
+    /// One line per repair, for a `runs.error` or a `status` report: one per
+    /// lowered watermark, then one per removed watermark.
     pub fn lines(&self) -> Vec<String> {
         let mut out = Vec::new();
-        if self.rekeyed > 0 || self.merged > 0 {
-            out.push(format!(
-                "re-keyed {} session(s) to their path below the project folder and merged {} \
-                 twin(s) into the older session",
-                self.rekeyed, self.merged
-            ));
-        }
         for w in &self.lowered {
             out.push(format!(
                 "{}: watermark {} was past the {} bytes the archive holds; lowered",
@@ -150,18 +93,12 @@ impl Recovered {
                 w.session_key, w.byte_offset
             ));
         }
-        for t in &self.unmerged {
-            out.push(format!(
-                "{}: not merged into {}, though both reduce to {}: {}; both are kept",
-                t.session_key, t.survivor_key, t.new_key, t.reason
-            ));
-        }
-        out.extend(self.notes.iter().cloned());
         out
     }
 }
 
-/// Open the store for work, recovering it first.
+/// Open the store for work, recovering it first: bring the derived tables up to
+/// date, then sweep the watermarks.
 ///
 /// One callable with two callers - the tree pass and single-file
 /// `ingest::run` - because ING-03 says every run and `ingest::run` is a run.
@@ -172,622 +109,16 @@ impl Recovered {
 ///
 /// Both callers already hold the ingest lock when they get here, and both call
 /// it before any transcript is read.
-///
-/// A re-key that fails stops the run. Ingesting under the new keys over a store
-/// still holding the old ones would archive every session a third time.
 pub fn recover(data_dir: &Path) -> Result<(Store, Recovered)> {
     let started = Instant::now();
-    let mut store = Store::open(data_dir)?;
-    let mut report = Recovered::default();
-    rekey(&mut store, &mut report)?;
-    let mut store = crate::reindex::up_to_date(store)?;
+    let mut store = crate::reindex::up_to_date(Store::open(data_dir)?)?;
     let (lowered, removed) = sweep_watermarks(&mut store)?;
-    report.lowered = lowered;
-    report.removed = removed;
-    report.duration = started.elapsed();
+    let report = Recovered {
+        lowered,
+        removed,
+        duration: started.elapsed(),
+    };
     Ok((store, report))
-}
-
-/// Move every absolute-path key to the path below the project folder (#57).
-fn rekey(store: &mut Store, report: &mut Recovered) -> Result<()> {
-    let groups = stale_keys(store.conn())?;
-    let parents = stale_parents(store.conn())?;
-    if groups.is_empty() && parents.is_empty() {
-        return Ok(());
-    }
-
-    // Decision files still waiting name turn ids too, and the pass drains them
-    // only after recovery, when a merged twin's ids would be gone. So they are
-    // moved in here, only when there is a repair to do, and rewritten with the
-    // rest. A drain that fails is said and the repair goes on, as in the pass.
-    let data_dir = store.data_dir().to_path_buf();
-    match crate::feedback::drain(store.conn_mut(), &data_dir) {
-        Ok(drained) => report.notes.extend(drained.lines()),
-        Err(e) => report
-            .notes
-            .push(format!("the decision log could not be drained: {e}")),
-    }
-
-    let tx = store.conn_mut().transaction()?;
-    // The key is a parent of four tables, none declared `ON UPDATE CASCADE`.
-    // Deferred, the parent and its children move in any order and are checked
-    // at commit, which still refuses a child left behind.
-    tx.execute_batch("PRAGMA defer_foreign_keys = ON")?;
-
-    // Each merged twin's `session_no`, and the survivor's that replaces it.
-    let mut merged_into: BTreeMap<i64, i64> = BTreeMap::new();
-    for (new, old) in &groups {
-        let held = tx.query_row(
-            "SELECT count(*) FROM sessions WHERE session_key = ?1",
-            [new],
-            |r| r.get::<_, i64>(0),
-        )? > 0;
-        if let ([only], false) = (old.as_slice(), held) {
-            move_key(&tx, only, new)?;
-            report.rekeyed += 1;
-            continue;
-        }
-
-        // Twins: every session reducing to `new`, oldest first. The oldest
-        // survives (D-11), and each other member is tested against the stream
-        // the group holds so far, so two members that both extend the survivor
-        // and differ after its end are never both taken.
-        let mut group = Vec::with_capacity(old.len() + 1);
-        for key in old.iter().chain(held.then_some(new)) {
-            group.push(Member::read(&tx, key)?);
-        }
-        group.sort_by_key(|m| m.session_no);
-        // Each member that passes is merged at once, so the survivor always
-        // holds the group's stream so far and the next member is tested
-        // against exactly what it would be merged into.
-        let (first, others) = group.split_first().expect("a group has members");
-        let mut survivor = Member::read(&tx, &first.key)?;
-        let mut absorbed = 0;
-        let mut new_key_kept = false;
-        for member in others {
-            let merged = match one_stream(&tx, &survivor, member)? {
-                Ok(()) => merge(&tx, &survivor, member)?,
-                Err(reason) => Err(reason),
-            };
-            match merged {
-                Ok(()) => {
-                    absorbed += 1;
-                    merged_into.insert(member.session_no, survivor.session_no);
-                    survivor = Member::read(&tx, &survivor.key)?;
-                }
-                Err(reason) => {
-                    new_key_kept |= member.key == *new;
-                    report.unmerged.push(UnmergedTwin {
-                        session_key: member.key.clone(),
-                        survivor_key: survivor.key.clone(),
-                        new_key: new.clone(),
-                        reason,
-                    });
-                }
-            }
-        }
-        report.merged += absorbed;
-
-        // The new key goes to the survivor only once it has absorbed a member.
-        // Left free, the next pass archives the file fresh under it, and that
-        // copy merges on the following run if the survivor is its prefix.
-        // Handed to a stream that may not be the file's prefix, ingest would
-        // append one file's bytes onto another's.
-        if absorbed > 0 && !new_key_kept && survivor.key != *new {
-            move_key(&tx, &survivor.key, new)?;
-            report.rekeyed += 1;
-        }
-    }
-    if !merged_into.is_empty() {
-        repoint(&tx, &merged_into, report)?;
-    }
-    for (old, new) in &parents {
-        tx.execute(
-            "UPDATE session_meta SET parent_session_key = ?2 WHERE parent_session_key = ?1",
-            [old, new],
-        )?;
-    }
-
-    tx.commit()?;
-    Ok(())
-}
-
-/// The stored keys that are still absolute paths and reduce to another key,
-/// grouped by that key.
-///
-/// `/` sorts just below `0`, so the range is a walk of the primary key's index
-/// over exactly the absolute keys, and a store with none reads nothing else.
-fn stale_keys(conn: &Connection) -> Result<BTreeMap<String, Vec<String>>> {
-    let keys: Vec<String> = conn
-        .prepare("SELECT session_key FROM sessions WHERE session_key >= '/' AND session_key < '0'")?
-        .query_map([], |r| r.get(0))?
-        .collect::<std::result::Result<_, _>>()?;
-    let mut groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for key in keys {
-        let new = path_key(Path::new(&key))?;
-        if new != key {
-            groups.entry(new).or_default().push(key);
-        }
-    }
-    Ok(groups)
-}
-
-/// Every `parent_session_key` that is an absolute path reducing to another key,
-/// with its reduction.
-fn stale_parents(conn: &Connection) -> Result<Vec<(String, String)>> {
-    let keys: Vec<String> = conn
-        .prepare(
-            "SELECT DISTINCT parent_session_key FROM session_meta
-              WHERE parent_session_key >= '/' AND parent_session_key < '0'",
-        )?
-        .query_map([], |r| r.get(0))?
-        .collect::<std::result::Result<_, _>>()?;
-    let mut out = Vec::new();
-    for key in keys {
-        let new = path_key(Path::new(&key))?;
-        if new != key {
-            out.push((key, new));
-        }
-    }
-    Ok(out)
-}
-
-/// One session of a group that reduces to one key.
-struct Member {
-    key: String,
-    session_no: i64,
-    /// `None` when the session has no `session_meta` row, which `verify` reports
-    /// and nothing here guesses at.
-    stream: Option<Stream>,
-}
-
-/// What `session_meta` says about one session's stream.
-struct Stream {
-    evicted: bool,
-    block_size: Option<i64>,
-    len: i64,
-    checksum: Vec<u8>,
-}
-
-impl Member {
-    fn read(conn: &Connection, key: &str) -> Result<Member> {
-        type Row = (i64, Option<bool>, Option<i64>, Option<i64>, Option<Vec<u8>>);
-        let (session_no, evicted, block_size, len, checksum): Row = conn.query_row(
-            "SELECT s.session_no, coalesce(m.is_evicted, 0) <> 0, m.block_size,
-                    m.uncompressed_len, m.checksum
-               FROM sessions s LEFT JOIN session_meta m USING (session_key)
-              WHERE s.session_key = ?1",
-            [key],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
-        )?;
-        let stream = match (evicted, len, checksum) {
-            (Some(evicted), Some(len), Some(checksum)) => Some(Stream {
-                evicted,
-                block_size,
-                len,
-                checksum,
-            }),
-            _ => None,
-        };
-        Ok(Member {
-            key: key.to_owned(),
-            session_no,
-            stream,
-        })
-    }
-}
-
-/// Whether one member's stream is a prefix of the other's (D-10), or why not.
-///
-/// Reads the hash column, and decompresses at most the two blocks holding the
-/// shorter stream's partial end. Two streams that agree on every full block can
-/// still differ inside that last block, and merging them would lose the shorter
-/// one's bytes.
-fn one_stream(
-    conn: &Connection,
-    a: &Member,
-    b: &Member,
-) -> Result<std::result::Result<(), String>> {
-    let (Some(x), Some(y)) = (&a.stream, &b.stream) else {
-        return Ok(Err("one of the two has no session_meta row".into()));
-    };
-    // An evicted session has no block rows, and an empty hash list is a prefix
-    // of anything, so eviction is compared on what the metadata recorded.
-    match (x.evicted, y.evicted) {
-        (true, true) => {
-            return Ok(
-                if x.len == y.len && x.checksum == y.checksum && x.block_size == y.block_size {
-                    Ok(())
-                } else {
-                    Err("both are evicted and recorded different streams".into())
-                },
-            )
-        }
-        (true, false) | (false, true) => return Ok(Err("one of the two is evicted".into())),
-        (false, false) => {}
-    }
-    let size = match (x.block_size, y.block_size) {
-        (Some(p), Some(q)) if p == q && p > 0 => p,
-        _ => return Ok(Err("their block sizes differ or are not recorded".into())),
-    };
-    let ((short, s), (long, l)) = if x.len <= y.len {
-        ((a, x), (b, y))
-    } else {
-        ((b, y), (a, x))
-    };
-    let short_hashes = match hashes(conn, short.session_no, s.len, size)? {
-        Ok(h) => h,
-        Err(e) => return Ok(Err(format!("{}: {e}", short.key))),
-    };
-    let long_hashes = match hashes(conn, long.session_no, l.len, size)? {
-        Ok(h) => h,
-        Err(e) => return Ok(Err(format!("{}: {e}", long.key))),
-    };
-    if s.len == l.len {
-        return Ok(if s.checksum == l.checksum {
-            Ok(())
-        } else {
-            Err("the two streams are the same length and hold different bytes".into())
-        });
-    }
-    let full = (s.len / size) as usize;
-    if let Some(i) = (0..full).find(|&i| short_hashes[i] != long_hashes[i]) {
-        return Ok(Err(format!("block {i} differs")));
-    }
-    if s.len % size != 0 {
-        let end = |m: &Member, len: i64| block(conn, m.session_no, full as i64, size, len);
-        let (tail, over) = match (end(short, s.len)?, end(long, l.len)?) {
-            (Ok(tail), Ok(over)) => (tail, over),
-            (Err(e), _) | (_, Err(e)) => return Ok(Err(e)),
-        };
-        if !over.starts_with(&tail) {
-            return Ok(Err(format!(
-                "block {full}, the shorter stream's last, differs"
-            )));
-        }
-    }
-    Ok(Ok(()))
-}
-
-/// One session's block hashes, when they are numbered from 0 with no gap and
-/// there are as many as its length needs.
-fn hashes(
-    conn: &Connection,
-    session_no: i64,
-    len: i64,
-    size: i64,
-) -> Result<std::result::Result<Vec<Vec<u8>>, String>> {
-    let rows: Vec<(i64, Vec<u8>)> = conn
-        .prepare_cached(
-            "SELECT block_no, hash FROM blocks WHERE session_no = ?1 ORDER BY block_no",
-        )?
-        .query_map([session_no], |r| Ok((r.get(0)?, r.get(1)?)))?
-        .collect::<std::result::Result<_, _>>()?;
-    if let Some((i, _)) = rows
-        .iter()
-        .enumerate()
-        .find(|(i, (no, _))| *no != *i as i64)
-    {
-        return Ok(Err(format!("block {i} is missing")));
-    }
-    let wanted = (len + size - 1) / size;
-    if rows.len() as i64 != wanted {
-        return Ok(Err(format!(
-            "it has {} block rows where its length needs {wanted}",
-            rows.len()
-        )));
-    }
-    Ok(Ok(rows.into_iter().map(|(_, hash)| hash).collect()))
-}
-
-/// One block of one session, decompressed.
-fn block(
-    conn: &Connection,
-    session_no: i64,
-    block_no: i64,
-    size: i64,
-    len: i64,
-) -> Result<std::result::Result<Vec<u8>, String>> {
-    let bytes: Vec<u8> = conn.query_row(
-        "SELECT bytes FROM blocks WHERE session_no = ?1 AND block_no = ?2",
-        [session_no, block_no],
-        |r| r.get(0),
-    )?;
-    let read = u32::try_from(size)
-        .map_err(|_| format!("block size {size} is out of range"))
-        .and_then(|size| {
-            crate::blob::BlockReader::new(size, len as u64)
-                .and_then(|reader| reader.decompress(block_no as u64, &bytes))
-                .map_err(|e| e.to_string())
-        });
-    Ok(read)
-}
-
-/// Merge `member` into `survivor`, whose stream it was just proven to share,
-/// then delete it (D-11). `Err` leaves both as they were.
-///
-/// A longer member's block rows move to the survivor as they are, never
-/// recompressed, with the columns that describe the stream and its watermark,
-/// and the survivor's turns past its old end are derived through the seam
-/// ingest uses. Turn ids the survivor already had do not change. Every other
-/// column keeps the survivor's value unless it is null, and `transcript_path`
-/// is the member's: it is the spelling the latest pass read, and retention
-/// judges a transcript gone by it.
-fn merge(
-    tx: &Connection,
-    survivor: &Member,
-    member: &Member,
-) -> Result<std::result::Result<(), String>> {
-    let (Some(s), Some(m)) = (&survivor.stream, &member.stream) else {
-        return Ok(Err("one of the two has no session_meta row".into()));
-    };
-    if m.len > s.len {
-        // Read before anything is written, so a block that will not decode
-        // leaves the pair as it was.
-        let from = s.len as u64;
-        let wanted = [(from, (m.len - s.len) as u64)];
-        let tail = match crate::store::archive::ranges(tx, &member.key, &wanted)?
-            .and_then(|read| read.bytes.into_iter().next())
-        {
-            Some(Ok(tail)) => tail,
-            Some(Err(e)) => return Ok(Err(format!("its added bytes will not read: {e}"))),
-            None => return Ok(Err("its added bytes will not read".into())),
-        };
-        let turn_count: i64 = tx.query_row(
-            "SELECT count(*) FROM turns WHERE session_key = ?1",
-            [&survivor.key],
-            |r| r.get(0),
-        )?;
-
-        tx.execute(
-            "DELETE FROM blocks WHERE session_no = ?1",
-            [survivor.session_no],
-        )?;
-        tx.execute(
-            "UPDATE blocks SET session_no = ?1 WHERE session_no = ?2",
-            [survivor.session_no, member.session_no],
-        )?;
-        tx.execute(
-            "UPDATE session_meta SET
-                checksum = m.checksum, uncompressed_len = m.uncompressed_len,
-                block_size = m.block_size, capture_mode = m.capture_mode,
-                last_turn_at = m.last_turn_at
-               FROM (SELECT * FROM session_meta WHERE session_key = ?2) AS m
-              WHERE session_meta.session_key = ?1",
-            [&survivor.key, &member.key],
-        )?;
-
-        let scan = crate::parse::scan_from(&tail, from, turn_count);
-        for (record, turn) in scan.turns() {
-            let at = (record.offset - from) as usize;
-            crate::derive::derive_turn(
-                tx,
-                crate::derive::TurnRow {
-                    session_key: &survivor.key,
-                    session_no: survivor.session_no,
-                    turn,
-                    stream_offset: record.offset,
-                    byte_len: record.len,
-                    record: &tail[at..at + record.len as usize],
-                    subtype: record.subtype.as_deref(),
-                    compact_metadata: record.compact_metadata.as_deref(),
-                },
-            )?;
-        }
-        for record in &scan.records {
-            crate::derive::derive_boundary(tx, &survivor.key, record)?;
-        }
-
-        // The watermark has to match the stream the survivor now holds. Its
-        // own, lower one would make the next pass append bytes it already has.
-        tx.execute(
-            "INSERT INTO watermarks (transcript_path, byte_offset, updated_at)
-             SELECT ?1, byte_offset, updated_at FROM watermarks WHERE transcript_path = ?2
-             ON CONFLICT(transcript_path) DO UPDATE SET
-                byte_offset = excluded.byte_offset, updated_at = excluded.updated_at",
-            [&survivor.key, &member.key],
-        )?;
-    }
-
-    tx.execute(
-        "UPDATE session_meta SET
-            session_id = coalesce(session_meta.session_id, m.session_id),
-            transcript_path = m.transcript_path,
-            continues_from = coalesce(session_meta.continues_from, m.continues_from),
-            first_turn_at = coalesce(session_meta.first_turn_at, m.first_turn_at),
-            last_turn_at = coalesce(session_meta.last_turn_at, m.last_turn_at),
-            project = coalesce(session_meta.project, m.project),
-            cwd = coalesce(session_meta.cwd, m.cwd),
-            branch = coalesce(session_meta.branch, m.branch),
-            is_final = coalesce(session_meta.is_final, m.is_final),
-            is_evicted = coalesce(session_meta.is_evicted, m.is_evicted),
-            parent_session_key = coalesce(session_meta.parent_session_key, m.parent_session_key),
-            agent_meta = coalesce(session_meta.agent_meta, m.agent_meta),
-            transcript_diverged = coalesce(session_meta.transcript_diverged, m.transcript_diverged),
-            project_pre_worktree = coalesce(
-                session_meta.project_pre_worktree, m.project_pre_worktree),
-            capture_mode = coalesce(session_meta.capture_mode, m.capture_mode)
-           FROM (SELECT * FROM session_meta WHERE session_key = ?2) AS m
-          WHERE session_meta.session_key = ?1",
-        [&survivor.key, &member.key],
-    )?;
-
-    // A store from before derived schema 5 still has this table, whose rows
-    // reference `turns(id)`. The rebuild after recovery retires it.
-    let old_boundaries: bool = tx.query_row(
-        "SELECT count(*) > 0 FROM sqlite_master
-          WHERE type = 'table' AND name = 'compaction_boundaries'",
-        [],
-        |r| r.get(0),
-    )?;
-    if old_boundaries {
-        tx.execute(
-            "DELETE FROM compaction_boundaries
-              WHERE turn_id IN (SELECT id FROM turns WHERE session_key = ?1)",
-            [&member.key],
-        )?;
-    }
-    crate::retention::apply::delete_session(tx, &member.key)?;
-    Ok(Ok(()))
-}
-
-/// Point every label and decision turn id into a merged twin at the same
-/// `turn_seq` in its survivor, which holds every turn the twin held (D-11).
-///
-/// A decision document is rewritten in place, number by number, so every
-/// other byte of it is kept. One that does not parse is left as it is and
-/// named. `decisions.watermark_session_no` is not touched.
-fn repoint(
-    tx: &Connection,
-    merged_into: &BTreeMap<i64, i64>,
-    report: &mut Recovered,
-) -> Result<()> {
-    use crate::store::schema::{split_turn_id, turn_id};
-    let remap = |id: i64| {
-        let (session_no, turn_seq) = split_turn_id(id);
-        merged_into
-            .get(&session_no)
-            .map(|survivor| turn_id(*survivor, turn_seq))
-    };
-
-    let labels: Vec<(i64, i64)> = tx
-        .prepare("SELECT id, turn_id FROM labels WHERE turn_id IS NOT NULL")?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-        .collect::<std::result::Result<_, _>>()?;
-    for (id, turn) in labels {
-        if let Some(to) = remap(turn) {
-            tx.execute("UPDATE labels SET turn_id = ?2 WHERE id = ?1", [id, to])?;
-        }
-    }
-
-    type Documents = (i64, [Option<String>; 4]);
-    let decisions: Vec<Documents> = tx
-        .prepare("SELECT id, candidates, injected, suppressed, dropped FROM decisions")?
-        .query_map([], |r| {
-            Ok((r.get(0)?, [r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?]))
-        })?
-        .collect::<std::result::Result<_, _>>()?;
-    let columns = ["candidates", "injected", "suppressed", "dropped"];
-    for (id, documents) in decisions {
-        for (column, document) in columns.iter().zip(documents) {
-            let Some(document) = document else {
-                continue;
-            };
-            if serde_json::from_str::<serde_json::Value>(&document).is_err() {
-                report.notes.push(format!(
-                    "decision {id}: its {column} document does not parse, so its turn ids \
-                     were left as they are"
-                ));
-                continue;
-            }
-            // `dropped` is a list of ids; the others are lists of entries, each
-            // with its id under `turn_id`.
-            if let Some(rewritten) = remap_ids(&document, *column == "dropped", &remap) {
-                tx.execute(
-                    &format!("UPDATE decisions SET {column} = ?2 WHERE id = ?1"),
-                    rusqlite::params![id, rewritten],
-                )?;
-            }
-        }
-    }
-    Ok(())
-}
-
-/// `document` with each turn id `remap` answers for replaced, and every other
-/// byte as it was, or `None` when nothing changed. The document has already
-/// parsed.
-///
-/// Not a parse and a re-serialize: `serde_json` here does not promise a float
-/// comes back as the same `f64`, and a candidate's scores are floats.
-fn remap_ids(document: &str, bare: bool, remap: &dyn Fn(i64) -> Option<i64>) -> Option<String> {
-    let bytes = document.as_bytes();
-    let mut out = String::with_capacity(document.len());
-    let mut copied = 0;
-    // Open containers, and the last key read in the innermost object.
-    let mut open: Vec<u8> = Vec::new();
-    let mut key: &str = "";
-    let mut want_key = false;
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'"' => {
-                let start = i + 1;
-                i += 1;
-                while i < bytes.len() && bytes[i] != b'"' {
-                    i += if bytes[i] == b'\\' { 2 } else { 1 };
-                }
-                if want_key {
-                    key = &document[start..i.min(bytes.len())];
-                    want_key = false;
-                }
-            }
-            b'{' => {
-                open.push(b'{');
-                want_key = true;
-            }
-            b'[' => open.push(b'['),
-            b'}' | b']' => {
-                open.pop();
-            }
-            b',' => want_key = open.last() == Some(&b'{'),
-            b'-' | b'0'..=b'9' => {
-                let start = i;
-                while i < bytes.len()
-                    && matches!(bytes[i], b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9')
-                {
-                    i += 1;
-                }
-                let id = if bare {
-                    open.as_slice() == b"["
-                } else {
-                    open.as_slice() == b"[{" && key == "turn_id"
-                };
-                if let Some(to) = id
-                    .then(|| document[start..i].parse::<i64>().ok())
-                    .flatten()
-                    .and_then(remap)
-                {
-                    out.push_str(&document[copied..start]);
-                    out.push_str(&to.to_string());
-                    copied = i;
-                }
-                continue;
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    if copied == 0 {
-        return None;
-    }
-    out.push_str(&document[copied..]);
-    Some(out)
-}
-
-/// Move one session's key in every table that holds it. Block rows, turn ids and
-/// `transcript_path` stay as they are.
-///
-/// A watermark already under the new key is a pass's row for a file it found
-/// under that key, and the session's own row replaces it.
-fn move_key(tx: &Connection, from: &str, to: &str) -> Result<()> {
-    for table in [
-        "sessions",
-        "session_meta",
-        "turns",
-        "compactions",
-        "observations",
-    ] {
-        tx.execute(
-            &format!("UPDATE {table} SET session_key = ?2 WHERE session_key = ?1"),
-            [from, to],
-        )?;
-    }
-    tx.execute("DELETE FROM watermarks WHERE transcript_path = ?1", [to])?;
-    tx.execute(
-        "UPDATE watermarks SET transcript_path = ?2 WHERE transcript_path = ?1",
-        [from, to],
-    )?;
-    Ok(())
 }
 
 /// Reconcile `watermarks` against what the committed blobs actually hold.

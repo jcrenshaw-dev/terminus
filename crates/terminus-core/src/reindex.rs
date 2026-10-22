@@ -320,8 +320,8 @@ pub fn open_up_to_date(data_dir: &Path) -> Result<Store> {
 
 /// The second half of [`open_up_to_date`], for a store already open.
 ///
-/// Recovery opens the store, re-keys it, and only then brings the derived
-/// tables forward, so a twin the re-key deletes is never rebuilt (phase 4 D-09).
+/// Recovery opens the store and then brings the derived tables forward, before
+/// it sweeps the watermarks.
 pub(crate) fn up_to_date(mut store: Store) -> Result<Store> {
     if store.rebuild_required().is_none() {
         return Ok(store);

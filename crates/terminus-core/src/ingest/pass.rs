@@ -315,8 +315,8 @@ fn locked(
     // proportional to the projects rather than to the files.
     let mut projects = Resolver::new();
     // Every file's row in one query, after recovery and the drain and before
-    // the walk (#85). Recovery's re-key and twin repair rewrite these rows, so
-    // reading them any earlier would walk a store that no longer exists. A
+    // the walk (#85). Recovery's watermark sweep rewrites these rows, so
+    // reading them any earlier would walk watermarks it has since changed. A
     // read that fails is the walk failing, and still leaves its `runs` row.
     let walked = crate::ingest::read_rows(store.conn(), None).and_then(|rows| {
         walk(

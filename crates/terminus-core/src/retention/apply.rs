@@ -177,9 +177,6 @@ fn delete_one(conn: &mut Connection, session_key: &str) -> Result<bool> {
 
 /// Delete one session and every row keyed on it, in [`delete_one`]'s order,
 /// inside the caller's transaction. Answers how many `observations` rows went.
-///
-/// Shared with recovery, which deletes a twin it merged into an older session
-/// (phase 4 D-11), so the order has one definition.
 pub(crate) fn delete_session(tx: &Connection, session_key: &str) -> Result<usize> {
     const TURN_IDS: &str = "SELECT id FROM turns WHERE session_key = ?1";
     for statement in [
