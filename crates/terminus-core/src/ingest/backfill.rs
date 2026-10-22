@@ -1,4 +1,4 @@
-//! The bounded-parallelism pass a backfill runs (D-11, ING-11).
+//! The bounded-parallelism pass a backfill runs.
 //!
 //! One pass over the tree, with the reading, JSON scanning and zstd compression
 //! spread across a fixed number of [`std::thread`] workers while **exactly one**
@@ -13,7 +13,7 @@
 //! why it is the stage that moved. `crates/terminus/src/cmd/backfill.rs` fixes
 //! the count in one place, small and deliberately below any machine's cores.
 //!
-//! # No thread pool, and no thread on the hook path (D-11)
+//! # No thread pool, and no thread on the hook path
 //!
 //! `std::thread` and `std::sync::mpsc`, no `rayon` and no global pool. The
 //! threads are started here and nowhere else, inside [`run_with`], which is
@@ -22,7 +22,7 @@
 //! measured 0.408 ms startup floor is the product, and it must not pay for a
 //! command it never runs.
 //!
-//! # The work in flight is bounded, and that is the "chunked" half of ING-11
+//! # The work in flight is bounded, and that is what makes a backfill chunked
 //!
 //! Files are handed out in rounds of [`QUEUE_PER_WORKER`] per worker, and a
 //! round is fully drained before the next is dispatched. Peak memory is
@@ -35,13 +35,13 @@
 //! outstanding, so no send on either side can block: the writer never waits to
 //! dispatch while a worker waits to deliver.
 //!
-//! # Everything that makes a pass resumable is unchanged (D-22)
+//! # Everything that makes a pass resumable is unchanged
 //!
 //! The ingest lock taken once for the whole run before the store is opened,
 //! recovery at the top, one transaction per file so a kill loses at most one
 //! file, a per-file failure recorded against its path and skipped rather than
-//! propagated (D-12), and one `runs` row for the whole pass. Files are applied
-//! in discovery order, exactly as the sequential walk applies them, so the two
+//! propagated, and one `runs` row for the whole pass. Files are applied in
+//! discovery order, exactly as the sequential walk applies them, so the two
 //! reach byte-identical stores rather than merely equivalent ones.
 
 use std::collections::{HashMap, HashSet};
@@ -99,8 +99,8 @@ pub fn run_with(data_dir: &Path, config: &Config, workers: usize) -> Result<Repo
     // Zero workers is a caller's arithmetic, not a request to do nothing.
     let workers = workers.max(1);
 
-    // Once, for the whole run, and before the store is opened (D-15, D-18). A
-    // hook that fires during a backfill loses this race and exits 0.
+    // Once, for the whole run, and before the store is opened. A hook that
+    // fires during a backfill loses this race and exits 0.
     let _guard = match lock::try_acquire(data_dir)? {
         Attempt::Held => {
             return Ok(Report {
@@ -112,7 +112,7 @@ pub fn run_with(data_dir: &Path, config: &Config, workers: usize) -> Result<Repo
         Attempt::Acquired(guard) => guard,
     };
 
-    // Recovery before discovery, and before anything is read (ING-03, D-24).
+    // Recovery before discovery, and before anything is read.
     let (mut store, recovery) = crate::recover::recover(data_dir)?;
 
     let found = crate::discover::discover(config);
@@ -147,7 +147,7 @@ pub fn run_with(data_dir: &Path, config: &Config, workers: usize) -> Result<Repo
     });
     summary.duration = started.elapsed();
 
-    // One row, whatever happened (D-10, D-14).
+    // One row, whatever happened.
     let recorded = record_pass(store.conn(), &summary, walked.as_ref().err());
 
     match walked {
@@ -174,9 +174,9 @@ pub fn run_with(data_dir: &Path, config: &Config, workers: usize) -> Result<Repo
 /// blocked. The backfill simply stopped, with no error and no exit.
 ///
 /// Catching it here restores the invariant the drain loop is written against -
-/// every job sent comes back exactly once - and costs nothing else: D-12
-/// already says one damaged transcript is not a reason to archive none of the
-/// tree, and a panic is only the loudest way for one to be damaged. The file is
+/// every job sent comes back exactly once - and costs nothing else: one
+/// damaged transcript is already not a reason to archive none of the tree, and
+/// a panic is only the loudest way for one to be damaged. The file is
 /// recorded and skipped like any other per-file failure.
 fn panic_error(path: &Path, payload: Box<dyn std::any::Any + Send>) -> Error {
     let detail = payload
@@ -210,9 +210,9 @@ struct Done {
 /// The round-by-round pipeline.
 ///
 /// Only a failure of the pass as a whole comes back as `Err`; every per-file
-/// failure is recorded against its path and skipped (D-12), because the tree is
-/// the unit of work and one damaged transcript is not a reason to archive none
-/// of it.
+/// failure is recorded against its path and skipped, because the tree is the
+/// unit of work and one damaged transcript is not a reason to archive none of
+/// it.
 #[allow(clippy::too_many_arguments)]
 fn pipeline(
     store: &mut Store,
@@ -222,7 +222,7 @@ fn pipeline(
     projects: &mut Resolver,
     workers: usize,
     threads: &mut HashSet<ThreadId>,
-    // Resolved once for the whole run and copied into every worker (ING-07).
+    // Resolved once for the whole run and copied into every worker.
     // `CaptureMode` is `Copy`, so the workers share a value rather than a lock.
     mode: crate::config::CaptureMode,
 ) -> Result<()> {
@@ -319,11 +319,11 @@ fn dispatch_round(
     job_tx: &mpsc::SyncSender<(usize, Job)>,
     done_rx: &mpsc::Receiver<Done>,
 ) -> Result<()> {
-    // Two paths can share a key (D-01, D-03), and [`claim`] lets only the first
-    // through, across rounds, so no two jobs in this run share one. That is
-    // what makes reading every row once before the run, and building a whole
-    // round's `Existing` before applying any of it, safe: no apply in the run
-    // can change a row another job reads.
+    // Two paths can share a key, and [`claim`] lets only the first through,
+    // across rounds, so no two jobs in this run share one. That is what makes
+    // reading every row once before the run, and building a whole round's
+    // `Existing` before applying any of it, safe: no apply in the run can
+    // change a row another job reads.
     let mut sent = 0usize;
     let mut results: Vec<Option<Result<Prepared>>> = (0..batch.len()).map(|_| None).collect();
     // The file each slot reads, which is a link's target, not the link.
@@ -405,9 +405,10 @@ fn commit_one(
         Ok(Outcome::UpToDate | Outcome::LockHeld | Outcome::Excluded(_)) => {}
         Err(e) => {
             let mut reason = e.to_string();
-            // D-13, matched on the variant and never on the message, exactly as
-            // the sequential walk matches it: a transcript at a non-UTF-8 path
-            // fails with the same io kind and must flag nothing.
+            // The divergence flag, matched on the variant and never on the
+            // message, exactly as the sequential walk matches it: a transcript
+            // at a non-UTF-8 path fails with the same io kind and must flag
+            // nothing.
             if matches!(
                 e,
                 crate::error::Error::TranscriptDiverged { .. }
@@ -427,7 +428,7 @@ fn commit_one(
 /// from the row read at the start of the run.
 ///
 /// `path` is the file [`claim`] resolved, a link's target and never the link,
-/// so the worker reads, and the store records, that file (D-03).
+/// so the worker reads, and the store records, that file.
 fn read_existing(store: &Store, rows: &Rows, path: PathBuf, session_key: String) -> Result<Job> {
     let existing = Existing::read(store.conn(), rows, &session_key, &path)?;
     Ok(Job {
@@ -437,7 +438,7 @@ fn read_existing(store: &Store, rows: &Rows, path: PathBuf, session_key: String)
     })
 }
 
-/// The one `runs` row this pass leaves behind (D-10).
+/// The one `runs` row this pass leaves behind.
 ///
 /// Field for field the row `pass::record_pass` writes, because a backfill is a
 /// pass and `terminus status` reads one table.
