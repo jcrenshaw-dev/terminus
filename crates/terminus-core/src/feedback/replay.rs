@@ -34,17 +34,12 @@
 //! `--compacted-ranked` moves it. Nothing is re-derived from session state, for
 //! the reason the paragraph above gives.
 //!
-//! A decision drained before those columns existed carries null in both, and
-//! nothing can say now whether it ran under the pool. It replays through the
-//! ordinary ranked window, as does every decision on a store that has not been
-//! opened for writing since the columns were added: a read never brings a store
-//! forward, so the query does not name columns that are not there.
+//! A decision whose `compacted` is null carries no record of whether it ran
+//! under the pool, and it replays through the ordinary ranked window.
 //!
 //! **A tool result is never credited (D-01).** The live arm drops every turn
 //! the harness wrote before the cap, through `prompt::quotable`, and so does
-//! this. On a store whose `turns` lacks `is_typed` nothing can say which turns
-//! were tool results, so nothing is dropped there, the same way absent
-//! `decisions` columns read as unknown.
+//! this.
 
 use std::collections::BTreeSet;
 
@@ -107,22 +102,14 @@ struct Logged {
 /// equal output, which is what makes a diff evidence rather than an anecdote.
 pub fn replay(store: &Store, config: &Config, thresholds: &Thresholds) -> Result<Replayed> {
     let conn = store.conn();
-    let recorded = !store
-        .missing_columns()
-        .iter()
-        .any(|missing| missing.table == "decisions");
-    let logged = eligible(conn, recorded)?;
-    let typed = !store
-        .missing_columns()
-        .iter()
-        .any(|missing| missing.table == "turns" && missing.column == "is_typed");
+    let logged = eligible(conn)?;
 
     let mut totals: Vec<usize> = vec![0; label::LABELS.len()];
     let mut stored: Vec<usize> = vec![0; label::LABELS.len()];
     let mut changed: Vec<i64> = Vec::new();
 
     for decision in &logged {
-        let new = recomputed(conn, config, thresholds, decision, typed)?;
+        let new = recomputed(conn, config, thresholds, decision)?;
         let old = counts(conn, decision.id)?;
         if new != old {
             changed.push(decision.id);
@@ -154,24 +141,15 @@ pub fn replay(store: &Store, config: &Config, thresholds: &Thresholds) -> Result
 /// a second copy of the predicate. A decision of a session that is not final
 /// carries no stored label, so scoring it would diff a recomputed label against
 /// an absence and report movement for every open session in the archive.
-///
-/// `recorded` is false on a store whose `decisions` table lacks `compacted` or
-/// `dropped`. The query then names neither and every decision reads as one of
-/// unknown kind.
-fn eligible(conn: &Connection, recorded: bool) -> Result<Vec<Logged>> {
+fn eligible(conn: &Connection) -> Result<Vec<Logged>> {
     // The dropped set only where the decision ran under the pool. An unreadable
     // set admits nothing, which is what an empty one admitted at the prompt.
-    let dropped = if recorded {
-        "CASE WHEN d.compacted = 1
-              THEN CASE WHEN json_valid(d.dropped) THEN d.dropped ELSE '[]' END
-         END"
-    } else {
-        "NULL"
-    };
     let sql = format!(
         "SELECT d.id, d.cwd, coalesce(d.prompt, ''), d.watermark_session_no,
                 CASE WHEN json_valid(d.suppressed) THEN d.suppressed ELSE '[]' END,
-                {dropped}
+                CASE WHEN d.compacted = 1
+                     THEN CASE WHEN json_valid(d.dropped) THEN d.dropped ELSE '[]' END
+                END
            FROM decisions d
           WHERE {}
           ORDER BY d.id",
@@ -221,9 +199,8 @@ fn recomputed(
     config: &Config,
     thresholds: &Thresholds,
     decision: &Logged,
-    typed: bool,
 ) -> Result<Vec<usize>> {
-    let (spellings, injected) = would_inject(conn, config, thresholds, decision, typed)?;
+    let (spellings, injected) = would_inject(conn, config, thresholds, decision)?;
 
     let mut counts: Vec<usize> = vec![0; label::LABELS.len()];
     let mut any_hit = false;
@@ -265,15 +242,11 @@ fn recomputed(
 /// request shape - candidates, the scope of the stored `cwd`, excerpts off, and
 /// the compacted window for a decision made under the pool. A second implementation of any of
 /// them would make the diff a measurement of the replay engine.
-///
-/// `typed` is false on a store whose `turns` lacks `is_typed`, and then
-/// `prompt::quotable` is not run: it names that column.
 fn would_inject(
     conn: &Connection,
     config: &Config,
     thresholds: &Thresholds,
     decision: &Logged,
-    typed: bool,
 ) -> Result<(Vec<String>, Vec<i64>)> {
     let Some(cwd) = decision.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
         // A record with no working directory has no project to be scoped to,
@@ -310,11 +283,7 @@ fn would_inject(
     let admitted = prompt::eligible(hits, thresholds);
     // D-01, in the live arm's place: after the threshold, before the pool and
     // the cap.
-    let quoted = if typed {
-        prompt::quotable(conn, admitted)?
-    } else {
-        admitted
-    };
+    let quoted = prompt::quotable(conn, admitted)?;
     // After the threshold, as the live arm filters: see `prompt::within`.
     let pooled = prompt::within(quoted, decision.dropped.as_ref());
     let injected = prompt::capped(pooled, &decision.refused, thresholds.max_turns)

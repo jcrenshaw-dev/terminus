@@ -32,8 +32,8 @@ pub struct Stats {
     pub compacted_decisions: usize,
     /// Decisions recorded as made outside it.
     ///
-    /// A decision drained before the `compacted` column existed is in neither
-    /// count, because whether it ran under the pool is unknown. So `decisions`
+    /// A decision whose `compacted` is null is in neither count, because
+    /// whether it ran under the pool is unknown. So `decisions`
     /// minus these two is exactly the number of those.
     pub ordinary_decisions: usize,
     /// Turns handed to the model across all of them.
@@ -72,10 +72,6 @@ pub struct Stats {
 /// one table, the decision counts are aggregates over another, and forcing them
 /// into a single query would multiply rows through the join and make every
 /// count wrong in a way that still returns numbers.
-///
-/// A store whose `decisions` table lacks `compacted` has not been opened for
-/// writing since the column was added, and a read cannot add it. The split is
-/// then two zeroes, and the query that would name the column is not run.
 pub fn stats(store: &Store) -> Result<Stats> {
     let conn = store.conn();
     let (decisions, chars_injected) = conn.query_row(
@@ -98,20 +94,12 @@ pub fn stats(store: &Store) -> Result<Stats> {
 
     let mut counted =
         conn.prepare("SELECT label, count(*) FROM labels GROUP BY label ORDER BY label")?;
-    let recorded = !store
-        .missing_columns()
-        .iter()
-        .any(|missing| missing.table == "decisions" && missing.column == "compacted");
-    let (compacted_decisions, ordinary_decisions) = if recorded {
-        conn.query_row(
-            "SELECT coalesce(sum(compacted = 1), 0), coalesce(sum(compacted = 0), 0)
-               FROM decisions",
-            [],
-            |r| Ok((r.get::<_, i64>(0)? as usize, r.get::<_, i64>(1)? as usize)),
-        )?
-    } else {
-        (0, 0)
-    };
+    let (compacted_decisions, ordinary_decisions) = conn.query_row(
+        "SELECT coalesce(sum(compacted = 1), 0), coalesce(sum(compacted = 0), 0)
+           FROM decisions",
+        [],
+        |r| Ok((r.get::<_, i64>(0)? as usize, r.get::<_, i64>(1)? as usize)),
+    )?;
 
     let mut stats = Stats {
         decisions,
