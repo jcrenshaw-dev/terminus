@@ -106,16 +106,10 @@ pub fn window(
         return Ok(Window::nothing(Reason::NoSuchTurn { turn_id: anchor }));
     };
 
-    // Named through the same degraded-read helper the scoping projection uses:
-    // a read-only open of a store that predates `project_pre_worktree` must not
-    // meet a raw `no such column` here either.
-    let pre_worktree = crate::config::visible::pre_worktree_column(conn)?;
     let meta: Option<(Option<String>, Option<String>, Option<String>)> = conn
         .query_row(
-            &format!(
-                "SELECT project, {pre_worktree}, continues_from FROM session_meta
-                 WHERE session_key = ?1"
-            ),
+            "SELECT project, project_pre_worktree, continues_from FROM session_meta
+             WHERE session_key = ?1",
             [&session_key],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )

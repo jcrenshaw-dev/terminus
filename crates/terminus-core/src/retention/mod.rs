@@ -141,17 +141,13 @@ pub fn evaluate(conn: &Connection, config: &Config, now: &str) -> Result<Selecti
     // makes the same progress every time rather than picking a different
     // hundred each run, and the sessions it picks are the ones the policy has
     // been true of for longest.
-    let pre_worktree = match visible::pre_worktree_column(conn)? {
-        "project_pre_worktree" => "m.project_pre_worktree",
-        absent => absent,
-    };
-    let mut statement = conn.prepare(&format!(
-        "SELECT m.session_key, m.project, {pre_worktree}, m.last_turn_at,
+    let mut statement = conn.prepare(
+        "SELECT m.session_key, m.project, m.project_pre_worktree, m.last_turn_at,
                 m.transcript_path, m.is_evicted
            FROM session_meta m
           WHERE m.is_final = 1 AND m.last_turn_at IS NOT NULL
-          ORDER BY m.last_turn_at, m.session_key"
-    ))?;
+          ORDER BY m.last_turn_at, m.session_key",
+    )?;
     let rows = statement.query_map([], |r| {
         Ok(Candidate {
             session_key: r.get(0)?,

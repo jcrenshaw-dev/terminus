@@ -24,7 +24,7 @@ use std::collections::BTreeMap;
 
 use rusqlite::Connection;
 
-use crate::config::{visible, Config};
+use crate::config::Config;
 use crate::error::Result;
 use crate::observe::egress::Redaction;
 use crate::recall::excerpt::Reads;
@@ -241,19 +241,12 @@ struct Row {
 /// A LEFT join to `session_meta` for the same reason `search::run` uses one: a
 /// session archived without a meta row is damage to see, not damage to hide.
 fn rows_for(conn: &Connection, ids: &[i64]) -> Result<BTreeMap<i64, Row>> {
-    // Named through the degraded-read helper: a read-only open of a store that
-    // predates `project_pre_worktree` must not meet a raw `no such column`.
-    let pre_worktree = match visible::pre_worktree_column(conn)? {
-        "project_pre_worktree" => "m.project_pre_worktree",
-        // The literal `NULL`, which takes no table qualifier.
-        absent => absent,
-    };
     let placeholders = std::iter::repeat_n("?", ids.len())
         .collect::<Vec<_>>()
         .join(",");
     let mut statement = conn.prepare(&format!(
         "SELECT t.id, t.session_key, t.turn_seq, t.record_type, t.tool_name, t.ts,
-                t.stream_offset, t.byte_len, m.project, {pre_worktree}, m.is_evicted
+                t.stream_offset, t.byte_len, m.project, m.project_pre_worktree, m.is_evicted
          FROM turns t LEFT JOIN session_meta m ON m.session_key = t.session_key
          WHERE t.id IN ({placeholders})"
     ))?;
