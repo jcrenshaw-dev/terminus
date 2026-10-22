@@ -180,7 +180,6 @@ impl Store {
             // exactly where it is, outside this function and inside the ingest
             // lock.
             bring_forward(&store.conn)?;
-            drop_summary_columns(&store.conn)?;
         }
         Ok(store)
     }
@@ -501,15 +500,14 @@ fn narrow(path: &Path, mode: u32, wanted: fn(&std::fs::FileType) -> bool) {
 /// still touches no byte of it.
 ///
 /// When something is missing, the list is read again inside an IMMEDIATE
-/// transaction before anything is written, as [`drop_summary_columns`] does.
-/// Two processes opening a store that lacks a table would otherwise both see it
-/// missing under a deferred transaction's read lock, and once the first had
-/// created it, the second's read lock could not become the write lock its own
-/// `CREATE` needs: SQLite fails that upgrade at once with "database is locked"
-/// instead of calling the busy handler. Taking the write lock first means the
-/// second open waits, reads the list again and finds nothing left to add. A
-/// column listed in [`crate::store::schema::BRING_FORWARD_COLUMNS`] is covered
-/// the same way.
+/// transaction before anything is written. Two processes opening a store that
+/// lacks a table would otherwise both see it missing under a deferred
+/// transaction's read lock, and once the first had created it, the second's
+/// read lock could not become the write lock its own `CREATE` needs: SQLite
+/// fails that upgrade at once with "database is locked" instead of calling the
+/// busy handler. Taking the write lock first means the second open waits, reads
+/// the list again and finds nothing left to add. A column listed in
+/// [`crate::store::schema::BRING_FORWARD_COLUMNS`] is covered the same way.
 fn bring_forward(conn: &Connection) -> Result<()> {
     let (missing_tables, missing_columns) = missing(conn)?;
     if missing_tables.is_empty() && missing_columns.is_empty() {
@@ -562,42 +560,6 @@ fn missing(conn: &Connection) -> Result<(Vec<&'static str>, Vec<Column>)> {
         }
     }
     Ok((missing_tables, missing_columns))
-}
-
-/// Drop the session-summary columns from `observations`, and their meta key,
-/// on a store that still has them.
-///
-/// Kept out of [`bring_forward`] because it is destructive. The usual case is
-/// one `PRAGMA` read and nothing written. When a column is there, the list is
-/// read again inside an IMMEDIATE transaction, so two processes opening the
-/// same old store at once cannot both attempt the drop and have the second
-/// fail on a column the first already removed.
-fn drop_summary_columns(conn: &Connection) -> Result<()> {
-    if summary_columns(conn)?.is_empty() {
-        return Ok(());
-    }
-    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
-    for column in summary_columns(&tx)? {
-        // Identifiers come from a `const` in this crate, never from a caller.
-        tx.execute_batch(&format!("ALTER TABLE observations DROP COLUMN {column}"))?;
-    }
-    tx.execute(
-        "DELETE FROM meta WHERE key = ?1",
-        [crate::store::schema::DROPPED_META_KEY],
-    )?;
-    tx.commit()?;
-    Ok(())
-}
-
-/// Which of [`crate::store::schema::DROPPED_OBSERVATION_COLUMNS`] the store
-/// still carries.
-fn summary_columns(conn: &Connection) -> Result<Vec<&'static str>> {
-    let present = column_names(conn, "observations")?;
-    Ok(crate::store::schema::DROPPED_OBSERVATION_COLUMNS
-        .iter()
-        .copied()
-        .filter(|name| present.iter().any(|p| p == name))
-        .collect())
 }
 
 /// Which of [`crate::store::schema::BRING_FORWARD_COLUMNS`] the open store does

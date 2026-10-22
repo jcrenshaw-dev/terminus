@@ -439,26 +439,3 @@ pub const DERIVED_TABLES: &[&str] = &["turns", "compactions", "turns_fts", "enti
 /// (`sessions`, `session_meta`) never migrate beyond an added column
 /// (`DESIGN-BRIEF.md:94`).
 pub const BRING_FORWARD_COLUMNS: &[(&str, &[(&str, &str)])] = &[];
-
-/// The session-summary columns `observations` carried while Terminus called a
-/// model, which `Store::open` drops from any store that still has them.
-///
-/// Kept apart from [`BRING_FORWARD_COLUMNS`] because that list is additive
-/// only. Whether any of these is still present is the whole record of whether
-/// the drop has run: there is no marker key and no format bump.
-pub const DROPPED_OBSERVATION_COLUMNS: &[&str] = &[
-    "status",
-    "model",
-    "prompt_version",
-    "topic",
-    "outcome",
-    "decisions",
-    "learned",
-    "unresolved",
-    "raw",
-    "tokens",
-];
-
-/// The meta key the daily token budget for those summaries was kept under,
-/// deleted in the same transaction as the columns.
-pub const DROPPED_META_KEY: &str = "observe.daily_tokens";
