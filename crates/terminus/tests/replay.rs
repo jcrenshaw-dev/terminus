@@ -298,24 +298,16 @@ fn a_malformed_threshold_is_misuse() {
     }
 }
 
-/// A store written before phase 6: both reads that live on the decision log
-/// answer, and neither leaks a sqlite line where an envelope was promised.
+/// A store missing the whole decision log is damaged, and both reads that live
+/// on the log say so: exit 1, and under `--json` a document with `ok: false`.
 ///
-/// The tables are dropped rather than a phase-5 binary being kept around,
-/// because the condition under test is exactly "these two tables are absent" -
-/// `decisions` and `labels` went into `schema::TABLES` with no `DERIVED_SCHEMA`
-/// bump (D-02), so an older store is a current store minus these two and
-/// nothing else. That is also why this could ever regress: `rebuild_required`
-/// is `None` and `missing_columns` is empty on such a store, so it reads as
-/// perfectly up to date right up until a query names a table that is not there.
-///
-/// The `--json` half is the half with teeth. The failure this replaces was an
-/// operational error raised from inside the query and printed by `main`, which
-/// never sees the flag - so `--json` exited 1 with an empty stdout and no
-/// document at all, and `docs/json-shapes.md` allows that only for a failure
-/// raised *before* the command reached its own answer.
+/// Every store this build can open was created with both tables, so neither
+/// being there is damage from outside and never an empty answer. The `--json`
+/// half is the half with teeth: left to the query, the failure would be an
+/// operational error printed by `main`, which never sees the flag, so `--json`
+/// would exit 1 with no document at all.
 #[test]
-fn stats_and_replay_on_a_store_without_the_decision_log_still_answer() {
+fn stats_and_replay_call_a_store_missing_the_whole_decision_log_a_failure() {
     let bench = bench();
     bench.ingest_fixture();
 
@@ -328,34 +320,32 @@ fn stats_and_replay_on_a_store_without_the_decision_log_still_answer() {
         let out = bench.run(&[command, "--json"]);
         assert_eq!(
             out.status.code(),
-            Some(0),
-            "`{command} --json`: {}",
+            Some(1),
+            "`{command} --json` on a store missing both tables should fail: {}",
             stderr(&out)
         );
 
-        // One document, and the reason inside it rather than on stderr.
+        // One document, and the reason inside it naming both tables.
         let value = document(&out);
         assert_eq!(value["command"], command, "{value}");
-        assert_eq!(value["ok"], true, "{value}");
+        assert_eq!(value["ok"], false, "{value}");
+        let reason = value["reason"].as_str().unwrap_or_default();
         assert!(
-            value["reason"]
-                .as_str()
-                .is_some_and(|reason| reason.contains("predates the decision log")),
-            "`{command} --json` did not say why it was empty: {value}"
+            reason.contains("decisions") && reason.contains("labels"),
+            "`{command} --json` did not name both missing tables: {value}"
         );
         assert!(
             !stderr(&out).contains("no such table"),
             "`{command} --json` leaked the sqlite error: {}",
             stderr(&out)
         );
-        assert_eq!(value["data"]["decisions"], 0, "{value}");
 
-        // The human mode: the same reason, on stderr, and still exit 0.
+        // The human mode: exit 1, and no raw sqlite line.
         let out = bench.run(&[command]);
-        assert_eq!(out.status.code(), Some(0), "`{command}`: {}", stderr(&out));
+        assert_eq!(out.status.code(), Some(1), "`{command}`: {}", stderr(&out));
         assert!(
-            stderr(&out).contains("predates the decision log"),
-            "`{command}` did not say why: {}",
+            !stderr(&out).contains("no such table"),
+            "`{command}` leaked the sqlite error: {}",
             stderr(&out)
         );
     }

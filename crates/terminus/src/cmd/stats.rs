@@ -26,21 +26,17 @@ pub fn run(json: bool) -> Result<(), Failure> {
         Opened::Nothing(reason) => return read::empty(document(&Stats::default()), &reason, json),
     };
 
-    // A store older than the decision log is the same answer as a machine that
-    // has never ingested, and it has to be caught here: the query below would
-    // hand `no such table: decisions` to an operational failure that never
-    // learns `--json` was asked for. Half a log is the other thing - zeroes
-    // reported as a clean answer would read as "injection has recorded
-    // nothing", which is exactly what a damaged store must not be able to say.
+    // A decision log missing either table is damage, caught here so the
+    // failure stays inside the envelope: the query below would hand
+    // `no such table: decisions` to an operational failure that never learns
+    // `--json` was asked for. Zeroes reported as a clean answer would read as
+    // "injection has recorded nothing", which a damaged store must not say.
     match read::decision_log(&reader) {
         read::DecisionLog::Present => {}
-        read::DecisionLog::Absent => {
-            return read::empty(document(&Stats::default()), read::NO_DECISION_LOG, json)
-        }
-        read::DecisionLog::Damaged(table) => {
+        read::DecisionLog::Damaged(tables) => {
             return Err(read::unusable(
                 document(&Stats::default()),
-                read::damaged(table),
+                read::damaged(tables),
                 json,
             ))
         }
@@ -55,8 +51,8 @@ pub fn run(json: bool) -> Result<(), Failure> {
     }
 
     outln!("decisions         {}", stats.decisions);
-    // Indented as a split of the line above. Decisions logged before the split
-    // was recorded are in neither, so the two need not add up to it.
+    // Indented as a split of the line above. A decision whose `compacted` is
+    // null is in neither, so the two need not add up to it.
     outln!("  compacted       {}", stats.compacted_decisions);
     outln!("  ordinary        {}", stats.ordinary_decisions);
     outln!("injected turns    {}", stats.injected_turns);

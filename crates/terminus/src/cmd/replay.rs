@@ -38,14 +38,13 @@ pub fn run(args: Args) -> Result<(), Failure> {
         Opened::Nothing(reason) => return read::empty(empty, &reason, args.json),
     };
 
-    // The same catch `stats` makes, for the same reason: nothing logged is an
-    // empty diff with a reason, never a raw sqlite line escaping the envelope,
-    // and half a log is a failure rather than a diff of nothing.
+    // The same catch `stats` makes, for the same reason: a damaged log is a
+    // failure rather than a diff of nothing, and never a raw sqlite line
+    // escaping the envelope.
     match read::decision_log(&reader) {
         read::DecisionLog::Present => {}
-        read::DecisionLog::Absent => return read::empty(empty, read::NO_DECISION_LOG, args.json),
-        read::DecisionLog::Damaged(table) => {
-            return Err(read::unusable(empty, read::damaged(table), args.json))
+        read::DecisionLog::Damaged(tables) => {
+            return Err(read::unusable(empty, read::damaged(tables), args.json))
         }
     }
 
