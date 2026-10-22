@@ -2,7 +2,7 @@
 //! never to look at.
 //!
 //! The file is `terminus.toml` inside terminus's config directory, and
-//! `config.toml` in that same directory is deliberately never read (D-15). The
+//! `config.toml` in that same directory is deliberately never read. The
 //! legacy tool wrote one - 184 bytes, `base_dir = "/data/verbatim"` - and
 //! adopting it would point the new store at the legacy data directory, which
 //! Terminus does not import.
@@ -16,23 +16,23 @@
 //! [`Config::excludes_encoded_dir`] answers **before any file is opened**. All
 //! it has is the encoded project directory name, because `cwd` only exists on a
 //! parsed record and reading a record means opening the file - which is exactly
-//! what ING-08 forbids for an excluded project (D-22). It is therefore an exact
-//! match on the encoded name, plus one fixed-literal worktree clause, and not a
-//! prefix match: the encoding is provably lossy (D-07), so an
+//! what an exclusion forbids: an excluded project is never read. It is therefore
+//! an exact match on the encoded name, plus one fixed-literal worktree clause,
+//! and not a prefix match: the encoding is provably lossy, so an
 //! extension-tolerant rule cannot tell a child directory from a hyphenated
 //! sibling and `-data-projects-cadence` would silently swallow
 //! `-data-projects-cadence-research`.
 //!
 //! [`Config::excludes_path`] answers wherever a real filesystem path is
 //! available, and there it is an ordinary subtree match on path components,
-//! which is unambiguous. That is the read-side predicate (D-23).
+//! which is unambiguous. That is the read-side predicate.
 //!
 //! Both read the same configured strings, so those strings are normalized once
 //! ([`normalize`]) before either sees them, and both match each one as written
 //! and as resolved through any symlink ([`resolved`]). The component test is
 //! indifferent to a trailing separator and the encoded test is not, and two
 //! predicates that disagree about which projects are excluded is precisely the
-//! read-then-filter ING-08 forbids.
+//! read-then-filter an exclusion forbids.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -42,7 +42,7 @@ use serde::Deserialize;
 use crate::error::{Error, Result};
 
 /// Terminus's config file. `config.toml` beside it is the legacy tool's and is
-/// never read (D-15).
+/// never read.
 pub const CONFIG_FILE_NAME: &str = "terminus.toml";
 
 /// Points terminus's config directory somewhere else, the way
@@ -50,7 +50,7 @@ pub const CONFIG_FILE_NAME: &str = "terminus.toml";
 pub const CONFIG_DIR_ENV: &str = "TERMINUS_CONFIG_DIR";
 
 /// Claude Code's own override for its config directory. Read as a **single**
-/// directory (D-15): the design brief says roots accept a list, but the
+/// directory: the design brief says roots accept a list, but the
 /// separator convention there is Claude Code's and the variable is unset on the
 /// development machine, so multi-root is supported through `terminus.toml`
 /// rather than by guessing somebody else's separator.
@@ -62,7 +62,7 @@ pub const PROJECTS_SUBDIR: &str = "projects";
 /// The default Claude config directory, relative to the user's home.
 pub const DEFAULT_CLAUDE_DIR: &str = ".claude";
 
-/// What a path separator encodes to under D-07's rule.
+/// What a path separator encodes to under the project directory encoding.
 ///
 /// [`encode`] maps every non-alphanumeric character to this, so a subdirectory
 /// of an encoded path is that path, this, and the rest - and so is a sibling
@@ -98,7 +98,7 @@ struct FileConfig {
     /// are never read and never returned by a read path.
     #[serde(default)]
     exclude: Vec<String>,
-    /// How much context injection may write, per event (INJ-01, D-18).
+    /// How much context injection may write, per event.
     #[serde(default)]
     injection: FileInjection,
     /// A leftover `[provider]` table, captured only so [`Config::load_from`]
@@ -106,23 +106,21 @@ struct FileConfig {
     /// written in it is never in memory.
     #[serde(default)]
     provider: Option<serde::de::IgnoredAny>,
-    /// How much of each project's history to keep (RET-01, D-01).
+    /// How much of each project's history to keep.
     #[serde(default)]
     retention: FileRetention,
-    /// How often the store copies itself, and how many copies it keeps
-    /// (STOR-06, D-15).
+    /// How often the store copies itself, and how many copies it keeps.
     #[serde(default)]
     snapshot: FileSnapshot,
-    /// How much of each record the archive stores (ING-07, D-05).
+    /// How much of each record the archive stores.
     #[serde(default)]
     capture: FileCapture,
-    /// Whether the derived projections are filtered on their way to the model
-    /// (PRIV-03).
+    /// Whether the derived projections are filtered on their way to the model.
     #[serde(default)]
     privacy: FilePrivacy,
 }
 
-/// The `[privacy]` table of `terminus.toml` (PRIV-03).
+/// The `[privacy]` table of `terminus.toml`.
 ///
 /// One key, optional, and absent means off - see [`Config::redact_recall`] for
 /// why off is the only default that leaves a product behind.
@@ -134,7 +132,7 @@ struct FilePrivacy {
     redact_recall: Option<bool>,
 }
 
-/// The `[capture]` table of `terminus.toml` (ING-07, D-05).
+/// The `[capture]` table of `terminus.toml`.
 ///
 /// One key, and a missing table means [`CaptureMode::Full`] - the default the
 /// whole archive is specified against, where the stored blob reproduces the
@@ -149,11 +147,11 @@ struct FileCapture {
     mode: Option<String>,
 }
 
-/// The `[snapshot]` table of `terminus.toml` (STOR-06, D-15).
+/// The `[snapshot]` table of `terminus.toml`.
 ///
 /// **The one table in this file whose default is ON.** Every other block here
-/// defaults to off - retention is opt-in (RET-01), recall redaction is opt-in
-/// (PRIV-03) - and this one is not, because STOR-06 says rolling snapshots run by default.
+/// defaults to off - retention is opt-in, recall redaction is opt-in - and this
+/// one is not, because rolling snapshots run by default.
 /// What makes that affordable is the interval rather than a flag: the hook spawn
 /// is the scheduler and fires on every prompt, a snapshot of the real 1.10 GB
 /// store is 1.087 GB and 0.56 s, so an ungated step would write a gigabyte per
@@ -168,7 +166,7 @@ struct FileSnapshot {
     keep: Option<usize>,
 }
 
-/// The `[retention]` table of `terminus.toml` (RET-01, D-01).
+/// The `[retention]` table of `terminus.toml`.
 ///
 /// **Read and never written.** No command in this workspace writes this file
 /// and none can: the `toml` dependency is `default-features = false` with the
@@ -178,16 +176,16 @@ struct FileSnapshot {
 ///
 /// Every key is optional and a missing table means the defaults, under the same
 /// rule `[injection]` follows. Here the defaults are the OFF
-/// state, which is RET-01 itself: a store keeps everything unless this table
-/// says otherwise.
+/// state, which is the retention rule itself: a store keeps everything unless
+/// this table says otherwise.
 ///
 /// The per-project keys are project paths **as the user writes them** -
 /// `[retention.project."/data/code/scratch"]` - and they are put through the
-/// same [`normalize`] the exclusions go through before anything compares them
-/// (D-01). The design brief's own example writes a bare `scratch` while every
-/// stored project key is a canonical git toplevel, so a rule that matched by
-/// string equality against `session_meta.project` would silently match nothing
-/// forever and read as broken rather than as misconfigured.
+/// same [`normalize`] the exclusions go through before anything compares them.
+/// The design brief's own example writes a bare `scratch` while every stored
+/// project key is a canonical git toplevel, so a rule that matched by string
+/// equality against `session_meta.project` would silently match nothing forever
+/// and read as broken rather than as misconfigured.
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FileRetention {
     action: Option<String>,
@@ -217,7 +215,7 @@ struct FileInjection {
 
 /// The resume brief's budget when nothing configures one.
 ///
-/// Characters, not tokens (D-16): the workspace has eight dependencies, each
+/// Characters, not tokens: the workspace has eight dependencies, each
 /// justified in the root `Cargo.toml` against a measured 0.408 ms startup
 /// floor, and none of them is a tokenizer - the existing budgets
 /// ([`crate::recall::EXCERPT_CHARS`], `index::MAX_BODY_BYTES`) are already
@@ -230,11 +228,12 @@ pub const DEFAULT_BRIEF_CHARS: usize = 6_000;
 /// The prompt injection's budget when nothing configures one.
 ///
 /// Smaller than [`DEFAULT_BRIEF_CHARS`] because it is paid on every prompt
-/// rather than once a session, and because INJ-03 caps it at three turns.
+/// rather than once a session, and because a prompt injects at most three
+/// turns.
 pub const DEFAULT_PROMPT_CHARS: usize = 4_000;
 
-/// How long a store waits between rolling snapshots when nothing configures it
-/// (STOR-06, D-15).
+/// How long a store waits between rolling snapshots when nothing configures
+/// it.
 ///
 /// Hours, and 24 of them, which is `DESIGN-BRIEF.md:100`'s whole specification.
 /// The number is what makes "on by default" affordable: the hook spawn is the
@@ -242,7 +241,7 @@ pub const DEFAULT_PROMPT_CHARS: usize = 4_000;
 /// stands between the default and an archive-sized file per prompt.
 pub const DEFAULT_SNAPSHOT_INTERVAL_HOURS: u64 = 24;
 
-/// How many rolling snapshots are kept when nothing configures it (STOR-06).
+/// How many rolling snapshots are kept when nothing configures it.
 ///
 /// Three, so the data directory's ceiling is four archives rather than one - a
 /// bound a user can predict from the store's own size, which is what
@@ -256,7 +255,7 @@ pub const DEFAULT_SNAPSHOTS_KEPT: usize = 3;
 /// a secret here and it was withheld" from "there was nothing here".
 pub const REDACTED: &str = "[redacted]";
 
-/// How much of each record the archive stores (ING-07, D-05).
+/// How much of each record the archive stores.
 ///
 /// The mode acts at ingest, on the record's own JSON line, BEFORE it enters the
 /// blob ([`crate::capture`]): the two reduced modes replace the top-level
@@ -276,8 +275,8 @@ pub const REDACTED: &str = "[redacted]";
 ///   notices as "search stopped finding that".
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum CaptureMode {
-    /// Store every byte of every record. The default (ING-07), and the only
-    /// mode phase 1 D-13's byte-for-byte invariant is a statement about.
+    /// Store every byte of every record. The default, and the only mode the
+    /// archive's byte-for-byte invariant is a statement about.
     #[default]
     Full,
     /// Elide a `toolUseResult` or `attachment` subtree only when it is LARGE -
@@ -321,7 +320,7 @@ impl CaptureMode {
     }
 }
 
-/// What retention does to a session that has aged past its policy (RET-01).
+/// What retention does to a session that has aged past its policy.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum RetentionAction {
     /// Keep it. The default, the whole product's posture, and what an
@@ -329,10 +328,10 @@ pub enum RetentionAction {
     #[default]
     Keep,
     /// Empty the blob and mark the session evicted, leaving the row, its
-    /// metadata and every derived row in place (RET-02).
+    /// metadata and every derived row in place.
     Evict,
     /// Remove the session entirely - and only once Claude Code's own
-    /// `cleanupPeriodDays` has already removed its transcript (D-02).
+    /// `cleanupPeriodDays` has already removed its transcript.
     Delete,
 }
 
@@ -365,7 +364,7 @@ impl RetentionPolicy {
     /// Can this policy ever name a session?
     ///
     /// "Off by default" is a property of the resolved VALUE rather than of a
-    /// caller remembering to check two fields (RET-01). Both halves have to be
+    /// caller remembering to check two fields. Both halves have to be
     /// set for anything to happen: an `action` with no age names every session
     /// that ever existed, and an age with no action names them for no purpose.
     pub fn selects_nothing(&self) -> bool {
@@ -373,7 +372,7 @@ impl RetentionPolicy {
     }
 }
 
-/// The resolved `[retention]` block (RET-01, D-01).
+/// The resolved `[retention]` block.
 ///
 /// The project keys are [`normalize`]d, exactly as the exclusions are, and a
 /// key that normalizes to nothing is dropped exactly as an exclusion is - an
@@ -384,7 +383,7 @@ struct Retention {
     projects: Vec<(String, RetentionPolicy)>,
 }
 
-/// The resolved `[snapshot]` block (STOR-06, D-15).
+/// The resolved `[snapshot]` block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Snapshot {
     enabled: bool,
@@ -393,8 +392,9 @@ struct Snapshot {
 }
 
 /// On, daily, three kept. Derived `Default` would give `false, 0, 0`, which is
-/// snapshots off - the opposite of what STOR-06 specifies - so the defaults are
-/// spelled here the way the injection budgets are and for the same reason.
+/// snapshots off - the opposite of the default this table promises - so the
+/// defaults are spelled here the way the injection budgets are and for the same
+/// reason.
 impl Default for Snapshot {
     fn default() -> Snapshot {
         Snapshot {
@@ -408,7 +408,7 @@ impl Default for Snapshot {
 /// The resolved config.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
-    /// The file these values came from, when they came from one (D-13).
+    /// The file these values came from, when they came from one.
     ///
     /// Set by [`Config::load_from`] and by nothing else, because that is the
     /// one place the path exists: `config_dir()` re-resolved later can name a
@@ -420,9 +420,9 @@ pub struct Config {
     /// Every spelling the exclusions match: each one as configured, plus the
     /// path it resolves to where that differs ([`resolved`]).
     exclusion_spellings: Vec<String>,
-    /// D-07's encoding of each spelling, case-folded where the platform is,
-    /// computed once so the pre-open test costs a comparison per project
-    /// directory rather than a re-encode.
+    /// The project directory encoding of each spelling, case-folded where the
+    /// platform is, computed once so the pre-open test costs a comparison per
+    /// project directory rather than a re-encode.
     encoded_exclusions: Vec<String>,
     brief_chars: usize,
     prompt_chars: usize,
@@ -469,7 +469,7 @@ impl Config {
     /// Load from a named config directory.
     ///
     /// Only `terminus.toml` inside it is read. A `config.toml` sitting beside
-    /// it is the legacy tool's file and is not this program's (D-15).
+    /// it is the legacy tool's file and is not this program's.
     pub fn load_from(config_dir: &Path) -> Result<Config> {
         let path = config_dir.join(CONFIG_FILE_NAME);
         let file = match std::fs::read_to_string(&path) {
@@ -543,12 +543,13 @@ impl Config {
         config.retention = resolve_retention(file.retention);
         // Key by key against the defaults, not a wholesale replacement: a table
         // that names only `keep` leaves the interval and the enabled flag where
-        // STOR-06 put them, which is the rule every other table here follows.
+        // the defaults put them, which is the rule every other table here
+        // follows.
         let defaults = Snapshot::default();
         config.snapshot = Snapshot {
             enabled: file.snapshot.enabled.unwrap_or(defaults.enabled),
             // Zero would mean "snapshot on every prompt", which is the failure
-            // D-15 exists to prevent, so it falls back to the default rather
+            // the interval exists to prevent, so it falls back to the default rather
             // than being taken literally. Turning snapshots off is `enabled`.
             interval_hours: file
                 .snapshot
@@ -571,7 +572,7 @@ impl Config {
         Ok(config)
     }
 
-    /// The `terminus.toml` these values were read from (D-13).
+    /// The `terminus.toml` these values were read from.
     ///
     /// `None` for a config built in memory - [`Config::from_parts`] and
     /// [`Config::default`] - and `Some` for every config
@@ -585,18 +586,18 @@ impl Config {
         self.source.as_deref()
     }
 
-    /// How many characters the SessionStart resume brief may carry (INJ-01).
+    /// How many characters the SessionStart resume brief may carry.
     pub fn brief_chars(&self) -> usize {
         self.brief_chars
     }
 
-    /// How many characters one UserPromptSubmit injection may carry (INJ-03).
+    /// How many characters one UserPromptSubmit injection may carry.
     pub fn prompt_chars(&self) -> usize {
         self.prompt_chars
     }
 
     /// The retention policy in force for a session stored under this project
-    /// key (RET-01, D-01).
+    /// key.
     ///
     /// **The deepest configured key that COVERS the session's project wins**,
     /// through [`covers`] - the same component-wise ancestor test
@@ -643,27 +644,27 @@ impl Config {
                 .all(|(_, policy)| policy.selects_nothing())
     }
 
-    /// Does this store copy itself on a rolling schedule (STOR-06)?
+    /// Does this store copy itself on a rolling schedule?
     ///
     /// **True unless the config says otherwise**, which is the opposite of
-    /// every other feature flag in this file and is STOR-06 itself. What keeps
-    /// that from costing an archive per prompt is
+    /// every other feature flag in this file and is the snapshot rule itself.
+    /// What keeps that from costing an archive per prompt is
     /// [`Config::snapshot_interval_hours`], not this flag.
     pub fn snapshots_enabled(&self) -> bool {
         self.snapshot.enabled
     }
 
-    /// How long the store waits between snapshots (D-15).
+    /// How long the store waits between snapshots.
     pub fn snapshot_interval_hours(&self) -> u64 {
         self.snapshot.interval_hours
     }
 
-    /// How many of the most recent snapshots survive the prune (D-15).
+    /// How many of the most recent snapshots survive the prune.
     pub fn snapshots_kept(&self) -> usize {
         self.snapshot.keep
     }
 
-    /// How much of each record this store archives (ING-07, D-05).
+    /// How much of each record this store archives.
     ///
     /// [`CaptureMode::Full`] unless the config says otherwise, including for a
     /// config file with no `[capture]` table and for no config file at all.
@@ -672,8 +673,7 @@ impl Config {
         self.capture
     }
 
-    /// Are the derived recall projections filtered on their way to the model
-    /// (PRIV-03)?
+    /// Are the derived recall projections filtered on their way to the model?
     ///
     /// False unless `[privacy] redact_recall = true` says otherwise, including
     /// for a config file with no `[privacy]` table and for no config file at
@@ -743,22 +743,23 @@ impl Config {
         self.exclusions.iter().any(|e| is_filesystem_root(e))
     }
 
-    /// The pre-open test (D-09, D-22): is this encoded project directory name
+    /// The pre-open test: is this encoded project directory name
     /// excluded?
     ///
     /// Exact equality against the encoded exclusion, or a name that extends it
     /// past an encoded separator and is confirmed against the filesystem to be
     /// a real subdirectory of the excluded path.
     ///
-    /// The extension case is the ambiguity D-07 proved: `-` encodes the
-    /// separator and also a literal `-` or `.`, so `-data-code-foo-bar` is
+    /// The extension case is the ambiguity the encoding carries: `-` encodes
+    /// the separator and also a literal `-` or `.`, so `-data-code-foo-bar` is
     /// `/data/code/foo/bar` and `/data/code/foo-bar` and
-    /// `/data/code/foo.bar` at once. D-09 asked for a segment-boundary match
-    /// and for `-data-projects-cadence-research` not to match
+    /// `/data/code/foo.bar` at once. A subdirectory has to match on a segment
+    /// boundary, and `-data-projects-cadence-research` must not match
     /// `-data-projects-cadence`, which are not both satisfiable in the encoded
     /// space alone - so this resolves them outside it, by asking the filesystem
     /// which of those paths exists ([`descends_to`]). That reads directory
-    /// entries and opens no transcript, which is what AC5 and D-22 constrain.
+    /// entries and opens no transcript, which is all the pre-open test may do:
+    /// no file under an excluded project is ever opened.
     ///
     /// Unresolvable means excluded: an excluded directory that is unreadable or
     /// gone, or a tree too large to search, leaves the question open, and the
@@ -790,7 +791,7 @@ impl Config {
             })
     }
 
-    /// The read-side test (D-23): is this real path inside an excluded project?
+    /// The read-side test: is this real path inside an excluded project?
     ///
     /// A subtree match on path components, so `/data/projects/cadence` covers
     /// `/data/projects/cadence/sub` and does not cover
@@ -806,7 +807,7 @@ impl Config {
     }
 }
 
-/// Turn the `[retention]` table into the value every caller reads (D-01).
+/// Turn the `[retention]` table into the value every caller reads.
 ///
 /// Two things happen here and nowhere else. Every per-project key goes through
 /// [`normalize`], so a rule written `~/code/scratch/` or `/data/code/../code`
@@ -849,7 +850,7 @@ fn resolve_retention(file: FileRetention) -> Retention {
 /// same subtree to it. [`Config::excludes_encoded_dir`] compares an *encoded
 /// string*, where each of those encodes to a different name and only one of
 /// them can equal a real project directory's. Left unnormalized, a trailing
-/// separator is the whole read-then-filter failure ING-08 forbids: the
+/// separator is the whole read-then-filter failure an exclusion forbids: the
 /// pre-open test never matches, every file in the project is opened and
 /// archived, and only the read path hides it afterwards.
 ///
@@ -862,7 +863,7 @@ fn resolve_retention(file: FileRetention) -> Retention {
 ///
 /// Resolving `..` lexically rather than through the filesystem is deliberate.
 /// The excluded directory is frequently gone - the whole worktree case is
-/// exactly that (D-06) - and an exclusion must not stop meaning what it says
+/// exactly that - and an exclusion must not stop meaning what it says
 /// because the directory it names was deleted.
 ///
 /// An exclusion that reduces to nothing at all is dropped rather than kept as
@@ -910,7 +911,7 @@ fn normalize(raw: &str) -> Option<String> {
 /// a symlink - any linked folder, or `/var` on macOS, which is `/private/var` -
 /// matches neither as written. The deepest part of the path that exists is
 /// resolved and the rest put back on, because an excluded directory is often
-/// gone (D-06) and the written spelling is kept beside this one, not replaced.
+/// gone and the written spelling is kept beside this one, not replaced.
 fn resolved(exclusion: &str) -> Option<String> {
     let mut existing = PathBuf::from(exclusion);
     let mut rest = Vec::new();
@@ -940,7 +941,8 @@ fn is_filesystem_root(path: &str) -> bool {
     components.next() == Some(std::path::Component::RootDir) && components.next().is_none()
 }
 
-/// D-07's encoding: every character outside `[A-Za-z0-9]` becomes `-`.
+/// The project directory encoding: every character outside `[A-Za-z0-9]`
+/// becomes `-`.
 ///
 /// Applying this to a transcript's first `cwd` reproduces its containing
 /// directory name for 1,252 of 1,252 real files, so the encoding is exact - and
@@ -982,7 +984,8 @@ fn fold(s: &str) -> String {
 /// worktree directory is deleted when the worktree is, while `<repo>/.claude/
 /// worktrees` survives empty, so every archived worktree session's project
 /// directory has a live prefix and a dead leaf. Answering `Some(false)` there
-/// would open exactly the transcripts D-06 folds into the excluded repo.
+/// would open exactly the transcripts worktree folding puts into the excluded
+/// repo.
 ///
 /// Unreadable entries and symlinks are unresolved for the same reason. A
 /// symlinked branch is not followed - a link loop would not terminate - so when
@@ -1042,8 +1045,8 @@ fn components(path: &Path) -> Vec<String> {
 /// would otherwise be a prefix of every path there is.
 ///
 /// One rule, used twice on purpose. [`Config::excludes_path`] asks it whether a
-/// project is hidden (D-23) and `recall::scope` asks it which project a working
-/// directory sits in (D-12); two spellings of "is this path inside that one"
+/// project is hidden and `recall::scope` asks it which project a working
+/// directory sits in; two spellings of "is this path inside that one"
 /// would eventually disagree about a trailing separator or about case folding,
 /// and a project in scope under one rule and excluded under the other is a
 /// search that returns an excluded project's turns.
@@ -1089,8 +1092,8 @@ fn non_empty(value: Option<String>) -> Option<String> {
     value.filter(|v| !v.is_empty())
 }
 
-/// The one place a credential can still reach a stream from a config file, shut
-/// (PRIV-01).
+/// The one place a credential can still reach a stream from a config file,
+/// shut.
 ///
 /// A TOML parse error renders the offending line back at the reader:
 ///
@@ -1130,17 +1133,17 @@ fn non_empty_var(name: &str) -> Option<std::ffi::OsString> {
     }
 }
 
-/// The read side of ING-08: the one way a read path lists sessions.
+/// The read side of exclusion: the one way a read path lists sessions.
 ///
 /// **Every future read path is required to go through this module** rather than
-/// querying `session_meta` directly. Phase 3's search, phase 5's injection and
-/// the MCP tools all reuse it; a query that reaches past it is how an excluded
+/// querying `session_meta` directly. Search, injection and the MCP tools all
+/// reuse it; a query that reaches past it is how an excluded
 /// project becomes visible again.
 ///
 /// The failure this exists to prevent: the incumbent honors exclusion on write
 /// and ignores it on read. Terminus honors
 /// it on both, and honors it **retroactively** - which is why no per-session
-/// flag is written at ingest (D-23). A flag would say what was true when the
+/// flag is written at ingest. A flag would say what was true when the
 /// session was archived, and the case that matters is precisely the session
 /// archived *before* its project was excluded. The predicate is re-applied on
 /// every read instead.
@@ -1229,8 +1232,8 @@ pub mod visible {
     /// Both keys travel together rather than as two independent sets, because
     /// they are only meaningful as a pair: a longest-prefix hit on
     /// `project_pre_worktree` has to resolve back to that row's `project`
-    /// before it can scope anything (phase 2 D-06 folded a repo and its
-    /// worktree into ONE key on purpose), and exclusion has to be able to hide
+    /// before it can scope anything (worktree folding puts a repo and its
+    /// worktree under ONE key on purpose), and exclusion has to be able to hide
     /// a session under its worktree path while leaving a sibling session with
     /// the same `project` visible.
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1238,7 +1241,7 @@ pub mod visible {
         /// The key ingest resolved, after worktree folding. `None` for a
         /// session whose records carry no `cwd` at all.
         pub project: Option<String>,
-        /// The key the session had before that folding (ING-05).
+        /// The key the session had before that folding.
         pub project_pre_worktree: Option<String>,
         /// The config excludes [`ProjectKeys::project`] itself.
         pub project_excluded: bool,
@@ -1249,14 +1252,14 @@ pub mod visible {
     /// Every distinct project key the archive carries, and which of them the
     /// config excludes.
     ///
-    /// D-21: this is the projection a read path scopes and filters on, and
+    /// This is the projection a read path scopes and filters on, and
     /// [`sessions`] is not. Measured on a synthetic store shaped like the real
     /// one - 2,000 sessions, 250,000 turns, warm - `sessions()` costs 6.2-6.8
     /// ms because of its per-session `count(*)` on `turns` plus the watermark
     /// lookup, against 0.56-0.58 ms for the same join projecting only
-    /// `project`. The whole phase 5 budget is single-digit milliseconds, so a
-    /// search that paid for a turn count it never reads would spend the budget
-    /// before the FTS query started and the cost would look like search.
+    /// `project`. The injection's whole budget is single-digit milliseconds, so
+    /// a search that paid for a turn count it never reads would spend the
+    /// budget before the FTS query started and the cost would look like search.
     ///
     /// Read off `session_meta` alone. A session with no meta row carries no
     /// project key to scope on, so it contributes no row here - and it stays

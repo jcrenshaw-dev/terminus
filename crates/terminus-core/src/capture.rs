@@ -1,4 +1,4 @@
-//! How much of one record the archive stores (ING-07, phase 8 D-05).
+//! How much of one record the archive stores.
 //!
 //! Two things this module is NOT, because both are easy to read into it and
 //! both are wrong.
@@ -27,8 +27,8 @@
 //! are output rather than authorship: a `lean` or `minimal` store keeps every
 //! prompt, every assistant turn, every tool name and every tool argument.
 //!
-//! D-12 is why it has to happen HERE, on the record's JSON line, rather than off
-//! the derived tables: `SELECT count(*) FROM turns WHERE record_type='user' AND
+//! It has to happen HERE, on the record's JSON line, rather than off the
+//! derived tables: `SELECT count(*) FROM turns WHERE record_type='user' AND
 //! tool_name IS NOT NULL` returns 0 on the live store while `user` records hold
 //! 57.3% of the stream, so an implementation filtering on `turns.tool_name`
 //! elides nothing at all.
@@ -190,7 +190,7 @@ fn is_mark(value: &Value) -> bool {
 /// framing exactly.
 ///
 /// The input is a whole-line range - every line terminated by its `\n`, which is
-/// what `Scan::consumed` guarantees by stopping at the last newline (D-14). The
+/// what `Scan::consumed` guarantees by stopping at the last newline. The
 /// output holds the same number of lines in the same order, each still
 /// terminated, so the record count, the turn ordinals and the classification of
 /// every line are unchanged and only the bytes inside some of them are fewer.
