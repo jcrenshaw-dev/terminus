@@ -46,18 +46,6 @@
 //! them inside the ingest lock - `open_up_to_date` runs at the top of every
 //! pass - with a `Rebuilt::failed` note to show for it, which is silent data
 //! loss reporting as retention working correctly.
-//!
-//! # Retiring the old boundary table (D-22)
-//!
-//! Builds before `DERIVED_SCHEMA` 5 kept boundary rows in
-//! `compaction_boundaries`, keyed by `turns.id` with an enforced foreign key to
-//! it. Every rebuild retires that table first, on both paths, before `turns` is
-//! dropped or a session's turns are deleted, either of which the foreign key
-//! would refuse. On the preserving path an evicted session's old rows are first
-//! copied into `compactions` at the `(session_key, stream_offset)` of their
-//! turn, because its emptied blob cannot rebuild them and its derived rows are
-//! the only copy left. On a store that never had the old table both steps do
-//! nothing.
 
 use std::path::Path;
 
@@ -132,8 +120,6 @@ pub fn reindex(store: &mut Store) -> Result<Rebuilt> {
         ..Rebuilt::default()
     };
 
-    retire_old_boundaries(&tx, preserved > 0)?;
-
     if preserved == 0 {
         // Every store until a user writes a `[retention]` table, and the
         // stronger guarantee: nothing survives that the block rows did not produce.
@@ -145,8 +131,6 @@ pub fn reindex(store: &mut Store) -> Result<Rebuilt> {
         // says about the pragma, and dropping `turns` while `entities` or
         // `paths` still hold rows fails with a constraint violation.
         // `DERIVED_TABLES` is in creation order, so a rebuild drops in reverse.
-        // The pre-5 boundary table, which also references `turns(id)`, is
-        // already gone: `retire_old_boundaries` ran first.
         for table in schema::DERIVED_TABLES.iter().rev() {
             tx.execute_batch(&format!("DROP TABLE IF EXISTS {table}"))?;
         }
@@ -263,41 +247,6 @@ fn clear_derived(tx: &rusqlite::Connection, session_key: &str) -> Result<()> {
     ] {
         tx.execute(&statement, [session_key])?;
     }
-    Ok(())
-}
-
-/// Drop the pre-5 `compaction_boundaries` table, carrying the evicted sessions'
-/// rows into `compactions` first when `preserving` (D-22, phase 8 D-03).
-///
-/// Runs before anything drops `turns` or deletes from it, because the old
-/// table's foreign key to `turns(id)` is enforced and would refuse either. A
-/// session that is not evicted needs nothing carried: the rebuild writes its
-/// rows again from its blob.
-fn retire_old_boundaries(tx: &rusqlite::Connection, preserving: bool) -> Result<()> {
-    let present: bool = tx.query_row(
-        "SELECT count(*) > 0 FROM sqlite_master
-          WHERE type = 'table' AND name = 'compaction_boundaries'",
-        [],
-        |r| r.get(0),
-    )?;
-    if !present {
-        return Ok(());
-    }
-    if preserving {
-        // The new table has to exist to be copied into, and the rebuild runs
-        // the same `IF NOT EXISTS` schema again below.
-        tx.execute_batch(schema::CREATE_SQL)?;
-        tx.execute(
-            "INSERT OR REPLACE INTO compactions (session_key, stream_offset, metadata)
-             SELECT t.session_key, t.stream_offset, b.metadata
-               FROM compaction_boundaries b
-               JOIN turns t ON t.id = b.turn_id
-               JOIN session_meta m ON m.session_key = t.session_key
-              WHERE coalesce(m.is_evicted, 0) <> 0",
-            [],
-        )?;
-    }
-    tx.execute_batch("DROP TABLE compaction_boundaries")?;
     Ok(())
 }
 
