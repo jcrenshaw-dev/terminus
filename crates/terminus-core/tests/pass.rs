@@ -139,9 +139,10 @@ fn turns_for(conn: &Connection, path: &Path) -> i64 {
     .unwrap()
 }
 
-/// D-12, at the scale it matters. Six transcripts, two of them damaged in the
-/// two ways phase 1 made fatal, one pass: the other four archive and the
-/// summary names exactly the two that did not.
+/// A per-file failure is recorded and skipped, at the scale it matters. Six
+/// transcripts, two of them damaged in two ways a single file can fail, one
+/// pass: the other four archive and the summary names exactly the two that did
+/// not.
 ///
 /// Either failure propagating would let one damaged session wedge every future
 /// ingest of every other transcript in the tree - the failure gate fix
@@ -237,9 +238,9 @@ fn one_damaged_transcript_does_not_stop_the_rest_of_the_tree() {
     }
 }
 
-/// AC5's ingest half. An excluded project records zero opens of anything
-/// beneath it and adds no row to any table, while the sibling whose encoded
-/// name merely extends the excluded one is ingested normally.
+/// Exclusion on the ingest side. An excluded project records zero opens of
+/// anything beneath it and adds no row to any table, while the sibling whose
+/// encoded name merely extends the excluded one is ingested normally.
 ///
 /// The counted-open log is queried by path prefix rather than by total, because
 /// a total could reach the expected number by opening every excluded file and
@@ -389,12 +390,12 @@ fn a_pass_reports_the_lock_rather_than_waiting_for_it() {
     assert_eq!(summary.files_committed, 1);
 }
 
-/// PRIV-02, PRIV-04: taking the lock is what creates the data directory on a
-/// machine that has never ingested, so it is where the directory and `LOCK`
-/// get their owner-only mode.
+/// Taking the lock is what creates the data directory on a machine that has
+/// never ingested, so it is where the directory and `LOCK` get their owner-only
+/// mode.
 ///
 /// `parent` is the falsifying half. terminus narrows the directory it owns and
-/// nothing above it (D-04), so a run that left `~/.local/share` at 0700 would
+/// nothing above it, so a run that left `~/.local/share` at 0700 would
 /// make every other tool's data under it unreachable from the user's own
 /// group-shared workflows - which is a different bug, not a stricter version of
 /// this one. The lock is held across the assertions so the file under test is
@@ -461,12 +462,12 @@ fn last_run_text(conn: &Connection) -> (Option<String>, Option<String>) {
     .unwrap()
 }
 
-/// Five transcripts in, exactly one `runs` row out (D-10).
+/// Five transcripts in, exactly one `runs` row out.
 ///
-/// Phase 1's `record_run` inserts a literal `1` for `files_seen` from inside
-/// the per-file transaction; reused unchanged by a tree walk it would write
-/// roughly 2,071 rows per hook-triggered pass, and ING-09's "the last ingest
-/// run" would name one file rather than the pass.
+/// `record_run` inserts a literal `1` for `files_seen` from inside the per-file
+/// transaction; reused unchanged by a tree walk it would write roughly 2,071
+/// rows per hook-triggered pass, and the last ingest run `status` reports would
+/// name one file rather than the pass.
 #[test]
 fn one_pass_over_five_transcripts_writes_exactly_one_runs_row() {
     let bench = bench();
@@ -503,7 +504,7 @@ fn one_pass_over_five_transcripts_writes_exactly_one_runs_row() {
     assert_eq!(rows[1].1, 0, "committed nothing");
 }
 
-/// D-14. A pass that dies mid-walk still leaves one `runs` row carrying its
+/// A pass that dies mid-walk still leaves one `runs` row carrying its
 /// error - with no log file by design, that row is the only place the failure
 /// can be seen.
 #[test]
@@ -591,10 +592,10 @@ fn a_damaged_file_shows_up_in_the_passs_own_runs_row() {
 ///
 /// The tree pass decides exclusion at the project directory it declines to
 /// descend into, and the single-file entry point has no walk behind it to
-/// decide anything. Left to discovery alone, naming the file by hand - which is
-/// the shape phase 4's hooks call - reads and archives a project the user said
-/// never to read, and only the read path hides it afterwards. That is
-/// read-then-filter, which ING-08 forbids.
+/// decide anything. Left to discovery alone, naming the file by hand reads and
+/// archives a project the user said never to read, and only the read path hides
+/// it afterwards. That is read-then-filter, and an excluded project must never
+/// be read at all.
 #[test]
 fn naming_an_excluded_transcript_by_hand_reads_nothing() {
     let bench = bench();
@@ -681,8 +682,8 @@ fn an_exclusion_with_a_trailing_separator_is_honored_before_the_open() {
     );
 }
 
-// RET-01 and RET-03: retention runs as a bounded step at the end of every pass,
-// and reports through `runs.error` because there is no log file.
+// Retention runs as a bounded step at the end of every pass, and reports
+// through `runs.error` because there is no log file.
 
 const EVICT: &str = "[retention]\naction = \"evict\"\nage_days = 1\n";
 /// Comfortably outside any window these tests configure.
@@ -698,9 +699,9 @@ fn age_everything(conn: &Connection) {
     .unwrap();
 }
 
-/// AC1. The corpus predates any default, nothing configures retention, and the
-/// pass leaves every blob where it was and `runs.error` null. A note here would
-/// be a pass telling a user about a feature they never turned on.
+/// The corpus predates any default, nothing configures retention, and the pass
+/// leaves every blob where it was and `runs.error` null. A note here would be a
+/// pass telling a user about a feature they never turned on.
 #[test]
 fn a_pass_with_no_retention_configured_touches_nothing_and_says_nothing() {
     let bench = bench();
@@ -733,7 +734,7 @@ fn a_pass_with_no_retention_configured_touches_nothing_and_says_nothing() {
     );
 }
 
-/// RET-02 through the pass: an evict policy over an aged corpus empties the
+/// Eviction through the pass: an evict policy over an aged corpus empties the
 /// blobs and says what it did in `runs.notes`, leaving `runs.error` null: an
 /// eviction the user configured is not a failure, and `doctor` flags `error`.
 #[test]
@@ -771,8 +772,8 @@ fn a_pass_with_an_evict_policy_evicts_the_aged_sessions_and_says_so() {
     assert_eq!(last_run_text(&bench.conn()), (None, None));
 }
 
-/// RET-03's bound, and the half of it that matters to a reader: a truncated
-/// pass says how many it left, so "there is nothing left to do" is
+/// Retention's per-pass bound, and the half of it that matters to a reader: a
+/// truncated pass says how many it left, so "there is nothing left to do" is
 /// distinguishable from "the rest is coming next pass". The hook spawn is the
 /// scheduler, so the next pass is the next prompt.
 #[test]
@@ -835,10 +836,9 @@ fn the_bounded_step_leaves_the_rest_for_the_next_pass_and_says_how_many() {
         .all(|(len, flag)| *len == 0 && *flag == Some(1)));
 }
 
-/// D-14's first regression test (AC1, AC2, ING-13). Moving `.claude` and
-/// leaving a symlink at the old path changes every absolute path in the tree,
-/// and the second pass must still find every session it archived rather than
-/// archive each one again under a second key.
+/// Moving `.claude` and leaving a symlink at the old path changes every
+/// absolute path in the tree, and the second pass must still find every session
+/// it archived rather than archive each one again under a second key.
 ///
 /// The tree carries a sidecar link spelled through the root's own path, the
 /// way Claude Code writes its resume links through `~/.claude`, so the session
@@ -1124,7 +1124,7 @@ fn backfill_and_a_named_file_refuse_a_file_the_session_was_not_read_from() {
     assert_eq!(diverged(&bench.conn(), &key), None);
 }
 
-// #85, D-09. What a file that has not grown since its last pass still gets.
+// #85. What a file that has not grown since its last pass still gets.
 // Written against the code before the unchanged-file gate, so each test pins
 // today's answer, and run on both entry points: the tree walk and the named
 // file, each on a fresh bench so neither runs on the other's result.
@@ -1382,7 +1382,7 @@ fn an_unchanged_file_in_a_moved_project_folder_has_its_path_updated() {
     }
 }
 
-// #85, D-10. The block-read log, counted for one session in one store before
+// #85. The block-read log, counted for one session in one store before
 // and after a pass. The log is shared by every test in this binary and they run
 // in parallel, so it is never reset: an entry counts here only when it names
 // this bench's database and this session's number.

@@ -1,5 +1,4 @@
-//! D-11 / ING-11: the bounded-parallelism pass lands where the sequential one
-//! lands.
+//! The bounded-parallelism pass lands where the sequential one lands.
 //!
 //! The whole value of a second implementation of the walk is that it is not a
 //! second implementation of the ingest, so the assertion that matters is
@@ -44,11 +43,10 @@ const WORKERS: usize = 4;
 /// implementations share.
 ///
 /// `meta` is here for the same asymmetry one step further out: `pass::run_with`
-/// runs the rolling snapshot step after `locked` returns (STOR-06, D-15) and
-/// stamps `last_snapshot_at`, which backfill never writes. Only the row COUNT
-/// was ever compared for this table - `archive_format` and `derived_schema` are
-/// asserted where they are set, not here - so excluding it drops one count and
-/// no value.
+/// runs the rolling snapshot step after `locked` returns and stamps
+/// `last_snapshot_at`, which backfill never writes. Only the row COUNT was ever
+/// compared for this table - `archive_format` and `derived_schema` are asserted
+/// where they are set, not here - so excluding it drops one count and no value.
 ///
 /// All of them, not just the one that fired. `decisions` and `labels` both read 0
 /// against this fixture tree today, which is the only reason they never sprang
@@ -277,7 +275,7 @@ fn a_tree_with_more_files_than_workers_leaves_none_unprocessed() {
     }
     assert_eq!(marks.len(), transcripts.len());
 
-    // One `runs` row for the whole pass, not one per file (D-10).
+    // One `runs` row for the whole pass, not one per file.
     let conn = Connection::open(data_dir.join(DB_FILE_NAME)).unwrap();
     let runs: i64 = conn
         .query_row("SELECT count(*) FROM runs", [], |r| r.get(0))
