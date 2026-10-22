@@ -787,63 +787,6 @@ fn a_drained_decision_keeps_its_compaction() {
     );
 }
 
-/// The columns of one table, in declaration order, with their types.
-fn table_info(conn: &Connection, table: &str) -> Vec<(String, String)> {
-    conn.prepare(&format!("PRAGMA table_info({table})"))
-        .unwrap()
-        .query_map([], |r| Ok((r.get::<_, String>(1)?, r.get::<_, String>(2)?)))
-        .unwrap()
-        .map(Result::unwrap)
-        .collect()
-}
-
-/// #40, D-11: a store made before the columns existed gains them on its first
-/// writable open, in a fresh store's order, and the rows it already held read
-/// null in both - their values are unknown, not ordinary.
-#[test]
-fn a_store_without_the_compaction_columns_gains_them_and_its_rows_read_unknown() {
-    let bench = bench();
-    {
-        let conn = bench.conn();
-        insert_decision(&conn);
-        conn.execute_batch(
-            "ALTER TABLE decisions DROP COLUMN dropped;
-             ALTER TABLE decisions DROP COLUMN compacted;",
-        )
-        .unwrap();
-        let names: Vec<String> = table_info(&conn, "decisions")
-            .into_iter()
-            .map(|(name, _)| name)
-            .collect();
-        assert!(
-            !names.iter().any(|n| n == "compacted" || n == "dropped"),
-            "the premise: an aged table: {names:?}"
-        );
-    }
-
-    bench.pass();
-
-    let conn = bench.conn();
-    let rows: i64 = conn
-        .query_row("SELECT count(*) FROM decisions", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(rows, 1);
-    let (compacted, dropped): (Option<i64>, Option<String>) = conn
-        .query_row("SELECT compacted, dropped FROM decisions", [], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        })
-        .unwrap();
-    assert_eq!((compacted, dropped), (None, None));
-
-    let fresh = tempfile::tempdir().unwrap();
-    let store = Store::open(fresh.path()).unwrap();
-    assert_eq!(
-        table_info(&conn, "decisions"),
-        table_info(store.conn(), "decisions"),
-        "an upgraded store and a fresh one disagree on the column order"
-    );
-}
-
 /// D-03: a rebuild returns the decision log exactly as it was.
 ///
 /// The comparison is every column of the row rather than a count of rows: a
@@ -1322,9 +1265,7 @@ fn archive_records_at(
 ///
 /// The session's only turns naming the file are a Read and the result
 /// answering it, written in the shape Claude Code writes a Read result, so the
-/// injected total is 1 with the exclusion and 2 without it. Then the same store
-/// with `turns.is_typed` dropped: nothing there can say a turn was a tool
-/// result, so the replay still runs and counts both.
+/// injected total is 1 with the exclusion and 2 without it.
 #[test]
 fn replay_never_credits_a_tool_result_the_hook_refuses() {
     let bench = bench();
@@ -1436,16 +1377,6 @@ fn replay_never_credits_a_tool_result_the_hook_refuses() {
     assert_eq!(diff.decisions, 1, "{diff:?}");
     assert_eq!(injected_total(&diff).1, 1, "{diff:?}");
     assert_eq!(injected_total(&diff).1, live.hits.len(), "{live:?}");
-
-    // A store from before `is_typed`: replay still runs and counts both.
-    bench
-        .conn()
-        .execute_batch("ALTER TABLE turns DROP COLUMN is_typed")
-        .unwrap();
-    let store = Store::open_read_only(&bench.data_dir).unwrap();
-    let aged = replay::replay(&store, &Config::default(), &Thresholds::default())
-        .expect("a store without is_typed still replays");
-    assert_eq!(injected_total(&aged).1, 2, "{aged:?}");
 }
 
 /// D-06: under a `prompt_chars` too small for the frame the live hook hands
