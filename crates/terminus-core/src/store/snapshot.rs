@@ -14,9 +14,10 @@
 //! `database is locked`.
 //!
 //! **Neither function takes the ingest lock,** and that is the whole point: a
-//! copy that stopped the pass would be a copy nobody could afford to take
-//! after every pass, which is when one is taken. `VACUUM INTO` is read-only
-//! with respect to the database it copies.
+//! copy that stopped the pass would be a copy nobody could afford to take on a
+//! schedule, and one is taken after any pass that finds the snapshot interval
+//! has elapsed. `VACUUM INTO` is read-only with respect to the database it
+//! copies.
 //!
 //! **The name carries the instant, so ordering by name is ordering by time.**
 //! The prune therefore needs no filesystem mtime - which a copy, a restore or a
