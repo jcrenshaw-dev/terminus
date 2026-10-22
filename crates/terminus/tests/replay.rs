@@ -351,14 +351,13 @@ fn stats_and_replay_call_a_store_missing_the_whole_decision_log_a_failure() {
     }
 }
 
-/// Half a decision log is damage, not age, and it is reported as such.
+/// Half a decision log is damage, and it is reported as such.
 ///
-/// The two tables arrived in one `CREATE_SQL` (D-02), so "missing both" is the
-/// only shape age can produce; a store missing exactly one was written by a
-/// build that had both. The failure this guards is the comfortable one: reading
-/// it as "nothing recorded yet" would answer `precision` and a per-label diff
-/// with zeroes and `ok:true`, and a caller cannot tell that from an archive
-/// where injection genuinely never fired.
+/// Every store this build can open was created with both tables, so a store
+/// missing one lost it from outside. The failure this guards is the
+/// comfortable one: reading it as "nothing recorded yet" would answer
+/// `precision` and a per-label diff with zeroes and `ok:true`, and a caller
+/// cannot tell that from an archive where injection genuinely never fired.
 #[test]
 fn stats_and_replay_call_half_a_decision_log_a_failure() {
     for dropped in ["labels", "decisions"] {

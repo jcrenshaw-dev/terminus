@@ -149,10 +149,9 @@ fn regenerate(args: Regenerate) -> Result<(), Failure> {
             Attempt::Acquired(guard) => guard,
         };
 
-        // `Store::open` and not the read path: this is the write-mode open that
-        // brings a store older than this build forward through `bring_forward`'s
-        // missing-table arm, which is how a store that predates `observations`
-        // acquires it (D-01).
+        // `Store::open` and not the read path: this is the write-mode open,
+        // which creates a table the store lacks through `bring_forward`'s
+        // missing-table arm (D-01).
         let store = Store::open(&data_dir)?;
         observe::regenerate(
             store.conn(),
