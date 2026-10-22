@@ -767,42 +767,6 @@ pub fn plant_session(
     }
 }
 
-/// Move one session to `to`, the way a build before phase 4 keyed it: on an
-/// absolute path, with `transcript_path` the same text.
-///
-/// Every table holding the key moves in one transaction with foreign keys
-/// deferred, so the store stays consistent.
-pub fn plant_old_key(conn: &mut rusqlite::Connection, from: &str, to: &str) {
-    let tx = conn.transaction().expect("begin");
-    tx.execute_batch("PRAGMA defer_foreign_keys = ON")
-        .expect("defer foreign keys");
-    for table in [
-        "sessions",
-        "session_meta",
-        "turns",
-        "compactions",
-        "observations",
-    ] {
-        tx.execute(
-            &format!("UPDATE {table} SET session_key = ?2 WHERE session_key = ?1"),
-            [from, to],
-        )
-        .unwrap_or_else(|e| panic!("move {from} in {table}: {e}"));
-    }
-    tx.execute(
-        "UPDATE watermarks SET transcript_path = ?2 WHERE transcript_path = ?1",
-        [from, to],
-    )
-    .unwrap_or_else(|e| panic!("move the watermark of {from}: {e}"));
-    tx.execute(
-        "UPDATE session_meta SET transcript_path = ?1 WHERE session_key = ?1",
-        [to],
-    )
-    .unwrap_or_else(|e| panic!("set the transcript path of {to}: {e}"));
-    tx.commit()
-        .unwrap_or_else(|e| panic!("move {from} to {to}: {e}"));
-}
-
 /// Cut one session's stream again at `block_size`, recording the new size and
 /// checksum. The bytes, and so every turn's offset, stay the same.
 pub fn recut(conn: &rusqlite::Connection, session_key: &str, block_size: u32) {
