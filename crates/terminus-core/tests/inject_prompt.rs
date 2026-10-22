@@ -1,10 +1,10 @@
 //! The `UserPromptSubmit` relevance injection, against stores built by the
-//! ordinary ingest path (INJ-03, AC3, AC7).
+//! ordinary ingest path.
 //!
 //! The store is seeded from `session-edits.jsonl` through
 //! `testkit::copy_rooted_fixture_into` under a root the test owns, never from a
-//! fixture that hardcodes a path: what AC3 is about is a prompt naming a file
-//! relative to the payload's `cwd` reaching the ABSOLUTE spelling a past
+//! fixture that hardcodes a path: the relative-path case is a prompt naming a
+//! file relative to the payload's `cwd` reaching the ABSOLUTE spelling a past
 //! session stored, and both spellings have to be something this test built or
 //! the assertion is true only on a checkout at one literal path.
 
@@ -96,8 +96,8 @@ impl Bench {
 
     /// The same, under a `session_id` the caller names.
     ///
-    /// INJ-04 suppresses a turn the session it is asked under has already been
-    /// given, so a test that asks one question twice is asking about
+    /// The injector suppresses a turn the session it is asked under has already
+    /// been given, so a test that asks one question twice is asking about
     /// suppression unless it says otherwise. Every assertion here is about
     /// retrieval, the threshold or the rendering, so a repeated call takes a
     /// session of its own and leaves the suppression to
@@ -192,7 +192,7 @@ impl Bench {
 }
 
 /// A turn that says something and stores nothing: prose, which emits no
-/// entity whatever it names (RCL-02).
+/// entity whatever it names.
 fn prose(text: &str) -> serde_json::Value {
     serde_json::json!({"type": "text", "text": text})
 }
@@ -208,7 +208,7 @@ fn read(file: &str) -> serde_json::Value {
 }
 
 /// An `Edit` of one file naming one symbol: two independent entities on one
-/// turn, which is what INJ-03's co-occurrence condition is about.
+/// turn, which is what the co-occurrence threshold is about.
 fn edit(file: &str, symbol: &str) -> serde_json::Value {
     serde_json::json!({
         "type": "tool_use",
@@ -222,8 +222,8 @@ fn edit(file: &str, symbol: &str) -> serde_json::Value {
     })
 }
 
-/// D-05, and the whole of AC3's premise: the user types the relative spelling
-/// and the archive holds the absolute one.
+/// The whole premise of the relative-path case: the user types the relative
+/// spelling and the archive holds the absolute one.
 ///
 /// The second half is the falsifying one. `Query::matches_entity` needs every
 /// token of the stored value present in the query, so the same prompt without
@@ -361,8 +361,8 @@ fn tool_of(conn: &Connection, turn_id: i64) -> Option<String> {
     .unwrap()
 }
 
-/// AC3 at the library seam: the prompt names the file relative and the turn
-/// that stored it absolute comes back.
+/// The relative-path case at the library seam: the prompt names the file
+/// relative and the turn that stored it absolute comes back.
 ///
 /// The fixture's prose turn names the same file in the same words, so this is
 /// also the difference the phase is built on: the turn that DID the thing fires
@@ -386,14 +386,14 @@ fn a_prompt_naming_a_stored_path_fires_on_the_turn_that_stored_it() {
     );
     assert_reads_cover(&bench, &fired);
 
-    // The same prompt with the path taken out of it (AC3's other half).
+    // The same prompt with the path taken out of it fires on nothing.
     let silent = bench.fired(&cwd, "what changed");
     assert!(silent.hits.is_empty(), "{silent:?}");
     assert_eq!(silent.reads, Default::default());
 }
 
-/// D-01 at the library seam (AC1): a file Claude read is never handed back as
-/// the file's contents, only as the turn that read it.
+/// At the library seam, a file Claude read is never handed back as the file's
+/// contents, only as the turn that read it.
 ///
 /// The result is written in the shape Claude Code writes a Read result: a
 /// `tool_result` block with string content, and `toolUseResult.file` carrying
@@ -498,7 +498,7 @@ fn a_read_result_is_never_injected_but_the_read_still_fires() {
     assert_eq!(injected, vec![call], "{fired:?}");
 }
 
-/// AC7: a prompt whose only match is free text fires on nothing, and pays for
+/// A prompt whose only match is free text fires on nothing, and pays for
 /// nothing.
 ///
 /// The candidate is real - `widgetFactory` is identifier-shaped and the search
@@ -534,7 +534,7 @@ fn a_free_text_only_match_fires_on_nothing_and_reads_no_block() {
     assert_eq!(found[0].entity_match, None);
 }
 
-/// INJ-03's cap: four turns qualify and three are injected.
+/// The cap: four turns qualify and three are injected.
 #[test]
 fn at_most_three_turns_are_ever_injected() {
     let bench = bench();
@@ -563,7 +563,7 @@ fn at_most_three_turns_are_ever_injected() {
 }
 
 /// The fired turns' reads fetched exactly the block rows those turns cover,
-/// and decompressed each of them once (D-13, D-14).
+/// and decompressed each of them once.
 fn assert_reads_cover(bench: &Bench, fired: &prompt::Fired) {
     let ids: Vec<i64> = fired.hits.iter().map(|hit| hit.turn_id).collect();
     let covered = testkit::covered_blocks(&bench.conn(), &ids);
@@ -599,9 +599,9 @@ fn ranked(
         .hits
 }
 
-/// INJ-03's second condition, and the one that is not a subset of the first:
-/// two independent entities on one turn fire it wherever that turn ranks, and
-/// one entity below the top three does not.
+/// The threshold's second condition, and the one that is not a subset of the
+/// first: two independent entities on one turn fire it wherever that turn
+/// ranks, and one entity below the top three does not.
 ///
 /// The three turns above it are prose that repeats a word the prompt asks about
 /// and that no tool record anywhere carries - which is what makes the case
@@ -700,7 +700,7 @@ fn config_with(bench: &Bench, prompt_chars: usize) -> Config {
 ///
 /// Each call takes a `session_id` of its own, which is what keeps this an
 /// assertion about the RENDERING: two runs under one session would be answered
-/// by INJ-04's already-injected suppression on the second, and "the same bytes
+/// by the already-injected suppression on the second, and "the same bytes
 /// twice" would be a claim about a store that is unchanged AND a session that
 /// has not seen the answer yet.
 #[test]
@@ -734,7 +734,7 @@ fn the_injected_text_names_the_turn_and_the_day_and_repeats_itself() {
         "the injected text is not the edit's own: {text}"
     );
 
-    // The frame (D-02): the header first, the turn line between the tags, and
+    // The frame: the header first, the turn line between the tags, and
     // the closing tag once, last.
     assert_framed(&text);
     let turn = fired.hits[0].turn_id;
@@ -752,7 +752,7 @@ fn the_injected_text_names_the_turn_and_the_day_and_repeats_itself() {
         "two runs against an unchanged store rendered different bytes"
     );
 
-    // The other half of AC3, at the same seam.
+    // The other half of the relative-path case, at the same seam.
     let bare = bench.payload(&cwd, "what changed");
     assert_eq!(
         prompt::user_prompt_submit(&bench.data_dir, &Config::default(), &bare),
@@ -761,7 +761,7 @@ fn the_injected_text_names_the_turn_and_the_day_and_repeats_itself() {
 }
 
 /// The header line, the opening tag on the next line, and the closing tag once,
-/// as the last characters (D-02).
+/// as the last characters.
 fn assert_framed(text: &str) {
     let mut lines = text.lines();
     let header = lines.next().unwrap_or_default();
@@ -785,9 +785,9 @@ fn between_tags(text: &str) -> &str {
     &text[open..close]
 }
 
-/// D-06 and AC4: at every budget from nothing to the whole injection, the arm
-/// either says nothing and remembers nothing, or says something that fits and
-/// ends with the closing tag.
+/// At every budget from nothing to the whole injection, the arm either says
+/// nothing and remembers nothing, or says something that fits and ends with
+/// the closing tag.
 ///
 /// One `session_id` per budget, for the reason the test above states: the same
 /// prompt asked under one session is answered once, and this test is about
@@ -832,9 +832,9 @@ fn the_injection_is_cut_to_the_configured_budget() {
     assert!(spoke > 0, "no budget was large enough to inject");
 }
 
-/// AC3: a closing tag planted in a firing turn's excerpt or in its stored
-/// timestamp comes out neutralized, whatever disguise it wears, and the real
-/// one is still there exactly once, at the end.
+/// A closing tag planted in a firing turn's excerpt or in its stored timestamp
+/// comes out neutralized, whatever disguise it wears, and the real one is
+/// still there exactly once, at the end.
 ///
 /// One firing turn per planted variant, each behind a file of its own, so each
 /// excerpt is short enough that its window holds the whole of it and the plant
