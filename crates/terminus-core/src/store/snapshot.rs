@@ -1,7 +1,7 @@
 //! Rolling snapshots of the store: a consistent copy taken without stopping an
-//! ingest, and a prune that keeps only the newest few (STOR-06).
+//! ingest, and a prune that keeps only the newest few.
 //!
-//! **`VACUUM INTO`, never `rusqlite::backup` (D-07).** That module is gated
+//! **`VACUUM INTO`, never `rusqlite::backup`.** That module is gated
 //! behind a `backup` cargo feature this workspace does not enable
 //! (rusqlite 0.40's own `Cargo.toml` declares it and `src/lib.rs` gates
 //! `pub mod backup;` on it), so a snapshot reaching for it does not compile -
@@ -14,9 +14,9 @@
 //! `database is locked`.
 //!
 //! **Neither function takes the ingest lock,** and that is the whole point: a
-//! copy that stopped the pass would be a copy nobody could afford to take on
-//! the schedule STOR-06 asks for. `VACUUM INTO` is read-only with respect to
-//! the database it copies.
+//! copy that stopped the pass would be a copy nobody could afford to take
+//! after every pass, which is when one is taken. `VACUUM INTO` is read-only
+//! with respect to the database it copies.
 //!
 //! **The name carries the instant, so ordering by name is ordering by time.**
 //! The prune therefore needs no filesystem mtime - which a copy, a restore or a
@@ -68,7 +68,7 @@ pub fn take(data_dir: &Path) -> Result<PathBuf> {
     let dir = data_dir.join(DIR_NAME);
     // Owner-only at creation, like every directory terminus makes: a snapshot is
     // a copy of the whole archive and must not be readable by group or world for
-    // even an instant (PRIV-02, PRIV-04).
+    // even an instant.
     crate::owner_only::create_dir_all(&dir).map_err(|e| Error::io(&dir, e))?;
 
     let conn = Connection::open(&db).map_err(Error::Sqlite)?;
@@ -92,10 +92,11 @@ pub fn take(data_dir: &Path) -> Result<PathBuf> {
     }
 
     // The destination is created here, EMPTY and 0600, and `VACUUM INTO` writes
-    // into it rather than making it itself (D-03). A file SQLite creates lands
-    // at the umask - 0644 on a stock machine - and the only way to narrow it
+    // into it rather than making it itself. A file SQLite creates lands at the
+    // umask - 0644 on a stock machine - and the only way to narrow it
     // afterwards would be a chmod over a file that already holds the whole
-    // archive, which is the window AC2 bars. Measured 2026-08-30: `VACUUM INTO`
+    // archive, which is the window owner-only creation exists to close.
+    // Measured 2026-08-30: `VACUUM INTO`
     // onto a pre-created zero-length file succeeds and keeps the mode it finds,
     // and the rename below carries that mode to the real name. The handle is
     // closed immediately: what is wanted from it is the inode and its mode, not
