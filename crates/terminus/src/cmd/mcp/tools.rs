@@ -332,13 +332,9 @@ fn run_search(args: &Map<String, Value>) -> Result<Value, Refused> {
         .map(<[String]>::to_vec)
         .unwrap_or(asked_paths);
     let served_paths = paths.len();
-    let kind = optional_string(args, "kind")?;
-    if kind.as_deref() == Some(crate::cmd::search::RETIRED_KIND) {
-        return Err(Refused::caller(crate::cmd::search::RETIRED_KIND_MESSAGE));
-    }
     let filters = Filters {
         tool: optional_string(args, "tool")?,
-        kind,
+        kind: optional_string(args, "kind")?,
         paths,
         since: optional_time(args, "since")?,
         until: optional_time(args, "until")?,

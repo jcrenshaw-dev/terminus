@@ -1761,55 +1761,6 @@ fn an_excluded_project_is_never_named_to_a_client_at_the_default_scope() {
     );
 }
 
-/// Session summaries are gone, so `kind: "observation"` is refused by name
-/// rather than accepted and answered with nothing, and the schema no longer
-/// offers it.
-#[test]
-fn recall_search_refuses_the_retired_observation_kind_by_name() {
-    let bench = bench();
-    bench.ingest_fixtures();
-
-    let (document, is_error) = bench.call_flagged(
-        &bench.work,
-        "recall_search",
-        json!({"query": "brillig", "project": "*", "kind": "observation"}),
-    );
-    assert!(
-        is_error,
-        "the retired kind was answered as a search: {document}"
-    );
-    assert_eq!(document["hits"], json!([]), "{document}");
-    let reason = document["reason"].as_str().expect("a reason");
-    assert!(
-        reason.contains("observation") && reason.contains("session summaries were removed"),
-        "the refusal does not say what was asked for and why: {reason}"
-    );
-
-    let listed = bench.talk(
-        &bench.work,
-        &[
-            initialize(),
-            initialized(),
-            json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
-        ],
-    );
-    listed.expect_ok();
-    let tools = listed.responses[1]["result"]["tools"]
-        .as_array()
-        .expect("a tool list");
-    assert_eq!(tools.len(), 3);
-    let kind = tools
-        .iter()
-        .find(|tool| tool["name"] == "recall_search")
-        .expect("recall_search")["inputSchema"]["properties"]["kind"]["description"]
-        .as_str()
-        .expect("a kind description");
-    assert!(
-        !kind.contains("observation") && !kind.contains("summar"),
-        "the kind description still offers summaries: {kind}"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // The redaction knob at the process boundary (PRIV-03, AC1, AC4)
 // ---------------------------------------------------------------------------

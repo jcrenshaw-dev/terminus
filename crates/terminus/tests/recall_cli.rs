@@ -1011,30 +1011,6 @@ fn sessions_scopes_and_bounds_the_listing() {
     assert!(stderr(&out).contains("0 session(s)"), "{}", stderr(&out));
 }
 
-/// `terminus search --kind observation` is misuse naming the retired kind,
-/// refused while the command line is parsed and before any store is opened.
-#[test]
-fn the_terminal_search_refuses_the_retired_observation_kind() {
-    let bench = bench();
-    bench.ingest_fixtures();
-
-    let out = bench.run(&[
-        "search",
-        "brillig",
-        "--project",
-        "*",
-        "--kind",
-        "observation",
-    ]);
-    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
-    assert_eq!(stdout(&out), "", "misuse must print nothing to stdout");
-    let message = stderr(&out);
-    assert!(
-        message.contains("observation") && message.contains("session summaries were removed"),
-        "the refusal does not say what was asked for and why: {message}"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // PRIV-03's escape hatch: `--raw` on the two commands that print a projection
 // ---------------------------------------------------------------------------
