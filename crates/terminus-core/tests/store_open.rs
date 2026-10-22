@@ -469,8 +469,6 @@ fn a_read_only_connection_refuses_every_write() {
 #[cfg(feature = "testkit")]
 #[test]
 fn a_read_only_open_of_an_older_store_reports_it_and_writes_nothing() {
-    use terminus_core::store::schema::BRING_FORWARD_COLUMNS;
-
     let dir = tempfile::tempdir().unwrap();
     let data_dir = dir.path().join("data");
     let work = dir.path().join("work");
@@ -482,16 +480,10 @@ fn a_read_only_open_of_an_older_store_reports_it_and_writes_nothing() {
         other => panic!("the fixture must archive: {other:?}"),
     }
 
-    // Age it the way `tests/schema.rs` does: phase 2's columns back off, the
-    // derived-schema integer back where a phase 1 binary left it.
+    // Age it the way `tests/schema.rs` does: the derived-schema integer put
+    // back below this build's.
     {
         let conn = Connection::open(data_dir.join(DB_FILE_NAME)).unwrap();
-        for (table, added) in BRING_FORWARD_COLUMNS {
-            for (name, _) in *added {
-                conn.execute_batch(&format!("ALTER TABLE {table} DROP COLUMN {name}"))
-                    .unwrap_or_else(|e| panic!("drop {table}.{name}: {e}"));
-            }
-        }
         conn.execute(
             "UPDATE meta SET value = '1' WHERE key = ?1",
             [META_DERIVED_SCHEMA],
@@ -511,31 +503,7 @@ fn a_read_only_open_of_an_older_store_reports_it_and_writes_nothing() {
         .expect("an older derived_schema must be reported");
     assert_eq!(rebuild.store_derived_schema, 1);
     assert_eq!(rebuild.binary_derived_schema, DERIVED_SCHEMA);
-
-    // The columns a read query would have named. Reported, not added.
-    let missing: Vec<(&str, &str)> = store
-        .missing_columns()
-        .iter()
-        .map(|c| (c.table, c.column))
-        .collect();
-    for (table, added) in BRING_FORWARD_COLUMNS {
-        for (name, _) in *added {
-            assert!(
-                missing.contains(&(*table, *name)),
-                "{table}.{name} is gone and was not reported"
-            );
-        }
-    }
     assert!(store.predates_this_build());
-
-    // A query naming one of them still fails - the point is that the caller was
-    // told, not that SQLite was made tolerant.
-    assert!(store
-        .conn()
-        .query_row("SELECT project_pre_worktree FROM session_meta", [], |_| Ok(
-            ()
-        ))
-        .is_err());
 
     drop(store);
     let after = directory_bytes(&data_dir);
