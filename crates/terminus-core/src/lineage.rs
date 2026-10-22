@@ -4,8 +4,7 @@
 //!
 //! `session_meta.continues_from` holds a **session id** - the value Claude Code
 //! writes in a record's `sessionId` / `session_id` fields - while `sessions` is
-//! keyed on **file identity**, the transcript's path below its project folder
-//! (D-01).
+//! keyed on **file identity**, the transcript's path below its project folder.
 //! The two namespaces are deliberately not the same thing, because 818 real
 //! sidecar files report their parent's `sessionId` and keying the archive on
 //! that would overwrite a parent session's blob with a 3 KB agent transcript.
@@ -15,7 +14,7 @@
 //!
 //! - zero, because a predecessor may have been aged out by Claude Code's
 //!   `cleanupPeriodDays` and never ingested at all - 2 of the 173 real files
-//!   naming a foreign session name one that is not on disk (D-19). The column
+//!   naming a foreign session name one that is not on disk. The column
 //!   carries no foreign key and imposes no ingest order for exactly that
 //!   reason;
 //! - many, because one session id can span several files (a resumed session
@@ -23,14 +22,14 @@
 //!
 //! # Two rules
 //!
-//! **A session never continues from itself (D-01).** Measured over all 1,253
+//! **A session never continues from itself.** Measured over all 1,253
 //! top-level transcripts: 433 carry a `session_id` field, of which 253 carry
 //! only their own id, 169 only another session's and 11 both. Taking the first
 //! `session_id` without comparison makes one in five archived sessions claim to
-//! continue from itself, and every phase 3 and phase 5 thread walk then either
+//! continue from itself, and every thread walk over the lineage then either
 //! cycles or special-cases the self-edge at each read site.
 //!
-//! **Continuation is a fan-out, not a chain (D-02).** One predecessor may be
+//! **Continuation is a fan-out, not a chain.** One predecessor may be
 //! named by several successors - session `ebd78c2b` is named by four separate
 //! later transcripts in one project - so nothing here is allowed to assume a
 //! single successor, and thread reconstruction is a tree walk.
@@ -46,7 +45,7 @@ pub fn own_session_id(scan: &Scan) -> Option<&str> {
     scan.records.iter().find_map(|r| r.session_id.as_deref())
 }
 
-/// Would linking to `candidate` link this session to itself (D-01)?
+/// Would linking to `candidate` link this session to itself?
 pub fn is_self_link(candidate: &str, own: Option<&str>) -> bool {
     own == Some(candidate)
 }
@@ -70,11 +69,10 @@ pub fn foreign_predecessor(scan: &Scan) -> Option<String> {
     })
 }
 
-/// The directory name that marks everything below it as a sidecar (D-03).
+/// The directory name that marks everything below it as a sidecar.
 pub const SIDECAR_DIR: &str = "subagents";
 
-/// The transcript a sidecar ran under, derived from the sidecar's **path**
-/// (D-03).
+/// The transcript a sidecar ran under, derived from the sidecar's **path**.
 ///
 /// A sidecar sits at `<project>/<sessionId>/subagents/agent-*.jsonl`, and 41
 /// real ones sit two levels deeper still under
@@ -92,8 +90,8 @@ pub const SIDECAR_DIR: &str = "subagents";
 /// The returned value is the parent's transcript **path**, not a session id and
 /// not yet a key: `ingest::path_key` turns it into the key the parent is
 /// archived under. It is returned whether or not that transcript has been
-/// ingested, for the same reason `continues_from` carries no foreign key
-/// (D-19). A top-level transcript has no `subagents` ancestor and gets `None`.
+/// ingested, for the same reason `continues_from` carries no foreign key. A
+/// top-level transcript has no `subagents` ancestor and gets `None`.
 pub fn sidecar_parent(transcript: &std::path::Path) -> Option<std::path::PathBuf> {
     let parts: Vec<std::ffi::OsString> = transcript
         .components()

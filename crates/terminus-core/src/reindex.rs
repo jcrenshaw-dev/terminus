@@ -1,4 +1,4 @@
-//! Rebuilding every derived table from the block rows alone (STOR-04).
+//! Rebuilding every derived table from the block rows alone.
 //!
 //! The input is the block rows and nothing else. Every table in
 //! `schema::DERIVED_TABLES` - `turns`, `compactions`, `turns_fts`, `entities`
@@ -10,19 +10,19 @@
 //! `sessions` and `session_meta` are never touched. The archive table never
 //! migrates (`DESIGN-BRIEF.md:94`): a derived-schema change rebuilds derived
 //! tables *only*, and a store in an older archive format is refused at open
-//! (STOR-10) and never reaches a rebuild.
+//! and never reaches a rebuild.
 //!
 //! Turn ids come out identical because they are derived from `sessions.
-//! session_no` and `turn_seq` (D-10), and `sessions` is never dropped. Without
-//! that, AC4's fixed query set would return the same row count while pointing
-//! at different turns.
+//! session_no` and `turn_seq`, and `sessions` is never dropped. Without that,
+//! a fixed query set run across a rebuild would return the same row count
+//! while pointing at different turns.
 //!
-//! # The one case where the blob cannot answer (phase 8 D-03)
+//! # The one case where the blob cannot answer
 //!
 //! "Every table is dropped before a single row is read" is exactly false for a
 //! store holding an EVICTED session, and the exception is deliberate. Retention
-//! empties such a session's blob on purpose (RET-02) while leaving it listed
-//! and searchable, and its derived rows are the only thing left that can answer
+//! empties such a session's blob on purpose while leaving it listed and
+//! searchable, and its derived rows are the only thing left that can answer
 //! either: `turns_fts` is declared `content=''`, so the projected body text is
 //! not readable back out of it, and the record bytes [`crate::index::project`]
 //! built it from are gone. Dropping the table would destroy them with nothing
@@ -37,7 +37,7 @@
 //!
 //! The two paths produce the same rows for every session that has a blob,
 //! because [`crate::derive::derive_turn`] is idempotent by delete-then-insert
-//! at a known rowid (D-10) rather than by anything the empty tables provided.
+//! at a known rowid rather than by anything the empty tables provided.
 //!
 //! **What the preserved count is honestly saying.** Those rows were written by
 //! whatever build ingested that session, so a future change to a derived
@@ -74,7 +74,7 @@ pub struct Rebuilt {
     /// here, so the rebuild carries on and reports.
     pub failed: Vec<(String, String)>,
     /// Evicted sessions whose derived rows were carried across rather than
-    /// rebuilt (phase 8 D-03).
+    /// rebuilt.
     ///
     /// Distinct from [`Rebuilt::failed`], and the distinction is the whole
     /// point: a failure is a session whose blob is damaged and whose index is
@@ -196,7 +196,7 @@ pub fn reindex(store: &mut Store) -> Result<Rebuilt> {
             rebuilt.turns += 1;
         }
         // The boundaries that are not turns, at their offset in the blob's
-        // scan, through the same seam ingest used (D-19, D-20).
+        // scan, through the same seam ingest used.
         for record in &scan.records {
             derive::derive_boundary(&tx, &session_key, record)?;
         }
@@ -222,15 +222,15 @@ pub fn reindex(store: &mut Store) -> Result<Rebuilt> {
 
 /// Every derived row one session owns, deleted, children first.
 ///
-/// The preserving path's stand-in for `DROP TABLE`, scoped to one session
-/// (phase 8 D-03). Children first for the reason the drop order documents: the
-/// bundled SQLite is compiled with `-DSQLITE_DEFAULT_FOREIGN_KEYS=1`, so
-/// `paths` and `entities` really do reference `turns(id)` on every connection,
-/// and deleting the parent first fails with a constraint violation. `turns_fts`
-/// is contentless with `rowid` IS `turns.id`, so it is cleared by the same
+/// The preserving path's stand-in for `DROP TABLE`, scoped to one session.
+/// Children first for the reason the drop order documents: the bundled SQLite
+/// is compiled with `-DSQLITE_DEFAULT_FOREIGN_KEYS=1`, so `paths` and
+/// `entities` really do reference `turns(id)` on every connection, and deleting
+/// the parent first fails with a constraint violation. `turns_fts` is
+/// contentless with `rowid` IS `turns.id`, so it is cleared by the same
 /// subquery rather than by a join it cannot serve. `compactions` is cleared by
 /// `session_key` and never through the turn ids, because its rows are keyed by
-/// position in the stream and need not have a turn behind them (D-20).
+/// position in the stream and need not have a turn behind them.
 ///
 /// The subquery is re-evaluated per statement rather than materialized into a
 /// list: the ids are `turns.id` values this transaction is about to overwrite
@@ -253,13 +253,13 @@ fn clear_derived(tx: &rusqlite::Connection, session_key: &str) -> Result<()> {
 /// Open a store, rebuilding its derived tables first if its derived schema
 /// differs from this build's.
 ///
-/// An older archive format never gets here: [`Store::open`] refuses it
-/// (STOR-10), because there is no conversion and a rebuild would fail every
-/// session. The rebuild lives here and not in [`Store::open`] on
-/// purpose: opening a store is a read, and a read that silently rewrites four
-/// tables is not one. `Store::open` reports the outcome
-/// ([`Store::rebuild_required`]) and this is the caller that acts on it, so
-/// every code path that can decide "no, refuse instead" still has that choice.
+/// An older archive format never gets here: [`Store::open`] refuses it, because
+/// there is no conversion and a rebuild would fail every session. The rebuild
+/// lives here and not in [`Store::open`] on purpose: opening a store is a read,
+/// and a read that silently rewrites four tables is not one. `Store::open`
+/// reports the outcome ([`Store::rebuild_required`]) and this is the caller
+/// that acts on it, so every code path that can decide "no, refuse instead"
+/// still has that choice.
 ///
 /// The store is reopened after the rebuild rather than reused, so the returned
 /// handle reports the versions the store now actually carries.

@@ -1,4 +1,4 @@
-//! Recovery, run at the top of every ingest run (ING-03, D-24).
+//! Recovery, run at the top of every ingest run.
 //!
 //! No repair command, no external supervisor, no stale-lock handling. The last
 //! of those is not an omission: the ingest lock is an OS lock that dies with the
@@ -10,32 +10,32 @@
 //! rows in one shape beside rows written in another.
 //!
 //! **The watermark sweep.** A killed pass can leave a watermark claiming bytes
-//! the committed blob does not hold - that is the state phase 1's crash harness
-//! enumerates and the one STOR-02 says a store must never be left in. The sweep
-//! reconciles it against `session_meta.uncompressed_len` rather than by
-//! decompressing anything, which is what makes it one indexed pass over ~2,000
-//! rows instead of 988 MB of zstd. Cheap enough to run on every entry point,
-//! which is what ING-03's "every run" requires.
+//! the committed blob does not hold - that is the state the crash harness
+//! (`crates/terminus/tests/crash.rs`) enumerates and the one a store must never
+//! be left in. The sweep reconciles it against `session_meta.uncompressed_len`
+//! rather than by decompressing anything, which is what makes it one indexed
+//! pass over ~2,000 rows instead of 988 MB of zstd. Cheap enough to run on
+//! every entry point, which is what recovery does.
 //!
 //! No archived byte is lost here. A watermark is lowered so the next pass
 //! re-reads the gap, and an orphaned watermark is removed because it claims
 //! bytes nothing archived.
 //!
 //! **The sweep's first arm is outside a session that was not captured under
-//! `full`** (ING-07, phase 8 D-05). It compares a FILE offset against a count of
-//! STORED bytes, and that comparison only carries information while the two
-//! coordinate systems coincide - which is exactly what a capture mode's elision
-//! ends. For a `lean` or `minimal` session `byte_offset > uncompressed_len` is
-//! the NORMAL state, so left alone the sweep would "repair" every elided session
-//! on every run, lowering its watermark and making the next pass re-read and
-//! re-append bytes the blob already holds, forever.
+//! `full`**. It compares a FILE offset against a count of STORED bytes, and
+//! that comparison only carries information while the two coordinate systems
+//! coincide - which is exactly what a capture mode's elision ends. For a `lean`
+//! or `minimal` session `byte_offset > uncompressed_len` is the NORMAL state,
+//! so left alone the sweep would "repair" every elided session on every run,
+//! lowering its watermark and making the next pass re-read and re-append bytes
+//! the blob already holds, forever.
 //!
 //! Nothing is lost by standing back. The blob and the watermark commit in one
-//! transaction (STOR-02), so there is no divergence between them for this to
-//! find; the arm was defence in depth against a state the transaction already
-//! prevents. It does mean an elided session has no independent second witness
-//! for its watermark, and there is none available without a second
-//! `session_meta` column that D-13 deliberately did not add.
+//! transaction, so there is no divergence between them for this to find; the
+//! arm was defence in depth against a state the transaction already prevents.
+//! It does mean an elided session has no independent second witness for its
+//! watermark, and there is none available without a second `session_meta`
+//! column, which was deliberately not added.
 //!
 //! The ORPHAN arm is untouched and must stay untouched. It compares nothing
 //! against the stored bytes - a non-zero watermark for a path nothing archived
@@ -101,11 +101,11 @@ impl Recovered {
 /// date, then sweep the watermarks.
 ///
 /// One callable with two callers - the tree pass and single-file
-/// `ingest::run` - because ING-03 says every run and `ingest::run` is a run.
-/// Wiring only the pass would leave `terminus ingest <path.jsonl>` proceeding
-/// against a watermark ahead of what that file's committed blob holds, so
-/// `read_tail` would resume from an offset the archive never reached and the
-/// gap would be lost from the blob in silence.
+/// `ingest::run` - because recovery runs on every run and `ingest::run` is a
+/// run. Wiring only the pass would leave `terminus ingest <path.jsonl>`
+/// proceeding against a watermark ahead of what that file's committed blob
+/// holds, so `read_tail` would resume from an offset the archive never reached
+/// and the gap would be lost from the blob in silence.
 ///
 /// Both callers already hold the ingest lock when they get here, and both call
 /// it before any transcript is read.
@@ -131,9 +131,9 @@ fn sweep_watermarks(store: &mut Store) -> Result<(Vec<LoweredWatermark>, Vec<Rem
     // whole question, and reading it keeps the sweep an indexed join over two
     // primary keys.
     //
-    // Restricted to sessions captured under `full` (ING-07, phase 8 D-05) - see
-    // the module comment. Null is `full`: it is what every row written before
-    // the column existed means.
+    // Restricted to sessions captured under `full` - see the module comment.
+    // Null is `full`: it is what every row written before the column existed
+    // means.
     let lowered: Vec<LoweredWatermark> = tx
         .prepare(
             "SELECT w.transcript_path, w.byte_offset, m.uncompressed_len
@@ -157,9 +157,9 @@ fn sweep_watermarks(store: &mut Store) -> Result<(Vec<LoweredWatermark>, Vec<Rem
     // with no complete record yet, and removing it would be churn, not repair.
     //
     // A session row present WITHOUT its `session_meta` row is deliberately not
-    // in either query. That is the damaged state phase 1 refuses to guess at
-    // and `verify` reports; touching its watermark here would be exactly the
-    // guess D-12 forbids.
+    // in either query. That is the damaged state ingest refuses to append to
+    // and `verify` reports; touching its watermark here would be a guess at a
+    // session nothing can check.
     let removed: Vec<RemovedWatermark> = tx
         .prepare(
             "SELECT w.transcript_path, w.byte_offset
