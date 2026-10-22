@@ -31,7 +31,6 @@
     "create_tag": true,
     "on_land_cleanup": true,
     "issue_check": true,
-    "auto_close": false,
     "forge_provider": "github",
     "forge_repo": "jcrenshaw-dev/terminus",
     "forge_host": null
@@ -44,17 +43,10 @@
   },
   "review": {
     "mode": "adjudicated",
-    "reviewers": [
-      "claude-subagent"
-    ],
     "key_file": null,
     "providers": {
       "openai": {
-        "tiers": {
-          "flagship": null,
-          "balanced": null,
-          "cheap": null
-        }
+        "tiers": {}
       },
       "gemini": {
         "tiers": {
