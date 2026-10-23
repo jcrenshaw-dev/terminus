@@ -42,6 +42,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
+use rusqlite::types::Value;
 use rusqlite::Connection;
 use terminus_core::ingest::{self, fault, Attempt};
 use terminus_core::store::DB_FILE_NAME;
@@ -668,4 +669,131 @@ fn counts(data_dir: &Path) -> (i64, i64) {
         conn.query_row("SELECT count(*) FROM turns", [], |r| r.get(0))
             .unwrap(),
     )
+}
+
+/// A backfill's `runs` row is the one a tree pass writes (#31).
+///
+/// One store, with one session's watermark pushed past what its archive holds,
+/// copied so each run starts from the same damage: a tree pass on one copy and
+/// `backfill --work`, the process `terminus backfill` detaches, on the other.
+/// Both rows fill the same columns, and both keep recovery's repair in
+/// `notes` with `error` null (#96).
+#[test]
+fn a_backfill_leaves_the_same_runs_row_a_tree_pass_does() {
+    let dirs = Dirs::new();
+    let project = dirs.claude.join("projects").join("-tmp-backfill-row");
+    let damaged = place(
+        &project,
+        "55555555-5555-4555-8555-555555555555.jsonl",
+        "session-basic.jsonl",
+    );
+    place(
+        &project,
+        "66666666-6666-4666-8666-666666666666.jsonl",
+        "session-continuation.jsonl",
+    );
+
+    let tree = dirs.root.join("tree");
+    let out = dirs.command_in(&tree, &["ingest"]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "the first ingest failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let key = ingest::path_key(&damaged.canonicalize().unwrap()).unwrap();
+    let conn = Connection::open(tree.join(DB_FILE_NAME)).unwrap();
+    let committed: i64 = conn
+        .query_row(
+            "SELECT uncompressed_len FROM session_meta WHERE session_key = ?1",
+            [&key],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let changed = conn
+        .execute(
+            "UPDATE watermarks SET byte_offset = ?2 WHERE transcript_path = ?1",
+            rusqlite::params![key, committed + 4096],
+        )
+        .unwrap();
+    assert_eq!(changed, 1, "the session has no watermark to push");
+    drop(conn);
+
+    let backfill = dirs.root.join("backfill");
+    std::fs::create_dir_all(&backfill).unwrap();
+    for suffix in ["", "-wal", "-shm"] {
+        let name = format!("{DB_FILE_NAME}{suffix}");
+        if tree.join(&name).exists() {
+            std::fs::copy(tree.join(&name), backfill.join(&name)).unwrap();
+        }
+    }
+
+    let out = dirs.command_in(&tree, &["ingest"]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "the tree pass failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    work_fully(&dirs, &backfill);
+
+    let tree_row = newest_run(&tree);
+    let backfill_row = newest_run(&backfill);
+    assert_eq!(
+        non_null(&tree_row),
+        non_null(&backfill_row),
+        "the two rows fill different columns:\n{tree_row:?}\n{backfill_row:?}"
+    );
+    for (label, row) in [("tree pass", &tree_row), ("backfill", &backfill_row)] {
+        assert_eq!(
+            column(row, "error"),
+            &Value::Null,
+            "the {label} filed an error: {row:?}"
+        );
+        let Value::Text(notes) = column(row, "notes") else {
+            panic!("the {label}'s row has no notes: {row:?}");
+        };
+        assert!(
+            notes
+                .lines()
+                .any(|line| line.starts_with(&format!("{key}: ")) && line.ends_with("lowered")),
+            "the {label}'s notes do not hold recovery's line: {notes}"
+        );
+    }
+}
+
+/// Every column of the newest `runs` row in one store, by name.
+fn newest_run(data_dir: &Path) -> Vec<(String, Value)> {
+    let conn = Connection::open(data_dir.join(DB_FILE_NAME)).unwrap();
+    let mut statement = conn
+        .prepare("SELECT * FROM runs ORDER BY id DESC LIMIT 1")
+        .unwrap();
+    let names: Vec<String> = statement
+        .column_names()
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    let row = statement
+        .query_row([], |r| {
+            names
+                .iter()
+                .enumerate()
+                .map(|(i, name)| Ok((name.clone(), r.get::<_, Value>(i)?)))
+                .collect::<rusqlite::Result<Vec<_>>>()
+        })
+        .unwrap();
+    row
+}
+
+fn non_null(row: &[(String, Value)]) -> Vec<&str> {
+    row.iter()
+        .filter(|(_, value)| *value != Value::Null)
+        .map(|(name, _)| name.as_str())
+        .collect()
+}
+
+fn column<'a>(row: &'a [(String, Value)], name: &str) -> &'a Value {
+    &row.iter()
+        .find(|(column, _)| column == name)
+        .unwrap_or_else(|| panic!("runs has no {name} column"))
+        .1
 }
