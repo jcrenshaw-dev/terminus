@@ -193,57 +193,6 @@ pub fn date_value(parser: &mut lexopt::Parser, flag: &'static str) -> Result<Str
         .map_err(|error| Failure::Misuse(format!("--{error}")))
 }
 
-/// One end of a time window, as a string that compares against a stored
-/// timestamp directly.
-///
-/// All 22,412 turns of a 180-file sample carry exactly
-/// `NNNN-NN-NNTNN:NN:NN.NNNZ` - one format, UTC only - so the comparison is
-/// lexicographic and there is no date parsing on the stored side. A bare
-/// `YYYY-MM-DD` extends to the first instant of that day for `since` and the
-/// last for `until`, which is what makes a one-day window include its own day;
-/// extending both to midnight would make `--since D --until D` return only the
-/// turn at exactly 00:00:00.000 and look like an empty day.
-///
-/// Anything else is misuse rather than an empty result. Every string orders
-/// against every other, so a malformed bound would compare cleanly and return a
-/// plausible wrong answer that nothing reports.
-///
-/// This runs in the CLI, ahead of the query layer, on purpose:
-/// `recall::search::run` resolves the scope before it validates its filters, so
-/// a bad bound typed in a directory no archived project covers would otherwise
-/// be answered with the scope's reason and exit 0. `recall::search` keeps its
-/// own copy of the rule for library callers.
-pub fn time_bound(flag: &str, raw: &str) -> Result<String, Failure> {
-    const FULL: &str = "NNNN-NN-NNTNN:NN:NN.NNNZ";
-    const DATE: &str = "NNNN-NN-NN";
-
-    let shaped = |shape: &str| {
-        raw.len() == shape.len()
-            && raw
-                .bytes()
-                .zip(shape.bytes())
-                .all(|(byte, expected)| match expected {
-                    b'N' => byte.is_ascii_digit(),
-                    other => byte == other,
-                })
-    };
-
-    if shaped(FULL) {
-        return Ok(raw.to_owned());
-    }
-    if shaped(DATE) {
-        let tail = if flag == "until" {
-            "T23:59:59.999Z"
-        } else {
-            "T00:00:00.000Z"
-        };
-        return Ok(format!("{raw}{tail}"));
-    }
-    Err(Failure::Misuse(format!(
-        "--{flag} {raw:?} is not a time; expected YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS.mmmZ"
-    )))
-}
-
 /// Parse the rest of the command line for a subcommand whose only argument is
 /// `--json`, rejecting anything else.
 ///

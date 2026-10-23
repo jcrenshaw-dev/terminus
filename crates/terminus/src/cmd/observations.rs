@@ -345,7 +345,8 @@ pub struct List {
 /// `terminus observations regenerate`: the rebuild.
 #[derive(Debug, Default)]
 pub struct Regenerate {
-    /// A `cmd::time_bound` bound against `session_meta.last_turn_at`.
+    /// A bound against `session_meta.last_turn_at`, already through
+    /// terminus-core's date check, `recall::checked_bound`.
     pub since: Option<String>,
     pub json: bool,
 }
@@ -408,13 +409,11 @@ fn regenerate_args(parser: &mut lexopt::Parser) -> Result<Regenerate, Failure> {
     let mut args = Regenerate::default();
     while let Some(arg) = parser.next().map_err(|e| Failure::Misuse(e.to_string()))? {
         match arg {
-            // `cmd::time_bound`, which is where every other command's date bound
-            // is validated: a malformed bound orders cleanly against every
-            // stored timestamp, so left unvalidated it would rebuild a plausible
-            // wrong set and report success.
-            Long("since") => {
-                args.since = Some(super::time_bound("since", &super::value(parser, "since")?)?)
-            }
+            // Through terminus-core's date check, the one every other date
+            // bound goes through: a malformed or impossible bound orders cleanly
+            // against every stored timestamp, so left unchecked it would rebuild
+            // a plausible wrong set and report success.
+            Long("since") => args.since = Some(super::date_value(parser, "since")?),
             Long(super::JSON_FLAG) => args.json = true,
             other => return Err(Failure::Misuse(crate::unexpected(other))),
         }

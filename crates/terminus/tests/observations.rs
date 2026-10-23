@@ -538,13 +538,37 @@ fn a_malformed_since_is_misuse_and_rebuilds_nothing() {
     bench.ingest_the_finalized_session();
     bench.spoil(SESSION);
 
-    let out = bench.run(&["observations", "regenerate", "--since", "last tuesday"]);
+    // The second is well shaped and no day anyone lived through (#24).
+    for since in ["last tuesday", "2026-02-30"] {
+        let out = bench.run(&["observations", "regenerate", "--since", since]);
+        assert_eq!(out.status.code(), Some(2), "{since}: {}", stderr(&out));
+        assert_eq!(stdout(&out), "", "{since}");
+        assert!(
+            stderr(&out).contains("--since"),
+            "{since}: {}",
+            stderr(&out)
+        );
+        assert_eq!(
+            bench.stored(SESSION),
+            SPOILED,
+            "a refused bound {since:?} still wrote"
+        );
+    }
+}
+
+/// #24: an impossible `--since` is misuse with no store as well, because the
+/// bound is checked while the arguments are read.
+#[test]
+fn an_impossible_since_is_misuse_with_no_store() {
+    let bench = bench();
+
+    let out = bench.run(&["observations", "regenerate", "--since", "2026-02-30"]);
     assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
     assert_eq!(stdout(&out), "");
-    assert_eq!(
-        bench.stored(SESSION),
-        SPOILED,
-        "a refused bound still wrote"
+    assert!(stderr(&out).contains("--since"), "{}", stderr(&out));
+    assert!(
+        !bench.data_dir.exists(),
+        "a refused command created the data directory"
     );
 }
 
