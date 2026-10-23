@@ -30,6 +30,7 @@ use std::sync::{Arc, PoisonError, RwLock, mpsc};
 use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, OpenFlags};
+use terminus_core::ingest::fault;
 use terminus_core::store::DB_FILE_NAME;
 use terminus_core::testkit;
 
@@ -645,13 +646,34 @@ fn read_for(mut pipe: impl Read + Send + 'static, wait: Duration) -> String {
 /// the hook exits. A child holding the inherited write end of that pipe would
 /// keep the read blocked for the whole pass instead - which on a backfill is
 /// minutes of a harness waiting on a hook that already returned.
+///
+/// The ingest is held at the testkit fault point `fault::AFTER_BLOB`, which it
+/// reaches because the hook's spawn passes its environment on unchanged. The
+/// hold is what makes the read an answer rather than a race: a fast pass can
+/// end before any look at the process table, but a held one cannot. Two facts
+/// prove the read returned while the pass was running - the fault point's
+/// ready file appears, so the pass did reach the hold, and no `runs` row
+/// existed when the read returned, so the pass had not ended. A pass writes
+/// its `runs` row only after the walk, so the hold keeps it out.
 #[test]
 fn reading_the_hooks_stdout_to_eof_returns_at_once_while_the_ingest_still_runs() {
+    // How long the ingest gets to reach the hold, as in `crash.rs`.
+    const ARRIVAL_TIMEOUT: Duration = Duration::from_secs(20);
+
     let hook = hook();
-    hook.big_transcript("-p", "22222222-2222-4222-8222-222222222222.jsonl", BIG);
+    // One repeat: the hold keeps the pass running, so the transcript only
+    // needs one file with work in it to reach the fault point.
+    hook.big_transcript("-p", "22222222-2222-4222-8222-222222222222.jsonl", 1);
+    // `fault::stall` drops a failed write, so a ready file whose directory
+    // does not exist would never appear, and the test would blame the fault
+    // points for a missing directory.
+    std::fs::create_dir_all(&hook.data_dir).unwrap();
+    let ready = hook.data_dir.join("fault-ready");
 
     let mut child = spawn(
         hook.command(&["hook", "SessionStart"])
+            .env(fault::AT, fault::AFTER_BLOB)
+            .env(fault::READY, &ready)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped()),
     )
@@ -672,10 +694,11 @@ fn reading_the_hooks_stdout_to_eof_returns_at_once_while_the_ingest_still_runs()
         .read_to_end(&mut stdout)
         .expect("read the hook's stdout to EOF");
     let elapsed = started.elapsed();
+    // Sampled the moment the read returns: a pass only ever adds its row, so
+    // none now means none when the read returned.
+    let runs_at_eof = runs(&hook);
 
     assert!(stdout.is_empty(), "the hook wrote {stdout:?} to stdout");
-    // The pass this hook started runs for roughly 700 ms, so anything near it
-    // means the read was waiting on the ingest and not on the hook.
     assert!(
         elapsed < Duration::from_millis(250),
         "reading the hook's stdout to EOF took {elapsed:?}: the ingest is \
@@ -683,9 +706,43 @@ fn reading_the_hooks_stdout_to_eof_returns_at_once_while_the_ingest_still_runs()
     );
     assert!(child.wait().expect("wait for the hook").success());
 
-    // And it returned *while* the pass was running, which is what makes the
-    // reading above an answer rather than a coincidence.
-    await_process(&hook.ingest_argv());
+    // The pass reached the hold. Only the ready file is polled for, and there
+    // is no fallback: a build whose fault points are inert fails here.
+    let deadline = Instant::now() + ARRIVAL_TIMEOUT;
+    while !ready.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "the ingest never reached `{}` within {ARRIVAL_TIMEOUT:?}, and {} \
+             `runs` row(s) exist now: the fault points are inert unless \
+             terminus-core is built with its `testkit` feature",
+            fault::AFTER_BLOB,
+            runs(&hook)
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    // Checked after the arrival wait, so an inert build always fails above
+    // with the testkit message, however fast its pass is.
+    assert_eq!(
+        runs_at_eof, 0,
+        "the pass had already recorded its `runs` row when the read returned, \
+         so the read proves nothing about a running pass"
+    );
+
+    // End the hold. The ingest is alive for the whole stall, so this is one
+    // lookup of a process known to be running, not a wait for one to appear.
+    let held: Vec<Proc> = ps()
+        .into_iter()
+        .filter(|p| p.argv == hook.ingest_argv())
+        .collect();
+    assert_eq!(
+        held.len(),
+        1,
+        "expected the one held ingest running {:?}, found {}: {held:?}",
+        hook.ingest_argv(),
+        held.len()
+    );
+    sigkill(held[0].pid as i32);
     drain(&hook.ingest_argv());
 }
 
@@ -712,6 +769,21 @@ fn committed(hook: &Hook) -> usize {
     })
     .map(|n| n as usize)
     .unwrap_or(0)
+}
+
+/// Passes recorded so far, read the way [`committed`] reads sessions: a store
+/// that is missing, will not open read-only or will not answer counts as none.
+fn runs(hook: &Hook) -> usize {
+    let db = hook.data_dir.join(DB_FILE_NAME);
+    if !db.is_file() {
+        return 0;
+    }
+    let Ok(conn) = Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
+        return 0;
+    };
+    conn.query_row("SELECT count(*) FROM runs", [], |row| row.get::<_, i64>(0))
+        .map(|n| n as usize)
+        .unwrap_or(0)
 }
 
 /// Every pid below `root`, breadth first, the way Claude Code 2.1.231 builds
