@@ -4,8 +4,8 @@ The sentinel audit reads this file before every review of Terminus. Everything h
 
 Paths below are relative to the repo root. `core/` is `crates/terminus-core/src/` and `bin/` is `crates/terminus/src/`.
 
-Version or commit this describes: `5933b3b`
-Last reviewed: 2026-10-20
+Version or commit this describes: `c76084b`
+Last reviewed: 2026-10-23
 
 ## What this tool reads
 
@@ -64,7 +64,7 @@ Last reviewed: 2026-10-20
 
 ## What it writes
 
-**File modes.** Files in the data directory are created through `core/owner_only.rs`: directories 0700 and files 0600, passed in the creating syscall. Nothing calls `umask()`, so the result can be narrower but never wider. Parent directories are made with `create_dir_all` at the default mode, and only the leaf gets 0700. Every writable open of the store (`Store::open` in `core/store/open.rs`) tightens the data directory, `terminus.db`, `-wal`, `-shm`, `LOCK`, `snapshots/`, `injection/` and `decisions/` and the regular files one level inside them. It skips anything that is not the expected type and ignores failures. Read-only opens tighten nothing. `Store::open` checks no owner, so a store reached through `TERMINUS_DATA_DIR`, or through a pointer an older build wrote, that names another account's directory is opened as found.
+**File modes.** Files in the data directory are created through `core/owner_only.rs`: directories 0700 and files 0600, passed in the creating syscall. Nothing calls `umask()`, so the result can be narrower but never wider. Parent directories are made with `create_dir_all` at the default mode, and only the leaf gets 0700. Every writable open of the store (`Store::open` in `core/store/open.rs`) tightens the data directory, `terminus.db`, `-wal`, `-shm`, `LOCK`, `snapshots/`, `injection/` and `decisions/` and the regular files one level inside them. It skips anything that is not the expected type and ignores failures. Read-only opens tighten nothing. `Store::open` checks no owner, so a store reached through `TERMINUS_DATA_DIR` or the `data-location` pointer that names another account's directory is opened as found.
 
 **Inside the data directory.**
 
@@ -293,7 +293,7 @@ A same-user process that can already write `~/.claude/projects` or the data dire
 
 **10. What Terminus trusts because it wrote it.**
 
-- **The SQLite store.** Reads check no hashes; `core/store/archive.rs` says so, and only `verify` and the append path check them. Block sizes are bounded to 1 byte through 64 MiB, ranges are checked, and decompressed length must match. Terminus sets no `trusted_schema=OFF` and no `SQLITE_DBCONFIG_DEFENSIVE`, and runs no `integrity_check` on open. `project`, `branch`, `ts`, entities, compaction metadata and `continues_from` are used as stored.
+- **The SQLite store.** Reads check no hashes; `core/store/archive.rs` says so, and only `verify` and the append path check them. Block sizes are bounded to 1 byte through 64 MiB, ranges are checked, and decompressed length must match. Terminus sets no `trusted_schema=OFF` and no `SQLITE_DBCONFIG_DEFENSIVE`, and runs no `integrity_check` on open. `project`, `branch`, `ts`, entities, compaction metadata and `continues_from` are used as stored. A writable open creates any table this build declares that the store lacks, inside one immediate transaction, and adds no column (`bring_forward` in `core/store/open.rs`). A read-only open changes nothing: a read that names a column the store lacks fails with SQLite's own message, and `stats` and `replay` report a store missing `decisions` or `labels` as damaged rather than empty.
 - **The ingest watermark** is trusted as the place to resume. For a diverged session, or one whose stored file is gone, `vec![0u8; watermark]` makes an allocation of a size taken from the database.
 - **The rows a pass reads at its start.** Every session's `sessions`, `session_meta` and `watermarks` row is read in one query after recovery and used for the whole walk or backfill without being read again (`read_rows` in `core/ingest/mod.rs`). `session_meta.transcript_path` in it decides which file holds a key.
 - **State files.** Injection state files are read whole with `fs::read`, which follows symlinks, and must have `format == 1`. Decision files are read only when they are regular `.json` files, with no size limit.
@@ -326,7 +326,7 @@ A same-user process that can already write `~/.claude/projects` or the data dire
 - **What it matches** (`core/observe/egress.rs`):
   - PEM blocks whose label contains `PRIVATE KEY`.
   - `user:password` in URLs.
-  - `name: value` lines, JSON `"name": "value"` pairs, `NAME=value`, and `--name value` flags, where the name contains `token`, `password`, `passwd`, `secret`, `key`, `api`, `bearer`, `cookie` or `authorization`.
+  - `name: value` lines, JSON `"name": "value"` pairs, `NAME=value`, and `--name value` flags, where the name contains `token`, `password`, `passwd`, `secret`, `key`, `api`, `bearer`, `cookie` or `authorization`. In a `name: value` line the value is one unquoted run or one quoted string, a colon inside it included, and an auth scheme word such as `Bearer` before it goes too. A secret-named header that opens inside a value already taken loses its own value as well, so `key: Authorization: Bearer <value>` goes whole.
   - JWTs starting with `eyJ`.
   - GitHub tokens with the prefixes `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_` and `github_pat_`.
   - Bare `sk-` keys: a run of ASCII letters, digits, `-` and `_` that opens with `sk-` and has 20 or more characters after it.
@@ -339,4 +339,4 @@ A same-user process that can already write `~/.claude/projects` or the data dire
 
 **Secrets Terminus itself holds:** none. It reads no API key and refuses a `[provider]` table. The release signing key, `~/.ssh/crenshawdev-release`, is mode 0600 on the maintainer's machine and is used only by `scripts/sign-release.sh`, never by the binary or by CI. Whether that key has a passphrase [VERIFY]. `sign-release.sh` keeps no copy of the public key or the version check: it reads `install.sh`'s `release_key=` line, and runs `install.sh`'s `valid_version() (` block through `eval`, so whatever that block holds runs on the maintainer's machine each time a release is signed. Before it signs, it runs `gh attestation verify` on each binary and refuses one that `release.yml` did not attest for that tag on a GitHub-hosted runner, so a binary swapped into the draft is never signed.
 
-**CI:** the `ANTHROPIC_API_KEY` Actions secret, read only by the `security-review` job in `.github/workflows/fast.yml` on GitHub pull requests that Dependabot did not open. That job checks out the pull request's head, the `.sentinel` submodule included, and runs `.sentinel/ci/security-review.sh` with the secret in its environment and a token that can write pull request comments. GitHub does not pass the secret to workflows run from a fork. `test.yml` reads no secret. `release.yml`'s build jobs hold `id-token: write` and `attestations: write` to attest their binaries, and its draft job holds `contents: write` to create the draft; none of them reads a secret.
+**CI:** the `ANTHROPIC_API_KEY` Actions secret, read only by the `security-review` job in `.github/workflows/fast.yml`, on GitHub pull requests opened from this repository by anyone but Dependabot. The job's `if:` skips a pull request from a fork, which GitHub would give no secret anyway. That job checks out the pull request's head, the `.sentinel` submodule included, and runs `.sentinel/ci/security-review.sh` with the secret in its environment and a token that can write pull request comments. The same workflow's `mechanical` job runs on every pull request, every push to `main` and once a week, with no secret. `test.yml` runs on every pull request and every push to `main` and reads no secret. `release.yml` runs on a version tag. Its `audited` job runs `.sentinel/stamp-age.sh` and fails the release when any file changed since the commit `SENTINEL.md` names, or when there is no `SENTINEL.md`; its build jobs wait on it and hold `id-token: write` and `attestations: write` to attest their binaries, and its draft job holds `contents: write` to create the draft. None of them reads a secret. `.github/dependabot.yml` has Dependabot open weekly pull requests for the action pins, the `.sentinel` pin and cargo updates, patches grouped and every other bump on its own, each after a seven-day cooldown.
