@@ -1,5 +1,5 @@
-//! AC1 at the process boundary: `terminus observations` lists what a finalized
-//! session did, with no model and no network on any path (OBS-01).
+//! `terminus observations` at the process boundary: it lists what a finalized
+//! session did, with no model and no network on any path.
 //!
 //! Spawns rather than library calls. `terminus-core`'s `tests/observe.rs`
 //! asserts what the facts ARE; what is asserted here is that a real binary,
@@ -23,8 +23,8 @@ use terminus_core::store::DB_FILE_NAME;
 const SESSION: &str = "11111111-1111-4111-8111-111111111111";
 const BRANCH: &str = "phase-7";
 
-/// The command whose arguments are the whole of D-04: `entities` holds `cargo`,
-/// so a listing carrying this string can only have come off the blob.
+/// A command with its arguments: `entities` holds `cargo`, so a listing
+/// carrying this whole string can only have come off the blob.
 const COMMAND: &str = "cargo test -p terminus-core --features testkit";
 
 /// The commit subject, which `parse::Record` has no field for at all.
@@ -198,8 +198,9 @@ impl Bench {
             .into_owned()
     }
 
-    /// One session carrying every OBS-01 fact: an edit, two tools, a command
-    /// with arguments, a failure, a branch, a commit, six turns and a duration.
+    /// One session carrying every fact an observation records: an edit, two
+    /// tools, a command with arguments, a failure, a branch, a commit, six
+    /// turns and a duration.
     fn transcript(&self, session: &str, first_seconds_ago: i64, words: &Words) -> String {
         let cwd = self
             .root
@@ -337,7 +338,7 @@ fn strings(value: &Value) -> Vec<String> {
         .collect()
 }
 
-/// AC1: every fact the requirement names, through the envelope, exit 0.
+/// Every fact an observation records, through the envelope, exit 0.
 #[test]
 fn a_finalized_session_is_listed_with_every_obs_01_fact() {
     let bench = bench();
@@ -449,7 +450,7 @@ fn an_empty_data_directory_is_a_reason_and_creates_nothing() {
     );
 }
 
-/// AC7: `--since` rebuilds the rows after the bound and leaves every earlier
+/// `--since` rebuilds the rows after the bound and leaves every earlier
 /// row byte for byte what it was.
 ///
 /// Both rows are spoiled first, so "the earlier row still holds the hand-edited
@@ -491,8 +492,8 @@ fn regenerate_rebuilds_the_selected_rows_and_leaves_the_rest_untouched() {
     );
 }
 
-/// D-18's misuse arm: an unknown flag and an unknown second word both exit 2
-/// with nothing on stdout.
+/// The two-word command's misuse arm: an unknown flag and an unknown second
+/// word both exit 2 with nothing on stdout.
 ///
 /// The second word matters more than the flag. `dispatch` matches single-word
 /// names, so a `observations` that did not consume its own second word would
@@ -572,7 +573,7 @@ fn archived_control_characters_print_escaped_in_the_listing() {
     );
     bench.ingest();
 
-    // `--json` still carries the raw characters (D-06).
+    // `--json` still carries the raw characters.
     let value = document(&bench.run(&["observations", "--project", "*", "--json"]));
     let facts = &value["data"]["observations"][0]["mechanical"];
     assert!(

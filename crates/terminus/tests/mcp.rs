@@ -1,11 +1,11 @@
-//! `terminus mcp` at the process boundary (RCL-07 .. RCL-11).
+//! `terminus mcp` at the process boundary.
 //!
 //! Every test here spawns the built binary and talks JSON-RPC to it over pipes.
 //! That is not ceremony: the claims are about a *process* - that it answers a
 //! handshake, that it scopes to the directory it was started in, that it holds
 //! no socket, that it exits 0 when its stdin closes - and none of them is
 //! observable from inside a library call. The default project scope is the
-//! process's own working directory (D-12), and `std::env::set_current_dir` is
+//! process's own working directory, and `std::env::set_current_dir` is
 //! process-global in a test binary that runs its tests in parallel, so a child
 //! with a chosen `current_dir` is the only way to assert on it at all.
 //!
@@ -162,7 +162,7 @@ impl Bench {
 
     /// Write every message, close stdin, and read back what the server said.
     ///
-    /// Closing stdin is the client's own shutdown (D-27), so every conversation
+    /// Closing stdin is the client's own shutdown, so every conversation
     /// here also exercises the lifecycle: a server that needed a signal to stop
     /// would hang this helper rather than fail an assertion elsewhere.
     fn talk(&self, dir: &Path, messages: &[Value]) -> Conversation {
@@ -328,10 +328,10 @@ fn projects(hits: &[Value]) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
-// The handshake (RCL-11, AC7)
+// The handshake
 // ---------------------------------------------------------------------------
 
-/// AC7's first half: `initialize` and `tools/list` are answered, exactly three
+/// The handshake: `initialize` and `tools/list` are answered, exactly three
 /// tools come back, each marked `readOnlyHint`, and the process exits 0 when
 /// stdin closes.
 ///
@@ -561,7 +561,7 @@ fn mcp_rejects_an_argument_rather_than_ignoring_it() {
 }
 
 // ---------------------------------------------------------------------------
-// recall_search (RCL-07, AC5)
+// recall_search
 // ---------------------------------------------------------------------------
 
 /// The headline call, auto-scoped: a search for a path, made by a server started
@@ -569,7 +569,7 @@ fn mcp_rejects_an_argument_rather_than_ignoring_it() {
 ///
 /// The scope is not an argument here - it is the process's working directory,
 /// which is what Claude Code sets to the session's own project. A raw
-/// `MATCH 'src/worker/S.ts'` is `fts5: syntax error near "/"` (D-09), so the
+/// `MATCH 'src/worker/S.ts'` is `fts5: syntax error near "/"`, so the
 /// path form is also the query shape that would fail without the tokenizer.
 #[test]
 fn recall_search_is_scoped_to_the_directory_the_server_was_started_in() {
@@ -605,7 +605,7 @@ fn recall_search_is_scoped_to_the_directory_the_server_was_started_in() {
             hit["excerpt"]
                 .as_str()
                 .is_some_and(|e| e.contains("src/worker/S.ts")),
-            "the excerpt must show what matched (D-05): {hit}"
+            "the excerpt does not show what matched: {hit}"
         );
     }
 
@@ -649,8 +649,8 @@ fn the_star_project_reaches_more_than_one_project() {
     );
 }
 
-/// AC5's exclusion half through the server: with a project excluded, neither the
-/// scoped call nor the `*` call returns any of its turns.
+/// Exclusion through the server: with a project excluded, neither the scoped
+/// call nor the `*` call returns any of its turns.
 ///
 /// Archived first and excluded second, which is the case a flag written at
 /// ingest could never answer: exclusion is a read-path predicate re-applied on
@@ -691,8 +691,8 @@ fn an_excluded_projects_turns_are_absent_from_recall_search() {
     );
 }
 
-/// The filters RCL-07 names reach the query layer, and the limit is the
-/// server's to lower.
+/// The filters `recall_search` takes reach the query layer, and the limit is
+/// the server's to lower.
 #[test]
 fn the_search_filters_and_the_result_budget_reach_the_query_layer() {
     let bench = bench();
@@ -727,7 +727,7 @@ fn the_search_filters_and_the_result_budget_reach_the_query_layer() {
 }
 
 // ---------------------------------------------------------------------------
-// recall_context (RCL-08, AC6)
+// recall_context
 // ---------------------------------------------------------------------------
 
 /// The turns of a window, as `(turn_seq, is_anchor)` pairs.
@@ -808,7 +808,7 @@ fn recall_context_returns_the_turns_around_a_hit_in_turn_seq_order() {
 }
 
 /// The first turn of a session that continues from another: nothing before it,
-/// the start boundary reported, and the link handed back unfollowed (D-06).
+/// the start boundary reported, and the link handed back unfollowed.
 ///
 /// All three together are the decision. A window that silently returned the
 /// previous file's turns would be a lineage walk, and continuation is a fan-out
@@ -896,7 +896,7 @@ fn a_window_larger_than_the_budget_returns_the_budgets_worth() {
 }
 
 // ---------------------------------------------------------------------------
-// recall_get (RCL-09, AC6)
+// recall_get
 // ---------------------------------------------------------------------------
 
 /// The `records` of a `recall_get` document.
@@ -994,11 +994,11 @@ fn recall_get_returns_the_archived_lines_of_two_sessions() {
     }
 }
 
-/// D-08 through the server: a turn whose session is evicted comes back flagged,
-/// with no body, and the call still succeeds.
+/// Eviction through the server: a turn whose session is evicted comes back
+/// flagged, with no body, and the call still succeeds.
 ///
-/// Retention is phase 8 and nothing writes that column before then, so the test
-/// sets it directly - which is also the point. The flag is read off the column
+/// The test sets `session_meta.is_evicted` directly, so the flag comes off the
+/// column alone - which is also the point. The flag is read off the column
 /// and never off a failed blob read, so this stays distinguishable from the
 /// archive damage `terminus verify` reports.
 #[test]
@@ -1206,7 +1206,7 @@ fn repeated_ids_are_removed_before_the_cap() {
 }
 
 // ---------------------------------------------------------------------------
-// Bounds and malformed requests (RCL-10, AC6)
+// Bounds and malformed requests
 // ---------------------------------------------------------------------------
 
 /// This tool's empty document, whatever went wrong: the same keys a successful
@@ -1230,10 +1230,10 @@ fn assert_empty_shape(tool: &str, document: &Value) {
 /// successful JSON-RPC response whose content is an empty result carrying a
 /// reason, marked `isError`, and never a panic.
 ///
-/// RCL-10 wants the empty-result-with-reason contract because a throw is what
-/// the client surfaces to the user as a broken server: the model can read a
-/// reason and call again, and it cannot read a JSON-RPC error the same way. The
-/// `isError` flag is what still tells the two apart from an ordinary empty
+/// The server keeps the empty-result-with-reason contract because a throw is
+/// what the client surfaces to the user as a broken server: the model can read
+/// a reason and call again, and it cannot read a JSON-RPC error the same way.
+/// The `isError` flag is what still tells the two apart from an ordinary empty
 /// answer.
 #[test]
 fn a_malformed_call_is_an_empty_result_with_a_reason_and_never_a_throw() {
@@ -1268,7 +1268,7 @@ fn a_malformed_call_is_an_empty_result_with_a_reason_and_never_a_throw() {
         ("recall_search", json!({"query": "cargo", "limit": 0})),
         ("recall_context", json!({"turn_id": 1, "before": -1})),
         // A date nothing can parse. `2026-13-99` is deliberately NOT in this
-        // list: D-23 pins a bound to a shape rather than to a calendar - every
+        // list: a bound is pinned to a shape rather than to a calendar - every
         // stored timestamp is `NNNN-NN-NNTNN:NN:NN.NNNZ` and the comparison is
         // lexicographic with no date parsing on the stored side - so a shaped
         // impossibility is a bound that compares cleanly, and only an unshaped
@@ -1386,7 +1386,7 @@ fn the_server_answers_the_next_request_after_a_malformed_one() {
 /// back bounded and says the budget was applied.
 ///
 /// Deliberately not an empty result. An over-large `limit` is a client being
-/// optimistic rather than a client being wrong, and RCL-10 wants an answer -
+/// optimistic rather than a client being wrong, and it gets an answer -
 /// what the budget exists to stop is the archive arriving in the model's context
 /// one call at a time, and a bounded answer stops that.
 #[test]
@@ -1459,7 +1459,7 @@ fn an_over_large_argument_is_lowered_to_the_budget_rather_than_refused() {
 }
 
 // ---------------------------------------------------------------------------
-// The process itself (RCL-11, AC7)
+// The process itself
 // ---------------------------------------------------------------------------
 
 /// The socket-inspection tool, if this machine has one.
@@ -1474,8 +1474,9 @@ fn socket_tool() -> Option<&'static str> {
         .find(|candidate| Path::new(candidate).exists())
 }
 
-/// RCL-11 at the process level: while it is alive the server holds no listening
-/// socket, and when its stdin closes it exits 0 without any signal being sent.
+/// The lifecycle at the process level: while it is alive the server holds no
+/// listening socket, and when its stdin closes it exits 0 without any signal
+/// being sent.
 ///
 /// The second half is what makes Claude Code's shutdown clean rather than a
 /// kill. That client closes stdin, waits two seconds, sends SIGTERM, waits two
@@ -1563,16 +1564,16 @@ fn the_server_holds_no_listening_socket_and_exits_zero_when_stdin_closes() {
     );
 }
 
-/// AC7's second half: pointed at a data directory holding no store, the server
+/// Pointed at a data directory holding no store, the server
 /// answers with an empty result and a reason, exits 0, and leaves not one byte
 /// behind.
 ///
 /// The last clause is what `Store::open` would fail. It would create the data
 /// directory, initialize a database and set `journal_mode=wal`, so a server
 /// advertising `readOnlyHint` would have created a database as the side effect
-/// of being asked a question - the contradiction D-10 exists to prevent. Both
-/// starting states are covered: a directory that exists and is empty, and a path
-/// that is not there at all.
+/// of being asked a question - the contradiction the read-only open prevents.
+/// Both starting states are covered: a directory that exists and is empty, and
+/// a path that is not there at all.
 #[test]
 fn a_server_with_no_store_answers_with_a_reason_and_creates_no_file() {
     let bench = bench();
@@ -1762,7 +1763,7 @@ fn an_excluded_project_is_never_named_to_a_client_at_the_default_scope() {
 }
 
 // ---------------------------------------------------------------------------
-// The redaction knob at the process boundary (PRIV-03, AC1, AC4)
+// The redaction knob at the process boundary
 // ---------------------------------------------------------------------------
 
 impl Bench {
@@ -1849,10 +1850,10 @@ const AUTHZ_SENTINEL: &str = "sk-VBEGRESS-authz-9f2";
 /// shape is a leak, and naming only the `Authorization` one would miss it.
 const SENTINEL_MARK: &str = "VBEGRESS";
 
-/// PRIV-03's knob, written the only way anything can turn it on.
+/// The `redact_recall` knob, written the only way anything can turn it on.
 ///
 /// A file in the config directory the spawn points at, and no environment
-/// variable (D-07): there is nothing a process could inherit that turns this
+/// variable: there is nothing a process could inherit that turns this
 /// on, which is the same property that stops anything inherited turning it off.
 const KNOB_ON: &str = "[privacy]\nredact_recall = true\n";
 
@@ -1901,8 +1902,9 @@ fn window_text(document: &Value) -> String {
         .join("\n")
 }
 
-/// AC1 through the surface that puts text into the model's context: all three
-/// tools over one store, once with no `terminus.toml` and once with the knob on.
+/// Redaction through the surface that puts text into the model's context: all
+/// three tools over one store, once with no `terminus.toml` and once with the
+/// knob on.
 ///
 /// The pair is the whole assertion. Either half alone is satisfiable by a broken
 /// build - a server that filtered nothing passes the first, and one that
@@ -2056,15 +2058,15 @@ fn the_three_tools_answer_a_multi_byte_turn_with_the_knob_on() {
     }
 }
 
-/// AC4's MCP half: the escape hatch is a command-line flag this server parses
-/// none of, so no environment variable reaches it.
+/// The escape hatch, from the server's side: it is a command-line flag this
+/// server parses none of, so no environment variable reaches it.
 ///
-/// D-07 is exactly this - the hook and the server load `Config` in-process, so
-/// an environment-variable escape hatch would be inherited by both and would
+/// That is why it is a flag - the hook and the server load `Config` in-process,
+/// so an environment-variable escape hatch would be inherited by both and would
 /// silently unfilter the two model-facing surfaces. The test spells the
-/// variables the way the terminal flag is spelled, bare and `TERMINUS_`-prefixed
-/// and as the config key itself, because a reader of `--raw` reaching for an
-/// environment variable would try those three.
+/// variables the way the terminal flag is spelled, bare and
+/// `TERMINUS_`-prefixed and as the config key itself, because a reader of
+/// `--raw` reaching for an environment variable would try those three.
 #[test]
 fn no_environment_variable_reaches_past_the_knob_on_the_mcp_surface() {
     let bench = bench();

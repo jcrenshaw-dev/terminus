@@ -1,7 +1,7 @@
 //! Terminal recall at the process boundary: `search`, `show` and `sessions`.
 //!
 //! These have to be spawns rather than library calls. The default project scope
-//! is the process's own working directory (D-12), and a test binary cannot chdir
+//! is the process's own working directory, and a test binary cannot chdir
 //! to assert on that - `std::env::set_current_dir` is process-global and these
 //! tests run in parallel with every other test in the binary. A child process
 //! with a chosen `current_dir` is the only way `Scope::current_directory()` is
@@ -132,13 +132,14 @@ fn document(output: &Output) -> Value {
 
 /// Every read command, as a command line that needs no store to be valid.
 ///
-/// One list rather than one test per command: the two behaviours D-10 and D-18
-/// fix are properties of the shared entry point, so a seventh read command added
+/// One list rather than one test per command: the two behaviours below - a read
+/// never creates a store and never repairs one - are properties of the shared
+/// entry point, so a seventh read command added
 /// later is one line here rather than a new test.
 const READ_COMMANDS: &[&[&str]] = &[&["search", "anything"], &["show", "1"], &["sessions"]];
 
 // ---------------------------------------------------------------------------
-// The shared read entry point (D-10, D-18)
+// The shared read entry point
 // ---------------------------------------------------------------------------
 
 /// A machine that has never ingested: exit 0, an empty result with a reason, and
@@ -198,7 +199,7 @@ fn a_read_against_an_empty_data_directory_answers_and_creates_nothing() {
     );
 }
 
-/// D-18: a store whose derived tables predate this build says so on stderr,
+/// A store whose derived tables predate this build says so on stderr,
 /// answers from the old-shape index anyway, and is not repaired.
 ///
 /// All three clauses together are the decision. Saying nothing would make a
@@ -253,15 +254,14 @@ fn a_read_against_a_store_older_than_this_build_says_so_and_repairs_nothing() {
 }
 
 // ---------------------------------------------------------------------------
-// `terminus search` (RCL-05)
+// `terminus search`
 // ---------------------------------------------------------------------------
 
 /// The headline case, at the process boundary: the most natural command in the
 /// product finds the turn that names that path, and exits 0.
 ///
-/// A raw `MATCH 'src/worker/S.ts'` is `fts5: syntax error near "/"` and exit 1
-/// (D-09), so without the tokenizer this exact command line is the one that
-/// fails.
+/// A raw `MATCH 'src/worker/S.ts'` is `fts5: syntax error near "/"` and exit
+/// 1, so without the tokenizer this exact command line is the one that fails.
 #[test]
 fn searching_for_a_path_exits_zero_with_the_turn_that_names_it() {
     let bench = bench();
@@ -292,12 +292,12 @@ fn searching_for_a_path_exits_zero_with_the_turn_that_names_it() {
     assert!(session.ends_with("session-recall.jsonl"), "{session}");
 }
 
-/// RCL-01 through the command: a camelCase identifier and its component find the
-/// same turn.
+/// Identifier splitting through the command: a camelCase identifier and its
+/// component find the same turn.
 ///
 /// Both halves matter. `SearchManager` stays one term, and `manager` reaches it
 /// because the expansion put that component in the indexed body - which is the
-/// half of ROADMAP criterion 1 that no path expansion would have delivered.
+/// half of identifier search that no path expansion would have delivered.
 #[test]
 fn a_camel_case_identifier_and_its_component_find_the_same_turn() {
     let bench = bench();
@@ -328,7 +328,7 @@ fn a_camel_case_identifier_and_its_component_find_the_same_turn() {
     );
 }
 
-/// RCL-06: a query that matches nothing exits 0 with an empty result set, never
+/// A query that matches nothing exits 0 with an empty result set, never
 /// non-zero.
 #[test]
 fn a_query_matching_nothing_exits_zero_with_an_empty_result() {
@@ -347,7 +347,7 @@ fn a_query_matching_nothing_exits_zero_with_an_empty_result() {
     assert_eq!(document["data"]["hits"], serde_json::json!([]));
 }
 
-/// D-12, and the one line of the query layer PLAN-2 could not reach: the default
+/// The one line of the query layer a library test cannot reach: the default
 /// scope is the project the process is standing in.
 ///
 /// `cargo` is in project-beta's transcripts and in no project-alpha turn, so
@@ -400,8 +400,8 @@ fn search_scopes_to_the_directory_it_is_run_in() {
     }
 }
 
-/// AC5's exclusion half for the terminal path: with a project excluded, `search`
-/// returns none of its turns, including under `*` and including turns archived
+/// Exclusion on the terminal path: with a project excluded, `search` returns
+/// none of its turns, including under `*` and including turns archived
 /// before the exclusion was configured.
 #[test]
 fn an_excluded_projects_turns_are_absent_from_search() {
@@ -431,7 +431,7 @@ fn an_excluded_projects_turns_are_absent_from_search() {
     }
 
     // The turns are still archived. Exclusion is a read-path predicate, not a
-    // deletion (D-23), and a test that let them be deleted would pass for the
+    // deletion, and a test that let them be deleted would pass for the
     // wrong reason.
     let archived: i64 = bench
         .conn()
@@ -461,7 +461,6 @@ fn a_bad_command_line_is_misuse_and_not_an_empty_result() {
         // `--project *` and not the default scope: `scope::resolve` runs first
         // inside `search::run` and short-circuits a directory no archived
         // project covers, so the bound is never reached to be rejected there.
-        // See the open item on PLAN-3.
         vec![
             "search",
             "--project",
@@ -517,7 +516,7 @@ fn search_json_is_a_document_and_stdout_holds_nothing_else() {
     }
 }
 
-/// The filters RCL-07 names, through the command line rather than through the
+/// The search filters, through the command line rather than through the
 /// library: each one narrows, and `--limit` bounds.
 #[test]
 fn the_command_line_filters_reach_the_query_layer() {
@@ -569,7 +568,7 @@ fn the_command_line_filters_reach_the_query_layer() {
 }
 
 // ---------------------------------------------------------------------------
-// `terminus show` (RCL-09 plus RCL-08's window)
+// `terminus show`, and its context window
 // ---------------------------------------------------------------------------
 
 /// The turn id `search` printed for a query, which is the only id a user ever
@@ -624,8 +623,9 @@ fn show_prints_the_records_own_line() {
     );
 }
 
-/// RCL-08 through the command: `--before`/`--after` return the neighbouring
-/// turns in `turn_seq` order, and the session's own ends are marked.
+/// The context window through the command: `--before`/`--after` return the
+/// neighbouring turns in `turn_seq` order, and the session's own ends are
+/// marked.
 ///
 /// The boundary flag is the half that could be dropped silently. A window that
 /// asked for five earlier turns and got two says "there is nothing earlier"
@@ -704,11 +704,11 @@ fn show_with_a_window_returns_the_neighbours_and_flags_the_boundary() {
     );
 }
 
-/// D-08 through the command: a turn whose session is evicted prints as evicted
-/// and the command still exits 0.
+/// Eviction through the command: a turn whose session is evicted prints as
+/// evicted and the command still exits 0.
 ///
-/// Retention is phase 8 and nothing writes that column before then, so the test
-/// sets it directly - which is also the point. The flag comes off the column and
+/// The test sets `session_meta.is_evicted` directly, so the flag comes off the
+/// column alone - which is also the point. The flag comes off the column and
 /// never off a failed blob read, so this stays distinguishable from the archive
 /// damage `terminus verify` reports.
 #[test]
@@ -840,7 +840,7 @@ fn show_answers_several_ids_and_keeps_the_order_asked_for() {
 }
 
 // ---------------------------------------------------------------------------
-// `terminus sessions` (RCL-05)
+// `terminus sessions`
 // ---------------------------------------------------------------------------
 
 /// The `--json` listing, as a vector of session objects.
@@ -864,10 +864,9 @@ fn listing(bench: &Bench, args: &[&str]) -> Vec<Value> {
 /// Every ingested session is listed, with its project, and the sidecar fixtures
 /// are flagged as sidecars.
 ///
-/// The sidecar flag is `session_meta.parent_session_key` being non-null (D-07),
-/// which is the column phase 2 wrote specifically so this phase could tell a
-/// subagent transcript from the session that spawned it - two files that report
-/// the same `sessionId`.
+/// The sidecar flag is `session_meta.parent_session_key` being non-null, which
+/// is the column ingest writes so a read can tell a subagent transcript from
+/// the session that spawned it - two files that report the same `sessionId`.
 #[test]
 fn sessions_lists_every_archived_session_and_flags_the_sidecars() {
     let bench = bench();
@@ -931,11 +930,11 @@ fn sessions_lists_every_archived_session_and_flags_the_sidecars() {
     assert!(stdout(&out).contains("(subagent)"), "{}", stdout(&out));
 }
 
-/// AC5's exclusion half, through the listing: an excluded project's sessions are
+/// Exclusion, through the listing: an excluded project's sessions are
 /// absent from both outputs while its turns are still in the store.
 ///
 /// Archived first, excluded second, which is the case a per-session flag written
-/// at ingest could never answer (D-23). Exclusion is a read-path predicate
+/// at ingest could never answer. Exclusion is a read-path predicate
 /// re-applied on every read, not a deletion and not a stamp.
 #[test]
 fn an_excluded_projects_sessions_are_absent_from_the_listing() {
@@ -1012,14 +1011,14 @@ fn sessions_scopes_and_bounds_the_listing() {
 }
 
 // ---------------------------------------------------------------------------
-// PRIV-03's escape hatch: `--raw` on the two commands that print a projection
+// The redaction escape hatch: `--raw` on the commands that print a projection
 // ---------------------------------------------------------------------------
 
-/// The flag reaches `search` and `show` and no other command (D-07).
+/// The flag reaches `search` and `show` and no other command.
 ///
 /// The negative half is the load-bearing one. `sessions` prints no projection,
-/// `export` stays unfiltered by D-12 and `observations` prints whatever the
-/// column holds by D-13, so for each of those `--raw` is an argument the command
+/// `export` stays unfiltered by design and `observations` prints whatever the
+/// column holds, so for each of those `--raw` is an argument the command
 /// was not written for: misuse and exit 2, and never a flag quietly accepted and
 /// ignored. That is the failure `terminus verify --json` already had once.
 #[test]
@@ -1085,7 +1084,7 @@ const AUTHZ_SENTINEL: &str = "sk-VBEGRESS-authz-9f2";
 /// is a leak, and naming only the `Authorization` one would miss it.
 const SENTINEL_MARK: &str = "VBEGRESS";
 
-/// PRIV-03's knob, written the only way anything can turn it on.
+/// The `redact_recall` knob, written the only way anything can turn it on.
 ///
 /// A file in the config directory the spawn points at, and no environment
 /// variable: there is nothing a process could inherit that turns this on, which
@@ -1109,7 +1108,7 @@ fn authz_turn(bench: &Bench) -> String {
     id.to_string()
 }
 
-/// One JSON object's keys, sorted - the shape D-08 says neither setting moves.
+/// One JSON object's keys, sorted - the shape neither setting moves.
 fn keys(value: &Value) -> Vec<String> {
     let mut keys: Vec<String> = value
         .as_object()
@@ -1131,7 +1130,8 @@ fn hit_excerpts(document: &Value) -> String {
         .join("\n")
 }
 
-/// AC4's `show` half, at the process boundary rather than at a library call.
+/// The escape hatch on `show`, at the process boundary rather than at a library
+/// call.
 ///
 /// Three runs over ONE store: no `terminus.toml` at all, the knob on, and the
 /// knob on with `--raw`. The first is the default this phase must not move; the
@@ -1181,7 +1181,7 @@ fn the_knob_filters_show_at_the_process_boundary_and_raw_reaches_past_it() {
     );
 
     // The same pair under `--json`, where the flag changes a value and never a
-    // key (D-08).
+    // key.
     let filtered_json = bench.run_in(&project, &["show", "--json", &id]);
     let raw_json = bench.run_in(&project, &["show", "--json", "--raw", &id]);
     let filtered_doc = document(&filtered_json);
@@ -1210,7 +1210,7 @@ fn the_knob_filters_show_at_the_process_boundary_and_raw_reaches_past_it() {
     );
 }
 
-/// AC4's `search` half, and the same three runs over one store.
+/// The escape hatch on `search`, and the same three runs over one store.
 #[test]
 fn the_knob_filters_the_search_excerpt_and_raw_reaches_past_it() {
     let bench = bench();
@@ -1333,7 +1333,7 @@ fn blobs(bench: &Bench) -> Vec<(String, Vec<u8>)> {
     rows
 }
 
-/// AC3: the knob filters a projection on the way out and writes nothing.
+/// The knob filters a projection on the way out and writes nothing.
 ///
 /// ONE ingest, then the same store read twice - the second time with the knob
 /// on and nothing else changed. The ingest sits ahead of both halves
@@ -1499,7 +1499,7 @@ fn archived_control_characters_print_escaped_in_search_and_show() {
     let bench = bench();
     let written = ingest_planted(&bench);
 
-    // `--json` still decodes to the raw characters (D-06).
+    // `--json` still decodes to the raw characters.
     let found = document(&bench.run(&["search", "--project", "*", "--json", PLANTED_TOKEN]));
     let hit = &found["data"]["hits"][0];
     let excerpt = hit["excerpt"].as_str().unwrap();
@@ -1538,7 +1538,7 @@ fn archived_control_characters_print_escaped_in_search_and_show() {
         args.push(&id);
         let out = bench.run(&args);
         assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-        // The body is the archived line, byte for byte (D-01).
+        // The body is the archived line, byte for byte.
         let body = format!("\n{written}\n");
         assert!(
             out.stdout.windows(body.len()).any(|w| w == body.as_bytes()),
