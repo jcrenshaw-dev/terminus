@@ -649,6 +649,32 @@ fn the_star_project_reaches_more_than_one_project() {
     );
 }
 
+/// #23: a word the tokenizer makes no token from changes no hit
+/// `recall_search` returns, and the call is not an error.
+#[test]
+fn an_unindexable_word_changes_no_recall_search_hit() {
+    let bench = bench();
+    bench.ingest_fixtures();
+
+    let beta = bench.project("session-errors-a.jsonl");
+    let ids = |query: &str| -> Vec<Value> {
+        let (document, is_error) = bench.call_flagged(
+            &beta,
+            "recall_search",
+            json!({"query": query, "project": "*"}),
+        );
+        assert!(!is_error, "`{query}`: {document}");
+        hits(&document)
+            .iter()
+            .map(|hit| hit["turn_id"].clone())
+            .collect()
+    };
+
+    let plain = ids("cargo");
+    assert!(!plain.is_empty(), "this test needs cargo turns");
+    assert_eq!(ids("cargo \u{345}"), plain);
+}
+
 /// Exclusion through the server: with a project excluded, neither the scoped
 /// call nor the `*` call returns any of its turns.
 ///

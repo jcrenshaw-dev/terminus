@@ -486,6 +486,66 @@ fn a_dropped_word_takes_no_slot_under_the_cap() {
     assert!(!query.truncated());
 }
 
+/// #23: a query made only of words the tokenizer makes no token from takes
+/// the path a query of punctuation takes.
+#[test]
+fn a_query_of_only_unindexable_words_is_nothing_searchable() {
+    let bench = bench();
+    let conn = bench.conn();
+
+    let response = answer(&conn, &[], Scope::Everything, "\u{345} \u{24B6}");
+    assert!(response.hits.is_empty(), "{:?}", response.hits);
+    assert_eq!(response.reason, Some(Reason::NothingSearchable));
+}
+
+/// #23: a pointed Hebrew word keeps its search terms, so a word plus that word
+/// finds only the turn that holds both.
+#[test]
+fn a_pointed_word_still_narrows_a_search() {
+    let bench = bench();
+    let word = "quokkapointed";
+    let mut body = String::new();
+    for (n, text) in [format!("{word} {POINTED_SHALOM}"), word.to_owned()]
+        .iter()
+        .enumerate()
+    {
+        let line = serde_json::json!({
+            "parentUuid": null,
+            "isSidechain": false,
+            "cwd": bench.work.join("eta").to_string_lossy(),
+            "sessionId": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+            "type": "user",
+            "uuid": format!("cccccccc-0000-4000-8000-{n:012}"),
+            "timestamp": format!("2026-08-12T23:00:{n:02}.000Z"),
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": text}],
+            },
+        });
+        body.push_str(&line.to_string());
+        body.push('\n');
+    }
+    bench.archive("eta-pointed.jsonl", &body);
+
+    let conn = bench.conn();
+    let both = turns_whose_record_contains(&conn, POINTED_SHALOM);
+    assert_eq!(both.len(), 1, "one turn holds the pointed word");
+    let either = turns_whose_record_contains(&conn, word);
+    assert_eq!(either.len(), 2, "two turns hold the plain word");
+
+    let ids = |raw: &str| -> Vec<i64> {
+        let mut ids: Vec<i64> = answer(&conn, &[], Scope::Everything, raw)
+            .hits
+            .iter()
+            .map(|hit| hit.turn_id)
+            .collect();
+        ids.sort_unstable();
+        ids
+    };
+    assert_eq!(ids(&format!("{word} {POINTED_SHALOM}")), both);
+    assert_eq!(ids(word), either);
+}
+
 /// A config with no roots and the given exclusions: the read path never opens a
 /// transcript, so the roots are not what it is about.
 fn config(exclusions: &[&str]) -> Config {

@@ -516,6 +516,42 @@ fn search_json_is_a_document_and_stdout_holds_nothing_else() {
     }
 }
 
+/// #23: a word the tokenizer makes no token from changes no hit, and a query
+/// of nothing else says it has no words that can be searched.
+#[test]
+fn an_unindexable_word_changes_no_hit() {
+    let bench = bench();
+    bench.ingest_fixtures();
+
+    let ids = |args: &[&str]| -> Vec<Value> {
+        let mut full = vec!["search", "--project", "*", "--json"];
+        full.extend_from_slice(args);
+        let out = bench.run(&full);
+        assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+        document(&out)["data"]["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|hit| hit["turn_id"].clone())
+            .collect()
+    };
+
+    let plain = ids(&["cargo"]);
+    assert!(!plain.is_empty(), "this test needs cargo turns");
+    assert_eq!(ids(&["cargo", "\u{345}"]), plain);
+
+    let out = bench.run(&["search", "--project", "*", "--json", "\u{345}"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let document = document(&out);
+    assert_eq!(document["data"]["hits"], serde_json::json!([]), "{document}");
+    assert!(
+        document["reason"]
+            .as_str()
+            .is_some_and(|r| r.contains("no words that can be searched")),
+        "{document}"
+    );
+}
+
 /// The search filters, through the command line rather than through the
 /// library: each one narrows, and `--limit` bounds.
 #[test]
