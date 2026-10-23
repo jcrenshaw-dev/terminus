@@ -464,10 +464,9 @@ fn last_run_text(conn: &Connection) -> (Option<String>, Option<String>) {
 
 /// Five transcripts in, exactly one `runs` row out.
 ///
-/// `record_run` inserts a literal `1` for `files_seen` from inside the per-file
-/// transaction; reused unchanged by a tree walk it would write roughly 2,071
-/// rows per hook-triggered pass, and the last ingest run `status` reports would
-/// name one file rather than the pass.
+/// One row per pass, whatever the file count: a row per file would be roughly
+/// 2,071 rows per hook-triggered pass, and the last ingest run `status` reports
+/// would name one file rather than the pass (#31).
 #[test]
 fn one_pass_over_five_transcripts_writes_exactly_one_runs_row() {
     let bench = bench();

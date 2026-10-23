@@ -55,7 +55,8 @@ pub struct Drained {
 }
 
 impl Drained {
-    /// One reported line per discarded file, in the shape `record_pass` writes.
+    /// One reported line per discarded file, in the shape the `runs` row's
+    /// `error` list takes.
     pub fn lines(&self) -> Vec<String> {
         self.discarded
             .iter()

@@ -98,8 +98,8 @@ pub fn reindex(store: &mut Store) -> Result<Rebuilt> {
     // every session ever archived - and this runs inside the ingest lock on the
     // first hook-spawned pass after an upgrade, where an allocation failure
     // rolls the rebuild back, leaves `derived_schema` behind, and takes the
-    // pass with it before `record_pass` can say so. One blob at a time bounds
-    // it to the largest single session.
+    // pass with it before the pass's `runs` row can say so. One blob at a time
+    // bounds it to the largest single session.
     //
     // Read BEFORE anything is dropped, which the drop path did not need and
     // costs it nothing: `sessions` and `session_meta` are never touched here,
