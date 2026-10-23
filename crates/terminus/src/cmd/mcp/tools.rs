@@ -34,7 +34,6 @@ use std::collections::HashSet;
 use serde_json::{json, Map, Value};
 
 use terminus_core::recall::{self, context, get, search, Filters, Query, Request, Scope};
-use terminus_core::Error;
 
 use crate::cmd::read::{self, Opened, Reader};
 use crate::cmd::Failure;
@@ -358,15 +357,6 @@ fn run_search(args: &Map<String, Value>) -> Result<Value, Refused> {
 
     let response = match search::run(reader.store().conn(), reader.config(), &request) {
         Ok(response) => response,
-        // A malformed bound is the caller's, not the archive's. Every string
-        // orders against every other, so the alternative is a plausible wrong
-        // answer nothing reports.
-        Err(Error::InvalidTimeFilter { field, value }) => {
-            return Err(Refused::caller(format!(
-                "{field} {value:?} is not a time; expected YYYY-MM-DD or \
-                 YYYY-MM-DDTHH:MM:SS.mmmZ"
-            )))
-        }
         Err(other) => return Err(Refused::archive(other.to_string())),
     };
 
@@ -792,21 +782,20 @@ fn optional_count(args: &Map<String, Value>, name: &str) -> Result<Option<usize>
 
 /// One end of a time window, validated before it can reach a comparison.
 ///
-/// Through the CLI's own rule, so `--since` typed at a terminal and `since`
-/// passed by a model mean the same thing - including that a bare
-/// `YYYY-MM-DD` extends to the first instant of its day for `since` and the last
-/// for `until`.
+/// Through terminus-core's date check, [`recall::checked_bound`], the one the
+/// CLI uses, so `--since` typed at a terminal and `since` passed by a model mean
+/// the same thing - including that a bare `YYYY-MM-DD` extends to the first
+/// instant of its day for `since` and the last for `until`, and that a value no
+/// calendar or clock has is refused. Run before the store is opened, so a bad
+/// date is a caller error with no store too. The core message starts with the
+/// field, which is the argument's name as MCP spells it.
 fn optional_time(args: &Map<String, Value>, name: &'static str) -> Result<Option<String>, Refused> {
     let Some(raw) = optional_string(args, name)? else {
         return Ok(None);
     };
-    match crate::cmd::time_bound(name, &raw) {
-        Ok(bound) => Ok(Some(bound)),
-        Err(Failure::Misuse(message) | Failure::Operational(message)) => {
-            Err(Refused::caller(message))
-        }
-        Err(Failure::Silent) => Err(Refused::caller(format!("{name} is not a time"))),
-    }
+    recall::checked_bound(name, &raw)
+        .map(Some)
+        .map_err(|error| Refused::caller(error.to_string()))
 }
 
 #[cfg(test)]

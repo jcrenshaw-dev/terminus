@@ -1293,15 +1293,26 @@ fn a_malformed_call_is_an_empty_result_with_a_reason_and_never_a_throw() {
         ("recall_search", json!({"query": "cargo", "limit": 2.5})),
         ("recall_search", json!({"query": "cargo", "limit": 0})),
         ("recall_context", json!({"turn_id": 1, "before": -1})),
-        // A date nothing can parse. `2026-13-99` is deliberately NOT in this
-        // list: a bound is pinned to a shape rather than to a calendar - every
-        // stored timestamp is `NNNN-NN-NNTNN:NN:NN.NNNZ` and the comparison is
-        // lexicographic with no date parsing on the stored side - so a shaped
-        // impossibility is a bound that compares cleanly, and only an unshaped
-        // string is a caller error.
+        // A date that is not a real date or time. The comparison against the
+        // stored timestamps is lexicographic, so a well-shaped impossibility
+        // such as `2026-13-99` would compare cleanly and answer a plausible
+        // window; the bound is checked against the calendar and the clock as
+        // well as the shape, and either failure is the caller's.
         (
             "recall_search",
             json!({"query": "cargo", "since": "last tuesday"}),
+        ),
+        (
+            "recall_search",
+            json!({"query": "cargo", "since": "2026-13-99"}),
+        ),
+        (
+            "recall_search",
+            json!({"query": "cargo", "since": "2026-02-30"}),
+        ),
+        (
+            "recall_search",
+            json!({"query": "cargo", "until": "2026-08-12T25:00:00.000Z"}),
         ),
     ];
 
@@ -1323,6 +1334,38 @@ fn a_malformed_call_is_an_empty_result_with_a_reason_and_never_a_throw() {
         );
         assert_empty_shape(tool, &document);
     }
+}
+
+/// #24: an impossible day is a caller error naming the argument as MCP spells
+/// it, whether or not there is a store to search.
+///
+/// The date is checked as the arguments are read, before the store opens, so a
+/// data directory that does not exist answers the bad date and not the missing
+/// store.
+#[test]
+fn an_impossible_since_is_a_caller_error_with_or_without_a_store() {
+    let bench = bench();
+    let arguments = json!({"query": "cargo", "since": "2026-02-30"});
+
+    let check = |dir: &Path, state: &str| {
+        let (document, is_error) = bench.call_flagged(dir, "recall_search", arguments.clone());
+        assert!(is_error, "{state}: not a caller error: {document}");
+        let reason = document["reason"].as_str().unwrap_or_default();
+        assert!(reason.contains("since"), "{state}: {reason}");
+        assert!(reason.contains("2026-02-30"), "{state}: {reason}");
+        assert!(!reason.contains("--since"), "{state}: {reason}");
+        assert_empty_shape("recall_search", &document);
+    };
+
+    assert!(!bench.data_dir.exists());
+    check(&bench.work, "no data directory");
+    assert!(
+        !bench.data_dir.exists(),
+        "a refused call created the data directory"
+    );
+
+    bench.ingest_fixtures();
+    check(&bench.project("session-recall.jsonl"), "the ingested bench");
 }
 
 /// The line between the two failure kinds: a tool this server does not have is a
