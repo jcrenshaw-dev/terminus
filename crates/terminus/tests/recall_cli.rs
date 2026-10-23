@@ -445,6 +445,64 @@ fn an_excluded_projects_turns_are_absent_from_search() {
     assert!(archived > 0, "the excluded project's turns were deleted");
 }
 
+/// #108: with a project excluded, a session with no project still answers
+/// `search`. SQL's `NULL NOT IN (...)` is never true, so the exclusion has to
+/// let a null key through on its own.
+#[test]
+fn a_session_with_no_project_survives_an_exclusion() {
+    let bench = bench();
+    bench.ingest_fixtures();
+
+    // A transcript whose records carry no `cwd`, so nothing names its project.
+    let record = |n: usize, kind: &str, text: &str| {
+        serde_json::json!({
+            "parentUuid": null,
+            "isSidechain": false,
+            "sessionId": "projectless-session",
+            "type": kind,
+            "uuid": format!("projectless-{n}"),
+            "timestamp": format!("2026-10-20T09:0{n}:00.000Z"),
+            "message": {"role": kind, "content": [{"type": "text", "text": text}]},
+        })
+    };
+    let lines: Vec<String> = [
+        record(0, "user", "where did the quillwort notes go"),
+        record(1, "assistant", "the quillwort notes are in the archive"),
+    ]
+    .iter()
+    .map(Value::to_string)
+    .collect();
+    let path = bench.work.join("projectless.jsonl");
+    std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+    let out = bench.run(&["ingest", path.to_str().unwrap()]);
+    assert!(out.status.success(), "ingest: {}", stderr(&out));
+
+    // The premise: the session really has no project.
+    let project: Option<String> = bench
+        .conn()
+        .query_row(
+            "SELECT project FROM session_meta WHERE session_id = 'projectless-session'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(project, None, "this test needs a session with no project");
+
+    let beta = bench.project("session-errors-a.jsonl");
+    bench.config(&format!(
+        "exclude = [{:?}]\n",
+        beta.to_string_lossy().into_owned()
+    ));
+
+    let out = bench.run(&["search", "--project", "*", "--json", "quillwort"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let hits = document(&out)["data"]["hits"].as_array().unwrap().clone();
+    assert!(!hits.is_empty(), "the session with no project dropped out");
+    for hit in &hits {
+        assert_eq!(hit["project"], Value::Null, "{hit}");
+    }
+}
+
 /// An unknown flag is misuse (exit 2) and prints nothing to stdout; a malformed
 /// `--since` is misuse too, not an empty result.
 ///

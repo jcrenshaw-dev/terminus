@@ -159,14 +159,17 @@ impl Scoped {
     /// whose own project is excluded: a session of a visible project whose
     /// pre-worktree key is excluded is still in the table and is filtered here.
     ///
+    /// Each list is one bound parameter, a JSON array read through
+    /// `json_each`, so its length is not bounded by SQLite's variable limit
+    /// (#108).
+    ///
     /// `NOT IN` carries the null guard because SQL's `NULL NOT IN (...)` is
     /// NULL, which is not true, so an unguarded clause would drop every session
     /// whose key is null - the one session nothing can say is excluded.
     ///
-    /// Nothing is written for an empty list, because `NOT IN ()` is not SQL.
-    /// The skip is per list, and that is what keeps `m.project_pre_worktree`
-    /// out of the SQL on a store older than that column, where its list is
-    /// always empty.
+    /// Nothing is written for an empty list, which excludes nothing. The skip
+    /// is per list, and that is what keeps `m.project_pre_worktree` out of the
+    /// SQL on a store older than that column, where its list is always empty.
     pub(crate) fn push_filter(&self, sql: &mut String, params: &mut Vec<Box<dyn rusqlite::ToSql>>) {
         if let Some(project) = self.project() {
             sql.push_str(" AND m.project = ?");
@@ -179,15 +182,11 @@ impl Scoped {
             if excluded.is_empty() {
                 continue;
             }
-            sql.push_str(&format!(" AND ({column} IS NULL OR {column} NOT IN ("));
-            for (index, value) in excluded.iter().enumerate() {
-                if index > 0 {
-                    sql.push(',');
-                }
-                sql.push('?');
-                params.push(Box::new(value.clone()));
-            }
-            sql.push_str("))");
+            sql.push_str(&format!(
+                " AND ({column} IS NULL OR {column} NOT IN (SELECT value FROM json_each(?)))"
+            ));
+            let excluded: serde_json::Value = excluded.iter().map(String::as_str).collect();
+            params.push(Box::new(excluded.to_string()));
         }
     }
 
