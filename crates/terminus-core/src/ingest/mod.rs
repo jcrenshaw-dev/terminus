@@ -14,8 +14,10 @@
 //! rejected (`DESIGN-BRIEF.md:83`).
 
 pub mod backfill;
+mod driver;
 pub mod lock;
 pub mod pass;
+pub mod runs;
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
