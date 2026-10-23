@@ -146,16 +146,14 @@ fn evict_one(conn: &mut Connection, session_key: &str) -> Result<()> {
 /// Remove one session and everything keyed on it, answering whether an
 /// `observations` row went with it.
 ///
-/// **Child first, and that is not tidiness.** The bundled SQLite is compiled
-/// with `-DSQLITE_DEFAULT_FOREIGN_KEYS=1`, so the references declared in
-/// `schema::CREATE_SQL` really are enforced on every connection whatever the
-/// pragma comment there says - `reindex` records the same fact and drops in
-/// reverse for the same reason. `paths` and `entities` hang off `turns(id)`;
-/// `turns_fts` is contentless with `rowid` IS `turns.id`; `compactions`,
-/// `observations` and `session_meta` hang off `sessions(session_key)`, and
-/// `blocks` off `sessions(session_no)`. `compactions` is deleted by
-/// `session_key` and never through the turn ids, because its rows are keyed by
-/// position in the stream and need not have a turn behind them.
+/// **Child first, and that is not tidiness.** The derived tables and their
+/// order are `reindex::clear_derived`'s, which this calls first. The bundled
+/// SQLite is compiled with `-DSQLITE_DEFAULT_FOREIGN_KEYS=1`, so the references
+/// declared in `schema::CREATE_SQL` really are enforced on every connection
+/// whatever the pragma comment there says. What is retention's own:
+/// `observations` and `session_meta` hang off `sessions(session_key)` and
+/// `blocks` off `sessions(session_no)`, so they go after the derived rows and
+/// before `sessions`.
 ///
 /// **`decisions` and `labels` are deliberately untouched.** `decisions` is
 /// keyed on `session_id` with no declared reference and `labels.turn_id`
@@ -175,19 +173,11 @@ fn delete_one(conn: &mut Connection, session_key: &str) -> Result<bool> {
     Ok(observations > 0)
 }
 
-/// Delete one session and every row keyed on it, in [`delete_one`]'s order,
-/// inside the caller's transaction. Answers how many `observations` rows went.
+/// Delete one session and every row keyed on it, inside the caller's
+/// transaction: the derived rows through `reindex::clear_derived`, then the
+/// rows retention owns, child first. Answers how many `observations` rows went.
 pub(crate) fn delete_session(tx: &Connection, session_key: &str) -> Result<usize> {
-    const TURN_IDS: &str = "SELECT id FROM turns WHERE session_key = ?1";
-    for statement in [
-        format!("DELETE FROM paths WHERE turn_id IN ({TURN_IDS})"),
-        format!("DELETE FROM entities WHERE turn_id IN ({TURN_IDS})"),
-        "DELETE FROM compactions WHERE session_key = ?1".to_owned(),
-        format!("DELETE FROM turns_fts WHERE rowid IN ({TURN_IDS})"),
-        "DELETE FROM turns WHERE session_key = ?1".to_owned(),
-    ] {
-        tx.execute(&statement, [session_key])?;
-    }
+    crate::reindex::clear_derived(tx, session_key)?;
     let observations = tx.execute(
         "DELETE FROM observations WHERE session_key = ?1",
         [session_key],

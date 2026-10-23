@@ -7,8 +7,12 @@
 //! is the property "everything else is derived" has to mean if it is to mean
 //! anything.
 //!
-//! `sessions` and `session_meta` are never touched. The archive table never
-//! migrates (`DESIGN-BRIEF.md:94`): a derived-schema change rebuilds derived
+//! The per-session clear the preserving path uses, `clear_derived`, is also
+//! the derived half of retention's delete, so the child-first list of derived
+//! tables is written once.
+//!
+//! `sessions` and `session_meta` are never touched by `reindex` itself. The
+//! archive table never migrates (`DESIGN-BRIEF.md:94`): a derived-schema change rebuilds derived
 //! tables *only*, and a store in an older archive format is refused at open
 //! and never reaches a rebuild.
 //!
@@ -222,8 +226,10 @@ pub fn reindex(store: &mut Store) -> Result<Rebuilt> {
 
 /// Every derived row one session owns, deleted, children first.
 ///
-/// The preserving path's stand-in for `DROP TABLE`, scoped to one session.
-/// Children first for the reason the drop order documents: the bundled SQLite
+/// The preserving path's stand-in for `DROP TABLE`, scoped to one session, and
+/// the derived half of retention's delete (`retention::apply::delete_session`),
+/// which is why the list of derived tables and their order lives here and
+/// nowhere else. Children first for the reason the drop order documents: the bundled SQLite
 /// is compiled with `-DSQLITE_DEFAULT_FOREIGN_KEYS=1`, so `paths` and
 /// `entities` really do reference `turns(id)` on every connection, and deleting
 /// the parent first fails with a constraint violation. `turns_fts` is
@@ -236,7 +242,7 @@ pub fn reindex(store: &mut Store) -> Result<Rebuilt> {
 /// list: the ids are `turns.id` values this transaction is about to overwrite
 /// anyway, and a `WHERE turn_id IN (SELECT ...)` keeps the whole thing one
 /// statement SQLite plans against the `UNIQUE (session_key, turn_seq)` index.
-fn clear_derived(tx: &rusqlite::Connection, session_key: &str) -> Result<()> {
+pub(crate) fn clear_derived(tx: &rusqlite::Connection, session_key: &str) -> Result<()> {
     const TURN_IDS: &str = "SELECT id FROM turns WHERE session_key = ?1";
     for statement in [
         format!("DELETE FROM paths WHERE turn_id IN ({TURN_IDS})"),
