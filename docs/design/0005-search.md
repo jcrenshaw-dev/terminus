@@ -123,7 +123,9 @@ Options are in [commands.md](../commands.md#reading-the-archive), and the `--jso
 ```mermaid
 flowchart TD
   W["the words typed"] --> P["Query::parse: split on every non-alphanumeric, drop words the tokenizer makes no token from, drop case-folded repeats, keep the first 32"]
-  P --> S["scope::resolve: longest-prefix match of the path against stored project keys"]
+  P --> D{"since and until, when given: each a real date or time in one of the two forms?"}
+  D -->|"no"| B["caller error: InvalidTimeFilter"]
+  D -->|"yes"| S["scope::resolve: longest-prefix match of the path against stored project keys"]
   S --> R{"a project, or every project?"}
   R -->|"neither"| M["empty result with the reason"]
   R -->|"yes"| E{"any tokens left?"}
@@ -137,7 +139,7 @@ flowchart TD
   C --> H["the hits"]
 ```
 
-*Figure 1. One search, from the words typed to the hits with their excerpts. A user's string never reaches `MATCH` as written: every token is quoted, so no FTS5 operator survives in it. The excerpts are read only for the hits that survive the cut.*
+*Figure 1. One search, from the words typed to the hits with their excerpts. A user's string never reaches `MATCH` as written: every token is quoted, so no FTS5 operator survives in it. The time bounds are checked before the scope is resolved, so a bound that is not a real date or time is the caller's error wherever the caller stands. The excerpts are read only for the hits that survive the cut.*
 
 The query is a conjunction. Every token is a quoted FTS5 string and the tokens are joined with an explicit `AND`, so a query for a path such as `src/worker/S.ts`, which FTS5 would refuse as written, finds every turn holding all of its parts. The query's tokens are not expanded, because the index already holds the expansion: a query for `SearchManager` asks for that word and does not turn into a search for `manager`.
 

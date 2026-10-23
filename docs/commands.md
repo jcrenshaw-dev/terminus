@@ -52,7 +52,7 @@ An excluded project is never shown, with `*` too, including sessions archived be
 
 ### Time bounds
 
-`--since` and `--until` take a UTC time as `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SS.mmmZ`. A bare date in `--since` means the start of that day and in `--until` the end of it, so `--since 2026-10-01 --until 2026-10-01` covers the whole day. Both bounds are inclusive. Any other form exits 2. A turn or session with no timestamp is outside every bound.
+`--since` and `--until` take a UTC time as `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SS.mmmZ`. A bare date in `--since` means the start of that day and in `--until` the end of it, so `--since 2026-10-01 --until 2026-10-01` covers the whole day. Both bounds are inclusive. A value in any other form, or one that is not a real date or time, such as `2026-02-30`, month 13 or hour 25, exits 2 with a message naming the flag. A turn or session with no timestamp is outside every bound.
 
 ### `terminus search <words>`
 

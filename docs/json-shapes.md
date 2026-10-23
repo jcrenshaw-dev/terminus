@@ -676,9 +676,10 @@ tool result:
 - `isError` is true when the call could not be used as asked: `arguments` that
   is not an object; a required argument that is missing or null, or a `query`
   that is empty or only whitespace; an argument of the wrong JSON type; a count
-  that is negative or not a whole number; a `since` or `until` in neither time
-  form; a `limit` of 0; a `turn_ids` that is empty or holds anything but
-  integers. The document's `reason` says which.
+  that is negative or not a whole number; a `since` or `until` that is not a
+  real date or time in one of the two time forms; a `limit` of 0; a `turn_ids`
+  that is empty or holds anything but integers. The document's `reason` says
+  which.
 - `isError` is false for everything else, an empty answer included: no store
   yet, a directory no archived project covers, a store that cannot be opened or
   read, a SQLite error, and a server working directory that cannot be read. Each
