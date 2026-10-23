@@ -25,7 +25,7 @@ fn records(name: &str) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// D-14: the watermark is the byte just past the last `\n`, so a complete
+/// The watermark is the byte just past the last `\n`, so a complete
 /// transcript ends with one. `session-truncated.jsonl` is the exception that
 /// makes the rule testable. No fixture carries a `\r`.
 #[test]
@@ -53,7 +53,7 @@ fn line_endings_match_the_measured_corpus() {
     }
 }
 
-/// D-03: fifteen record types, four of which are turns.
+/// Fifteen record types, four of which are turns.
 #[test]
 fn session_basic_carries_all_fifteen_record_types() {
     const TURN_TYPES: [&str; 4] = ["user", "assistant", "attachment", "system"];
@@ -90,8 +90,8 @@ fn session_basic_carries_all_fifteen_record_types() {
     assert_eq!(seen.len(), 15);
 }
 
-/// D-03 again, from the other side: a state record may carry one of the two
-/// identity fields, and a classifier keying on either alone would be wrong.
+/// The record types from the other side: a state record may carry one of the
+/// two identity fields, and a classifier keying on either alone would be wrong.
 #[test]
 fn state_records_never_carry_both_identity_fields() {
     const TURN_TYPES: [&str; 4] = ["user", "assistant", "attachment", "system"];
@@ -128,7 +128,7 @@ fn state_records_never_carry_both_identity_fields() {
     );
 }
 
-/// D-02: 31 of 62 sampled real transcripts contain an out-of-order timestamp,
+/// Of 62 sampled real transcripts, 31 contain an out-of-order timestamp,
 /// so `turn_seq` must come from byte order. The fixture reproduces one.
 #[test]
 fn session_basic_has_an_adjacent_turn_pair_whose_timestamps_decrease() {
@@ -152,7 +152,7 @@ fn session_basic_has_an_adjacent_turn_pair_whose_timestamps_decrease() {
     );
 }
 
-/// D-05: 28 of 6,731 sampled records exceed one 64 KB block.
+/// 28 of 6,731 sampled records exceed one 64 KB block.
 #[test]
 fn session_large_record_has_exactly_one_oversized_line() {
     let bytes = testkit::fixture_bytes("session-large-record.jsonl");
@@ -170,7 +170,7 @@ fn session_large_record_has_exactly_one_oversized_line() {
     assert_eq!(first.len().div_ceil(65536), 4);
 }
 
-/// D-12: `journal.jsonl` is not a transcript. Discovery reaches it, so nothing
+/// `journal.jsonl` is not a transcript. Discovery reaches it, so nothing
 /// downstream may assume transcript shape from the file extension.
 #[test]
 fn journal_records_carry_no_transcript_identity() {
@@ -189,7 +189,7 @@ fn journal_records_carry_no_transcript_identity() {
     }
 }
 
-/// D-01: this is why `sessions` is keyed on file identity. Every sidecar record
+/// This is why `sessions` is keyed on file identity. Every sidecar record
 /// reports the *parent's* session id.
 #[test]
 fn sidecar_reports_the_parent_session_id() {
@@ -206,7 +206,7 @@ fn sidecar_reports_the_parent_session_id() {
     }
 }
 
-/// D-11: `session_id` (foreign, file-level) and `sessionId` (own) are two
+/// `session_id` (foreign, file-level) and `sessionId` (own) are two
 /// different signals and the fixture keeps them distinguishable.
 #[test]
 fn continuation_names_its_predecessor_through_a_foreign_session_id() {
@@ -223,7 +223,7 @@ fn continuation_names_its_predecessor_through_a_foreign_session_id() {
     }
 }
 
-/// D-14 / ING-01: the truncated fixture is a byte prefix of the complete one,
+/// The truncated fixture is a byte prefix of the complete one,
 /// which is what makes "ingest the partial file, then the rest" testable.
 #[test]
 fn truncated_fixture_is_a_byte_prefix_cut_mid_record() {
@@ -259,7 +259,7 @@ fn unique_token_appears_exactly_once_across_the_corpus() {
     assert_eq!(total, 1, "`{}` must be unique", testkit::UNIQUE_TOKEN);
 }
 
-/// D-04: the meta fixture is one JSON object carrying the five fields every
+/// The meta fixture is one JSON object carrying the five fields every
 /// real `agent-*.meta.json` carries, and it is not a transcript.
 ///
 /// It sits outside [`testkit::TRANSCRIPT_FIXTURES`] on purpose: the JSONL and
@@ -299,7 +299,7 @@ fn the_agent_meta_fixture_is_one_json_object_and_not_a_transcript() {
     );
 }
 
-/// D-21 + D-08: the compacted fixture ends with a real-shaped boundary record.
+/// The compacted fixture ends with a real-shaped boundary record.
 ///
 /// Shape, position and the subset relation are all load-bearing. Two later
 /// tests append this file's **last line** to another transcript, so a record
@@ -325,9 +325,9 @@ fn the_compacted_fixture_ends_with_a_real_shaped_boundary() {
         assert!(meta[field].is_number(), "compactMetadata lacks {field}");
     }
 
-    // The measured fact D-08 rests on: 6 preserved uuids of 8, against 38,064
-    // dropped tokens - the lists describe what survived, so no dropped-turn set
-    // can be computed from them.
+    // The measured fact behind the dropped-turn set: 6 preserved uuids of 8,
+    // against 38,064 dropped tokens - the lists describe what survived, so no
+    // dropped-turn set can be computed from them.
     let uuids: BTreeSet<&str> = meta["preservedMessages"]["uuids"]
         .as_array()
         .expect("preservedMessages.uuids is a list")
@@ -367,9 +367,9 @@ fn the_boundary_line_helper_returns_the_last_whole_record() {
     assert!(bytes.ends_with(&[line.as_slice(), b"\n"].concat()));
 }
 
-// --- Phase 3 -----------------------------------------------------------------
+// --- Search and recall -------------------------------------------------------
 
-/// Concatenate a record's `message.content` text blocks, which is all a phase 3
+/// Concatenate a record's `message.content` text blocks, which is all a search
 /// assertion ever needs off a turn.
 fn message_text(record: &serde_json::Value) -> String {
     let Some(blocks) = record["message"]["content"].as_array() else {
@@ -386,10 +386,10 @@ fn message_text(record: &serde_json::Value) -> String {
         .join("\n")
 }
 
-/// The phase 3 fixtures carry a root the test owns rather than this checkout's
-/// path, and they carry two projects between them.
+/// The rooted fixtures carry a root the test owns rather than this checkout's
+/// path, and they carry at least two projects between them.
 ///
-/// The phase 1 and 2 fixtures hardcode `/data/code/verbatim`. A project-scoped
+/// The unrooted fixtures hardcode `/data/code/verbatim`. A project-scoped
 /// assertion over those is true only on a checkout at that literal path, and on
 /// that checkout it is true for the wrong reason: the directory exists, so
 /// `git rev-parse` answers and the key is whatever the developer's tree is.
@@ -425,7 +425,7 @@ fn the_rooted_fixtures_name_a_test_owned_root_and_two_projects() {
     );
 }
 
-/// AC1's two probes and AC3's structured-versus-prose pair, all in one fixture.
+/// Both expansion probes and the structured-versus-prose pair, in one fixture.
 ///
 /// The pair is the part that is easy to get wrong by accident: the `Read`
 /// `tool_use` and the prose mention must name the **same** path and sit in
@@ -493,7 +493,7 @@ fn session_recall_carries_the_expansion_probes_and_the_prose_pair() {
         "the prose turn must carry no structured block"
     );
 
-    // The symbol probe, from the one field RCL-02 reads symbols out of.
+    // The symbol probe, from the one field symbols are read out of.
     let patterns: Vec<&str> = recs
         .iter()
         .filter_map(|r| r["message"]["content"].as_array())
@@ -566,10 +566,11 @@ fn looks_like_line_col(token: &str) -> bool {
             && c.bytes().all(|b| b.is_ascii_digit()))
 }
 
-/// AC2's whole premise, pinned in the bytes rather than in the extractor.
+/// The whole premise of error normalization, pinned in the bytes rather than
+/// in the extractor.
 ///
-/// One pair across the two sessions differs *only* in the four things D-04
-/// normalizes away, and the other differs *only* in a bare integer D-04
+/// One pair across the two sessions differs *only* in the four things
+/// normalization strips, and the other differs *only* in a bare integer it
 /// deliberately keeps. Neither claim is checkable once the extractor has run:
 /// by then both pairs are just values, and a rule that collapsed everything and
 /// a rule that collapsed nothing both look plausible.
@@ -619,7 +620,7 @@ fn the_error_fixtures_hold_one_collapsing_pair_and_one_that_must_not() {
         } else if looks_like_line_col(x) && looks_like_line_col(y) {
             "line:col"
         } else {
-            panic!("the pair differs in something D-04 does not normalize: {x} vs {y}");
+            panic!("the pair differs in something normalization keeps: {x} vs {y}");
         };
         kinds.insert(kind);
     }
@@ -633,8 +634,9 @@ fn the_error_fixtures_hold_one_collapsing_pair_and_one_that_must_not() {
         "the pair is entirely variable, so collapsing it proves nothing"
     );
 
-    // Pair two: unflagged, non-empty stderr - D-03's other arm - and differing
-    // in exactly one digit, which is the bare integer D-04 must not strip.
+    // Pair two: unflagged, non-empty stderr - the error rule's other arm - and
+    // differing in exactly one digit, which is the bare integer normalization
+    // must not strip.
     let bare = |rows: &[(bool, String, bool)]| -> String {
         let hits: Vec<String> = rows
             .iter()
@@ -663,7 +665,7 @@ fn the_error_fixtures_hold_one_collapsing_pair_and_one_that_must_not() {
         two_a.as_bytes()[index].is_ascii_digit() && two_b.as_bytes()[index].is_ascii_digit(),
         "the one difference must be a digit"
     );
-    // And that digit must not read as a line number, or D-04's `:line:col` rule
+    // And that digit must not read as a line number, or the `:line:col` rule
     // would collapse this pair for a reason that has nothing to do with it.
     assert!(
         !two_a[..index].ends_with(':'),
@@ -679,7 +681,7 @@ fn the_error_fixtures_hold_one_collapsing_pair_and_one_that_must_not() {
     );
 }
 
-/// D-07's equal-score case: the sidechain turn and a top-level turn say exactly
+/// The equal-score case: the sidechain turn and a top-level turn say exactly
 /// the same thing, so BM25 cannot break the tie and the tiebreak under test is
 /// the only thing left that can.
 #[test]
@@ -716,17 +718,18 @@ fn the_echo_sidecar_repeats_a_top_level_turn_word_for_word() {
     );
 }
 
-// --- Phase 5 -----------------------------------------------------------------
+// --- Injection ---------------------------------------------------------------
 
-/// D-05: `session-edits.jsonl` stores an ABSOLUTE path, the way the real corpus
+/// `session-edits.jsonl` stores an ABSOLUTE path, the way the real corpus
 /// does, and its tool turn carries a second entity beside it.
 ///
-/// Both halves are what AC3 rests on. The absolute spelling is the one a stored
-/// `path` entity almost always has - 1,029 absolute against 2 relative over 120
-/// sampled real transcripts - and `Query::matches_entity` needs every token of
-/// that value present in the query, so a prompt naming the file relatively can
-/// only match it after resolution. The second entity is INJ-03's co-occurrence
-/// condition having something to fire on: one turn, two independent facts.
+/// Both halves are what the relative-path case rests on. The absolute spelling
+/// is the one a stored `path` entity almost always has - 1,029 absolute against
+/// 2 relative over 120 sampled real transcripts - and `Query::matches_entity`
+/// needs every token of that value present in the query, so a prompt naming the
+/// file relatively can only match it after resolution. The second entity is
+/// the co-occurrence condition having something to fire on: one turn, two
+/// independent facts.
 ///
 /// The root token is substituted here rather than left literal, because
 /// `{{ROOT}}/...` is not an absolute path on any platform and asserting over it
@@ -782,7 +785,7 @@ fn the_edits_fixture_stores_an_absolute_path_and_a_second_entity() {
         assert!(
             distinct.len() >= 2,
             "one entity on the tool turn leaves the co-occurrence half of \
-             INJ-03 nothing to fire on: {entities:?}"
+             the threshold nothing to fire on: {entities:?}"
         );
     }
 
