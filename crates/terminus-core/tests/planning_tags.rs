@@ -11,6 +11,8 @@
 //! code, and every test input that carries a tag is assembled at run time.
 //! Not gated on `testkit`, so `cargo test -p terminus-core` always runs it.
 
+use std::path::{Path, PathBuf};
+
 /// Where a piece of text came from. Code comments refuse a phase number;
 /// markdown prose may name one.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -237,6 +239,90 @@ fn rust_pieces(source: &str) -> Vec<Piece> {
         }
     }
     pieces
+}
+
+/// The directories walked, the extension read in each, and a floor under the
+/// files found. Each holds well over its floor, so a walk that finds fewer went
+/// somewhere else. `fuzz` is never walked whole: its ignored build output and
+/// corpus hold tens of thousands of files.
+const WALKED: [(&str, &str, usize); 7] = [
+    ("crates/terminus-core/src", "rs", 40),
+    ("crates/terminus-core/tests", "rs", 25),
+    ("crates/terminus/src", "rs", 25),
+    ("crates/terminus/tests", "rs", 20),
+    ("fuzz/fuzz_targets", "rs", 10),
+    ("fuzz/src", "rs", 1),
+    ("docs", "md", 10),
+];
+
+/// The single files read, beside the walked directories.
+const NAMED: [&str; 5] = [
+    "Cargo.toml",
+    "crates/terminus-core/Cargo.toml",
+    "crates/terminus/Cargo.toml",
+    "fuzz/Cargo.toml",
+    "tests/fixtures/README.md",
+];
+
+fn files_with(dir: &Path, extension: &str, out: &mut Vec<PathBuf>) {
+    let entries = std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display()));
+    for entry in entries {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            files_with(&path, extension, out);
+        } else if path.extension().and_then(|e| e.to_str()) == Some(extension) {
+            out.push(path);
+        }
+    }
+}
+
+/// The comment text of one file, read by its extension.
+fn pieces(path: &Path) -> Vec<Piece> {
+    let source =
+        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("rs") => rust_pieces(&source),
+        Some("toml") => toml_pieces(&source),
+        Some("md") => markdown_pieces(&source),
+        other => panic!("{} has no reader for {other:?}", path.display()),
+    }
+}
+
+/// Every comment in the named roots, and every line of the docs, is free of
+/// planning tags. All findings are collected first, so one run names every
+/// site by file and line.
+#[test]
+fn no_comment_or_doc_line_cites_a_planning_tag() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut files: Vec<PathBuf> = NAMED.iter().map(|name| root.join(name)).collect();
+    for (dir, extension, floor) in WALKED {
+        let mut found = Vec::new();
+        files_with(&root.join(dir), extension, &mut found);
+        assert!(
+            found.len() >= floor,
+            "only {} .{extension} files under {dir}",
+            found.len()
+        );
+        files.extend(found);
+    }
+    let mut findings = Vec::new();
+    for path in &files {
+        let shown = path
+            .strip_prefix(&root)
+            .unwrap_or(path)
+            .display()
+            .to_string();
+        for piece in pieces(path) {
+            for found in tags(&piece.text, piece.kind) {
+                findings.push(format!("{shown}:{}: {found}", piece.line));
+            }
+        }
+    }
+    assert!(
+        findings.is_empty(),
+        "planning tags in comments:\n{}",
+        findings.join("\n")
+    );
 }
 
 /// A tag of `prefix` and `digits`, built at run time so this file holds none.
