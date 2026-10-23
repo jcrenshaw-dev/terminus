@@ -143,7 +143,15 @@ impl Bench {
     /// through hand-written SQL: what `compact` reclaims is exactly the pages
     /// `retention::apply` freed, and a test that deleted differently would be
     /// compacting a store no user can produce.
+    ///
+    /// Each transcript is removed first, because `retention::apply` keeps a
+    /// session whose transcript is still on disk (#43). The tests after this
+    /// only run `compact`, `sessions`, `status` and `usage`, never another
+    /// ingest, so nothing finds the files gone.
     fn delete(&self, keys: &[&Path]) {
+        for key in keys {
+            std::fs::remove_file(key).unwrap();
+        }
         let mut store = Store::open(&self.data_dir).unwrap();
         let selection = Selection {
             delete: keys.iter().map(|k| key_of(k)).collect(),
