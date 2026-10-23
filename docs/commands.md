@@ -30,6 +30,8 @@ Every hook Claude Code fires starts this pass in the background, so running it b
 
 Archives one transcript file. A file inside an excluded project is not read, and the command says so on stderr and exits 0. It does not close sessions, apply retention or take a snapshot. Those are steps of the whole-tree pass above.
 
+Each run that holds the ingest lock leaves one row, which `terminus status` shows as the last run, whether the file was archived, already up to date, or failed. A file that cannot be archived is named under `error` there, and the command exits 1. When another pass holds the lock, it exits 0 having done nothing.
+
 ### `terminus backfill`
 
 Archives every transcript already on disk without holding the terminal. It prints how many transcripts there are, how many bytes are not yet archived, and an estimate of the time at the rate measured for its 4 workers. Then it starts the work in a detached process and returns. When it finds no transcripts, it prints the zero counts and starts nothing. A folder under a root that cannot be listed is printed as a problem, and nothing under it is counted or archived.
@@ -119,7 +121,7 @@ Rebuilds every table derived from the archive, the search index among them. Turn
 
 ### `terminus status`
 
-Prints the store's path and size, the number of sessions and turns, how far into the transcripts the archive has read, the excluded projects, and the last ingest pass: when it started, how long it took, the files walked, archived and failed, the bytes read, the turns added, and its notes and errors. The lines recovery leaves, such as a watermark it lowered, print under `error` even when nothing failed. A pass's failures are recorded here and nowhere else, since there is no log file. It takes no lock, so it works while a pass runs. With no store, it says so and exits 0, and creates no store. On a store older than the binary, it says so on stderr, reports what is there, and changes nothing.
+Prints the store's path and size, the number of sessions and turns, how far into the transcripts the archive has read, the excluded projects, and the last ingest pass: when it started, how long it took, the files walked, archived and failed, the bytes read, the turns added, and its notes and errors. The lines recovery leaves, such as a watermark it lowered, print under `notes`, so a pass that only repaired a watermark shows no error. A pass's failures are recorded here and nowhere else, since there is no log file. It takes no lock, so it works while a pass runs. With no store, it says so and exits 0, and creates no store. On a store older than the binary, it says so on stderr, reports what is there, and changes nothing.
 
 - `--json`
 
@@ -192,7 +194,7 @@ It changes nothing. Retention acts only inside the ingest pass, and this command
 
 ### `terminus doctor`
 
-Reports what is wired into Claude Code and what is not. It checks the binary at `~/.local/bin/terminus` and its version, Claude Code's `settings.json`, each of the four hook entries, the MCP entry, the `claude` command, the transcript roots, the data directory, the store, the last ingest pass, and the two Claude Code settings Terminus [reports and never changes](configuration.md#claude-code-settings-terminus-reports). Each check is `ok`, `note`, `unknown` or `problem`, and where there is something to run, it carries the command that fixes it.
+Reports what is wired into Claude Code and what is not. It checks the binary at `~/.local/bin/terminus` and its version, Claude Code's `settings.json`, each of the four hook entries, the MCP entry, the `claude` command, the transcript roots, the data directory, the store, the last ingest run, and the two Claude Code settings Terminus [reports and never changes](configuration.md#claude-code-settings-terminus-reports). Each check is `ok`, `note`, `unknown` or `problem`, and where there is something to run, it carries the command that fixes it. The last ingest run is a `problem` when it failed a file or recorded an error, including `terminus ingest <path.jsonl>` on a damaged file, and it stays one until a later run records no failure.
 
 It writes nothing and repairs nothing. It reads `settings.json` only for the keys it checks and never prints the file. It exits 1 only when a check is a `problem`.
 

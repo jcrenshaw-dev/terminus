@@ -240,9 +240,11 @@ file it points at, and a path outside those two shapes, such as a file under no
   its WAL sidecars together.
 - `last_run` is null on a store no pass has ever written to.
 - `error` holds what went wrong on that pass, one line each: a file skipped, a
-  watermark repaired, a step that could not run. `notes` holds what a healthy
-  pass did worth saying, such as labels written and sessions retention evicted.
-  Each is null when there is nothing to say, and `doctor` flags only `error`.
+  step that could not run. `notes` holds what a healthy pass did worth saying,
+  such as labels written, sessions retention evicted, a watermark recovery
+  lowered or removed, and finalized sessions left waiting for the next pass to
+  observe. Each is null when there is nothing to say, and `doctor` flags only
+  `error`.
 - A machine with no store is an ordinary empty answer: exit 0, `ok` true, a
   `reason`, `store`, `excluded` and `last_run` null, every number zero, and no
   data directory created by the asking.
