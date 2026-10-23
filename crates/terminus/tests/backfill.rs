@@ -1,5 +1,5 @@
-//! AC8 / ING-11: `terminus backfill` returns the shell before the archive is
-//! full, and costs a hook firing beside it nothing.
+//! `terminus backfill` returns the shell before the archive is full, and costs
+//! a hook firing beside it nothing.
 //!
 //! The three properties here are the ones a user experiences and a unit test
 //! cannot reach, because all three are about a second process:
@@ -11,12 +11,12 @@
 //!    assertion is satisfied by a command that does nothing at all;
 //! 3. an `ingest` launched while the backfill runs loses the lock race and exits
 //!    0 in under 50 ms with empty stdout, exactly as `tests/lock_race.rs`
-//!    asserts for two ingests (D-18).
+//!    asserts for two ingests.
 //!
 //! and two more that are about what the work leaves behind:
 //!
 //! 4. a backfill SIGKILLed at aimed and randomized points and rerun converges on
-//!    the store an uninterrupted one reaches (AC8, D-22) - the shape
+//!    the store an uninterrupted one reaches - the shape
 //!    `tests/crash.rs` already uses, aimed at the pipeline rather than at the
 //!    sequential pass;
 //! 5. over the real corpus, a backfill and a `terminus ingest` tree pass archive
@@ -47,10 +47,10 @@ use terminus_core::ingest::{self, fault, Attempt};
 use terminus_core::store::DB_FILE_NAME;
 use terminus_core::testkit::{self, Rng};
 
-/// AC8's budget for handing the shell back.
+/// The budget for handing the shell back.
 const RETURN_BUDGET: Duration = Duration::from_millis(100);
 
-/// ING-02's budget for a contended run, the same one `tests/lock_race.rs` uses.
+/// The budget for a contended run, the same one `tests/lock_race.rs` uses.
 const CONTENDED_BUDGET: Duration = Duration::from_millis(50);
 
 /// How long a backfill of this tree is allowed to take before the test gives up
@@ -221,7 +221,7 @@ fn place(project: &Path, name: &str, fixture: &str) -> PathBuf {
     dest
 }
 
-/// AC8's first half: the estimate, then the shell, then the work.
+/// The estimate, then the shell, then the work.
 #[test]
 fn backfill_prints_an_estimate_and_finishes_behind_the_shell() {
     let dirs = Dirs::new();
@@ -255,7 +255,7 @@ fn backfill_prints_an_estimate_and_finishes_behind_the_shell() {
     dirs.wait_for_sessions(sessions);
 }
 
-/// AC8's 100 ms, and the store still empty when the shell comes back.
+/// The 100 ms return, and the store still empty when the shell comes back.
 #[test]
 fn backfill_returns_inside_the_budget_with_the_store_still_empty() {
     let dirs = Dirs::new();
@@ -313,7 +313,7 @@ fn race_a_backfill(dirs: &Dirs) -> (std::process::Output, Duration) {
     (contended, elapsed)
 }
 
-/// D-18: a hook firing during a backfill costs the hook nothing.
+/// A hook firing during a backfill costs the hook nothing.
 ///
 /// The same property `tests/lock_race.rs` asserts for two ingests, against the
 /// process the user actually has running for minutes.
@@ -333,7 +333,7 @@ fn an_ingest_during_a_backfill_loses_the_race_and_exits_zero() {
     dirs.wait_for_sessions(sessions);
 }
 
-/// ING-02's 50 ms, for an ingest that lost to a backfill.
+/// The 50 ms contended budget, for an ingest that lost to a backfill.
 #[test]
 fn an_ingest_during_a_backfill_exits_inside_the_budget() {
     let dirs = Dirs::new();
@@ -505,7 +505,7 @@ fn work_fully(dirs: &Dirs, data_dir: &Path) {
     );
 }
 
-/// AC8's second half, and D-22: a killed backfill converges.
+/// A killed backfill converges.
 ///
 /// Aimed kills first, then timed ones, the split `tests/crash.rs` makes. A timed
 /// kill lands where the clock says, and the window is set from one

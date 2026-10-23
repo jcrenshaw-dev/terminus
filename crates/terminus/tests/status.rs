@@ -1,4 +1,4 @@
-//! `terminus status` at the process boundary (ING-09).
+//! `terminus status` at the process boundary.
 //!
 //! Everything asserted here has to come out of the store: there is no log file
 //! by design, so a pass's failures are only ever visible because `runs` kept
@@ -218,7 +218,7 @@ fn status_counts_the_file_a_single_file_ingest_committed() {
     );
 }
 
-/// AC7's reporting half. A tree with one damaged transcript: the pass still
+/// Reporting a failed file. A tree with one damaged transcript: the pass still
 /// ingests the rest, and `status` names that file and its error.
 #[test]
 fn status_prints_the_damaged_files_path_and_error_from_the_last_run() {
@@ -313,13 +313,12 @@ fn status_prints_a_passs_routine_notes_apart_from_its_errors() {
     assert_eq!(run["error"], serde_json::Value::Null, "{document}");
 }
 
-/// D-24: `status --json` emits the same numbers the human output prints, as one
+/// `status --json` emits the same numbers the human output prints, as one
 /// document, and any OTHER argument is still misuse.
 ///
 /// The numbers are read out of the store independently and compared against the
 /// document rather than against the prose, because two accounts of one store
-/// that can disagree is the whole reason the retrofit landed in the phase that
-/// owns the contract rather than beside install in phase 4.
+/// that can disagree are the failure this test exists to catch.
 #[test]
 fn status_json_carries_the_same_numbers_as_the_human_output() {
     let bench = bench();
@@ -513,7 +512,7 @@ fn status_reads_while_the_ingest_lock_is_held() {
     );
 }
 
-/// ING-08's read half at the process boundary. Two projects are archived with
+/// Exclusion on read, at the process boundary. Two projects are archived with
 /// no exclusions configured; one is excluded afterwards and `status` stops
 /// counting it, without a re-ingest and without the rows leaving the store.
 ///

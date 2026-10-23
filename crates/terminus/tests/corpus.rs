@@ -1,8 +1,8 @@
-//! AC1 / AC2 / D-24 / D-25: one real pass over the private corpus, measured.
+//! One real pass over the private corpus, measured.
 //!
 //! Everything else in this suite runs against seven synthetic fixtures. This
 //! runs against the tree the product exists for - 1,896 files and ~988 MB when
-//! CONTEXT measured it, growing daily - and it is the only test that can catch
+//! last measured, growing daily - and it is the only test that can catch
 //! the class of defect that only appears at that scale: a sidecar layout the
 //! walk does not reach, a record shape the parser has never seen, a rebuild
 //! that is fine over 3 MB and unacceptable over 988.
@@ -17,8 +17,8 @@
 //! to get wrong: `TERMINUS_CONFIG_DIR` must also point somewhere temporary and
 //! empty, because the Claude-directory override replaces only the **default**
 //! root. An explicit `roots` list in the developer's real `terminus.toml` would
-//! win over it, and once exclusions are configured - the feature this phase
-//! ships - the run would walk his configured roots and skip his excluded
+//! win over it, and once exclusions are configured the run would walk his
+//! configured roots and skip his excluded
 //! projects while this file's own walk counted the corpus tree, and the counts
 //! would disagree for a reason nobody would find. The corpus variable must be
 //! the only thing that decides what is walked.
@@ -33,11 +33,11 @@
 //! whole run - which stays true both as the corpus grows between runs and as it
 //! grows during one.
 //!
-//! The walk here is deliberately **not** `discover::discover`. AC1 says every
-//! `<uuid>.jsonl` and every `agent-*.jsonl` beneath the root at any depth, and
-//! reusing the product's own filter to decide which files those are would make
-//! the assertion agree with itself: a walk that missed the 41 sidecars at depth
-//! 6 would miss them on both sides and pass.
+//! The walk here is deliberately **not** `discover::discover`. A transcript is
+//! an `agent-*.jsonl` at any depth or a `<uuid>.jsonl` directly inside a project
+//! directory, and reusing the product's own filter to decide which files those
+//! are would make the assertion agree with itself: a walk that missed the 41
+//! sidecars at depth 6 would miss them on both sides and pass.
 
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -49,7 +49,8 @@ use rusqlite::Connection;
 use terminus_core::store::{DB_FILE_NAME, DERIVED_SCHEMA, META_DERIVED_SCHEMA};
 use terminus_core::testkit::{self, LineSurvey};
 
-/// AC1, AC2, D-24 and D-25 against the real tree, in one pass.
+/// Discovery, lineage, the record-type census and the derived rebuild against
+/// the real tree, in one pass.
 ///
 /// One test and not six: the pass over ~988 MB is the expensive part and every
 /// assertion below is about the store that one pass produced.
@@ -121,7 +122,7 @@ fn a_pass_over_the_real_corpus_archives_every_transcript_and_nothing_else() {
         .collect();
     println!("archived {} sessions", sessions.len());
 
-    // --- AC1, the positive half: every stable transcript has a session. ---
+    // --- Discovery, positive half: every stable transcript has a session. ---
     //
     // With one documented exception, asserted by name rather than allowed for
     // by a slack count: `ingest_locked` returns `UpToDate` and writes no
@@ -151,7 +152,7 @@ fn a_pass_over_the_real_corpus_archives_every_transcript_and_nothing_else() {
         &missing[..missing.len().min(10)]
     );
 
-    // --- AC1, the negative half: nothing else became a session. ---
+    // --- Discovery, negative half: nothing else became a session. ---
     for key in &sessions {
         let path = Path::new(key);
         assert!(
@@ -177,7 +178,7 @@ fn a_pass_over_the_real_corpus_archives_every_transcript_and_nothing_else() {
         );
         assert!(
             is_transcript(&projects, path),
-            "a session key that is not a transcript by AC1's own rule: {key}"
+            "a session key that is not a transcript by this test's own rule: {key}"
         );
     }
 
@@ -213,7 +214,7 @@ fn a_pass_over_the_real_corpus_archives_every_transcript_and_nothing_else() {
         survey.unparseable
     );
 
-    // D-25: counted and printed, never asserted as a closed set. 16 distinct
+    // Counted and printed, never asserted as a closed set. 16 distinct
     // top-level types were measured including `pr-link` and `frame-link`, the
     // set grows upstream, and an exact assertion fails on data that is correct.
     println!("{} distinct record types:", survey.types.len());
@@ -223,7 +224,7 @@ fn a_pass_over_the_real_corpus_archives_every_transcript_and_nothing_else() {
         println!("  {count:>8}  {kind}");
     }
 
-    // --- AC2: lineage, on the same store. ---
+    // --- Lineage, on the same store. ---
     let continued: i64 = conn
         .query_row(
             "SELECT count(*) FROM session_meta WHERE continues_from IS NOT NULL",
@@ -247,11 +248,11 @@ fn a_pass_over_the_real_corpus_archives_every_transcript_and_nothing_else() {
     );
     assert_eq!(
         self_linked, 0,
-        "a session claims to continue itself (D-01), which is the link that would \
+        "a session claims to continue itself, which is the link that would \
          make a resume brief cite the session it is opening"
     );
 
-    // --- AC3: the entities that pass derived, over the real tree. ---
+    // --- The entities that pass derived, over the real tree. ---
     //
     // Every number here is printed and none is asserted: the corpus is live and
     // grows during the run, so a count or a ratio would fail on data that is
@@ -283,7 +284,7 @@ fn a_pass_over_the_real_corpus_archives_every_transcript_and_nothing_else() {
         );
     }
 
-    // The per-turn distribution D-15 set the cap from, remeasured on this tree.
+    // The per-turn distribution the cap was set from, remeasured on this tree.
     let mut counts: Vec<i64> = conn
         .prepare("SELECT count(*) FROM entities GROUP BY turn_id")
         .unwrap()
@@ -333,12 +334,12 @@ fn a_pass_over_the_real_corpus_archives_every_transcript_and_nothing_else() {
     drop(statement);
     drop(conn);
 
-    // --- AC4: the hook budget, against the store this pass built. ---
+    // --- The hook budget, against the store this pass built. ---
     hook_budget(&data_dir);
 
-    // --- D-24: the rebuild a bumped DERIVED_SCHEMA triggers, timed. ---
+    // --- The rebuild a bumped DERIVED_SCHEMA triggers, timed. ---
     //
-    // Named in D-24 as the scale consequence to plan around: on the real corpus
+    // The scale consequence to plan around: on the real corpus
     // this rebuilds every session's derived rows from the blobs, inside the
     // ingest lock, before any walk begins. Its cost is the number that decides
     // whether a store-format bump is a hiccup or an outage.
@@ -359,15 +360,15 @@ const FIXTURES: &[(&str, &str)] = &[
     ("PostCompact", "hooks/post-compact.json"),
 ];
 
-/// AC4: the cold-start budget, measured over the REAL corpus.
+/// The cold-start budget, measured over the REAL corpus.
 ///
 /// `hook.rs`'s budget test runs against a temporary tree its own `hook()`
 /// harness builds - a handful of records - and that is the right shape for the
 /// kill, detach and stdin tests that share the harness. It cannot answer the
-/// question this one does: whether the brief's last-turn lookup, which INJ-07
-/// now makes scan backwards past every `user` record the harness wrote, still
+/// question this one does: whether the brief's last-turn lookup, which scans
+/// backwards past every `user` record the harness wrote, still
 /// costs single-digit milliseconds on a store holding 1,896 sessions and
-/// hundreds of thousands of turns. So the measurement lives here, where D-14's
+/// hundreds of thousands of turns. So the measurement lives here, where the
 /// `TERMINUS_TEST_CORPUS` gate and its loud skip already are.
 ///
 /// A helper of the one pass and not a `#[test]` of its own: the ~988 MB ingest
@@ -407,10 +408,10 @@ fn hook_budget(data_dir: &Path) {
     //
     // `cargo test` builds debug by default, and there the same store and the
     // same 100 runs measure `SessionStart` p50 10.38 ms, p99 10.85 ms. That
-    // overage is not INJ-07's extra `AND`: with the `AND` reverted the debug
-    // p50 is 10.24 ms, inside the noise, and consistent with D-11's 0.002 ms /
-    // 0.362 ms measurement of that lookup. It is the INJ-01 index pointer
-    // in `crates/terminus-core/src/inject/brief.rs`, whose
+    // overage is not the last-turn lookup's extra `AND`: with the `AND`
+    // reverted the debug p50 is 10.24 ms, inside the noise, and consistent with
+    // the 0.002 ms / 0.362 ms measured for that lookup. It is the brief's index
+    // pointer in `crates/terminus-core/src/inject/brief.rs`, whose
     // `SELECT count(*) FROM turns JOIN session_meta` scales with the scoped
     // project: ~3.2 ms of the 10.4 is the fixed store open plus scope
     // resolution and ~6.3 ms is that count, on a project holding 70,302 turns.
@@ -429,8 +430,8 @@ fn hook_budget(data_dir: &Path) {
         ("release", Some(10.0_f64))
     };
 
-    // Empty and temporary, both of them (D-14). Every hook detaches an ingest
-    // of its own (ING-10), which walks the CONFIGURED roots: without this the
+    // Empty and temporary, both of them. Every hook detaches an ingest of its
+    // own, which walks the CONFIGURED roots: without this the
     // 400 spawns would each start a walk of the corpus tree, and a config
     // directory that is not temporary lets the developer's real `roots` decide
     // what is walked. The data directory is the corpus-built store, which is
@@ -474,10 +475,10 @@ fn hook_budget(data_dir: &Path) {
                 output.status.code()
             );
             // Only `SessionStart` is asserted to have said something. It is the
-            // arm INJ-07 changed, and a brief on every run is what makes the
-            // number above a measurement of the new lookup rather than of a
-            // hook that resolved no project and returned. The other three are
-            // deliberately not asserted empty: `UserPromptSubmit` may
+            // arm that runs the last-turn lookup, and a brief on every run is
+            // what makes the number above a measurement of that lookup rather
+            // than of a hook that resolved no project and returned. The other
+            // three are deliberately not asserted empty: `UserPromptSubmit` may
             // legitimately inject against a corpus this size.
             if *event == "SessionStart" {
                 assert!(
@@ -602,7 +603,7 @@ fn time_a_forced_rebuild(data_dir: &Path) -> Duration {
     elapsed
 }
 
-/// Every transcript beneath `projects`, by AC1's own rule.
+/// Every transcript beneath `projects`, by the rule [`is_transcript`] states.
 fn transcripts(projects: &Path) -> BTreeSet<PathBuf> {
     walk_files(projects)
         .into_iter()
@@ -610,8 +611,8 @@ fn transcripts(projects: &Path) -> BTreeSet<PathBuf> {
         .collect()
 }
 
-/// AC1's rule, read independently of `discover`: an `agent-*.jsonl` at any
-/// depth, or a `<uuid>.jsonl` directly inside a project directory.
+/// The transcript rule, read independently of `discover`: an `agent-*.jsonl` at
+/// any depth, or a `<uuid>.jsonl` directly inside a project directory.
 fn is_transcript(projects: &Path, path: &Path) -> bool {
     let Ok(relative) = path.strip_prefix(projects) else {
         return false;
