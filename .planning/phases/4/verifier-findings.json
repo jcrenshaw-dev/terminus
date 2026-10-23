@@ -1,0 +1,94 @@
+{
+  "status": "delivered",
+  "score": "7/7",
+  "truths": [
+    {
+      "n": 1,
+      "truth": "A search for a word plus a standalone U+0345 returns the same hits as the word alone, through the CLI and MCP, and a word plus a pointed Hebrew word returns only the turns holding both",
+      "status": "VERIFIED",
+      "uat_item": 1,
+      "evidence": "Exists and wired: crates/terminus-core/src/recall/query.rs:91 drops a piece when piece.chars().all(makes_no_token), inside Query::parse before the case-folded dedup and the MAX_QUERY_TOKENS cap; makes_no_token is a binary search over UNINDEXABLE (crates/terminus-core/src/recall/unindexable.rs:201). Tests pass in the full run: an_unindexable_word_changes_no_hit (recall_cli), an_unindexable_word_changes_no_recall_search_hit (mcp), a_pointed_word_still_narrows_a_search, a_word_the_tokenizer_makes_no_token_from_is_dropped, a_dropped_word_takes_no_slot_under_the_cap, a_query_of_only_unindexable_words_is_nothing_searchable (core recall). Spot-check, branch binary target/debug/terminus on a scratch TERMINUS_DATA_DIR with a fixture and a hand-written transcript ingested: CLI `search --project * --json quokkafoo` -> [16777216, 16777217]; `quokkafoo U+0345` -> [16777216, 16777217]; `quokkafoo <pointed shalom>` -> [16777217] only (the one turn holding both); `U+0345` alone -> no hits, reason 'the query has no words that can be searched'. MCP recall_search project '*': 'quokkafoo' and 'quokkafoo U+0345' both isError false with [16777216, 16777217]; 'quokkafoo <pointed shalom>' -> [16777217]."
+    },
+    {
+      "n": 2,
+      "truth": "A test runs every Rust-alphanumeric code point through the bundled SQLite's tokenizer, passes on the tree, and fails when an entry is removed from the Rust table",
+      "status": "VERIFIED",
+      "uat_item": 2,
+      "evidence": "crates/terminus-core/src/recall/unindexable.rs:268 the_table_is_what_the_bundled_tokenizer_does builds an FTS5 table plus an fts5vocab instance table in memory, one row per char::is_alphanumeric code point, and asserts the table agrees with the tokenizer on every one. It passes in the full run (suite log: 'recall::unindexable::tests::the_table_is_what_the_bundled_tokenizer_does ... ok'). The table has 167 ranges covering 1,061 code points, sorted and non-overlapping (parsed from the source). Mutation probe: in a scratch copy of 938ae29 with only the ('\\u{345}', '\\u{345}') row deleted, `cargo test -p terminus-core --all-features --lib unindexable` FAILED with 'the table and the bundled SQLite disagree on U+0345' and printed the full 167-row table in source syntax, ready to paste."
+    },
+    {
+      "n": 3,
+      "truth": "An impossible date exits 2 naming the flag as typed from search, sessions and observations regenerate, including with no store, and MCP recall_search returns isError naming since",
+      "status": "VERIFIED",
+      "uat_item": 3,
+      "evidence": "Wired: crates/terminus/src/cmd/mod.rs:190 date_value runs terminus_core::recall::checked_bound and maps a failure to Failure::Misuse('--' + core message). It is called by cmd/search.rs:225-226, cmd/sessions.rs:248-249 and cmd/observations.rs:416 while the arguments are read. MCP optional_time (cmd/mcp/tools.rs:766) calls recall::checked_bound and maps to Refused::caller; run_search reads since/until at tools.rs:314, before reader() at :329. Spot-check, branch binary on a fresh scratch data dir with no store: `search --since 2026-02-30 x`, `sessions --until 2026-13-01`, `observations regenerate --since 2026-02-30` and `search --until 2026-08-12T25:00:00.000Z x` each exit=2, stdout 0 bytes, stderr 'terminus: --since \"2026-02-30\" is not a real date or time; expected YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS.mmmZ' (--until with its value for the other two); data dir not created. Controls with real edge dates (2024-02-29, 2026-08-12T23:59:59.999Z, 2000-02-29) exit 0. MCP recall_search since '2026-02-30' with no store: isError true, reason 'since \"2026-02-30\" is not a real date or time; ...', with no '--since'. Tests pass: an_impossible_date_is_misuse_with_no_store, a_bad_command_line_is_misuse_and_not_an_empty_result (recall_cli), an_impossible_since_is_misuse_with_no_store, a_malformed_since_is_misuse_and_rebuilds_nothing (observations), an_impossible_since_is_a_caller_error_with_or_without_a_store (mcp)."
+    },
+    {
+      "n": 4,
+      "truth": "There is one core date check, cmd::time_bound and the dead InvalidTimeFilter arms are gone, and search::run rejects a bad date before it resolves scope",
+      "status": "VERIFIED",
+      "uat_item": 4,
+      "evidence": "`git grep -n 'fn time_bound' crates/` and `git grep -n time_bound crates/ docs/` print nothing; `git grep -n InvalidTimeFilter crates/terminus/src/` prints nothing. crates/terminus-core/src/recall/search.rs:342 `let bounds = request.filters.bounds()?;` runs before scope::resolve at :343; checked_bound (:700) checks month, Gregorian day length (is_real_date :726) and hour/minute/second (is_real_time :743). Test a_bad_date_is_refused_before_any_scope_answer passes, with its control (a real date from the same uncovered directory gives Ok with UnknownProject). Mutation probe: with the bounds() call moved after the scope's early return in a scratch copy, the test FAILED with '`2026-02-30` as since was not a caller error: Ok(Response { hits: [], reason: Some(UnknownProject { .. }) .. })', so the test pins the order."
+    },
+    {
+      "n": 5,
+      "truth": "Every list in recall/ is bound as one json_each parameter, MAX_PATHS is gone, and a search with more paths than SQLite's variable limit returns hits with no error from core, the CLI and MCP",
+      "status": "VERIFIED",
+      "uat_item": 5,
+      "evidence": "`git grep -nE 'repeat_n\\(\"\\?\"' crates/` and `git grep -n MAX_PATHS crates/ docs/` print nothing, and no per-element '?' builder is left in crates/ (grep for push('?') and repeat(\"?\") is empty). json_each sites: recall/search.rs:518 (re-rank ids), :647 (path filter), recall/get.rs:251 (rows_for), recall/excerpt.rs:154 (coordinates), recall/scope.rs:186 (both exclusion lists). MCP run_search passes every path through (cmd/mcp/tools.rs:313), and the paths descriptor has no maxItems. Tests pass: a_path_list_past_the_variable_limit_still_finds_its_turn (core, 40,000 paths through search::run, the real one last, exactly one hit) and a_path_filter_past_the_variable_limit_is_filtered_on_in_full (mcp, 40,000 paths, isError false, hits non-empty, reason null). Spot-check, branch binary on a scratch store: `search --project * --json` with 40,000 --path values (the real one last) and query docs/RETRY.md -> exit 0, 1 hit, reason null, the same hit as a single --path control; MCP recall_search with 40,000 paths -> isError false, 1 hit, reason null. The SQL is platform-independent (same bundled amalgamation), so the macOS CI runners are not a separate behaviour question."
+    },
+    {
+      "n": 6,
+      "truth": "With one project excluded, a session with no project still appears in search, and with a worktree excluded, the repository session with no pre-worktree key is still quoted and counted in the session-start brief",
+      "status": "VERIFIED",
+      "uat_item": 6,
+      "evidence": "crates/terminus-core/src/recall/scope.rs:186 keeps '({column} IS NULL OR {column} NOT IN (SELECT value FROM json_each(?)))' for both columns. push_filter is called by recall/search.rs:362, inject/brief.rs:495 (last session) and inject/mod.rs:447 (counts). Tests pass: a_session_with_no_project_survives_an_exclusion (recall_cli; asserts the premise project IS NULL, excludes project-beta, and gets non-empty hits all with project null) and a_session_excluded_under_its_worktree_key_is_neither_quoted_nor_counted (inject_brief; REPO is quoted, '1 session and 2 turns'). The REPO session's project_pre_worktree is null because ingest writes it only when folding happened (crates/terminus-core/src/ingest/mod.rs:1566). Mutation probe: with 'IS NULL OR' removed in a scratch copy, both tests FAILED. The CLI test failed with 'the session with no project dropped out'; the brief test panicked at inject_brief.rs:1212 on expect(\"a brief\")."
+    },
+    {
+      "n": 7,
+      "truth": "cargo test --workspace --all-features passes",
+      "status": "VERIFIED",
+      "uat_item": 7,
+      "evidence": "One full run at the branch head, saved to the scratchpad: 68 'test result' lines, 1,028 passed, 0 failed, 0 ignored, exit 0, and no 'warning' line in the build output; planning_tags reports 11 passed. Anti-pattern scan of the phase's added lines in crates/ and docs/ (7ce8c3b..938ae29): no TODO, FIXME, XXX, HACK, placeholder, not implemented, todo!() or unimplemented!(). The rustfmt drift the SUMMARY lists (crates/terminus/tests/recall_cli.rs, and cmd/hook.rs, which the phase did not touch) is confirmed by `rustfmt --check`. It is off the goal path: CI has no fmt step (.github/workflows has no fmt or rustfmt match), and D-13 rules out workspace fmt."
+    }
+  ],
+  "passes": [
+    {
+      "k": 1,
+      "name": "An unindexable word changes no hit, and a pointed Hebrew word still narrows",
+      "evidence": "query.rs:91 drops all-unindexable pieces in Query::parse before the dedup and cap. CLI and MCP tests pass. Branch-binary spot-check on a scratch store: 'quokkafoo' and 'quokkafoo U+0345' give the same two hits through the CLI and MCP; 'quokkafoo <pointed shalom>' gives only the turn holding both; 'U+0345' alone gives 'the query has no words that can be searched'."
+    },
+    {
+      "k": 2,
+      "name": "The tokenizer sweep test guards the table",
+      "evidence": "unindexable.rs:268 sweeps every char::is_alphanumeric code point through an in-memory FTS5 table and fts5vocab, and passes in the full run. The table has 167 ranges and 1,061 code points. With the U+0345 row deleted in a scratch copy, the test fails naming U+0345 and prints the regenerated table."
+    },
+    {
+      "k": 3,
+      "name": "An impossible date is misuse naming the flag, from the CLI and MCP",
+      "evidence": "Branch binary on a store-less scratch data dir: the four commands each exit 2 with empty stdout and stderr naming --since or --until with the value; the data dir is not created; real edge dates exit 0. MCP since '2026-02-30' gives isError true with a reason naming since and no '--since'. Named CLI, observations and MCP tests pass."
+    },
+    {
+      "k": 4,
+      "name": "One core date check, run before the scope",
+      "evidence": "fn time_bound and the terminus-side InvalidTimeFilter arms grep empty. search.rs:342 checks the bounds before scope::resolve at :343. a_bad_date_is_refused_before_any_scope_answer passes, and fails with Ok(UnknownProject) when the check is moved after the scope in a scratch copy."
+    },
+    {
+      "k": 5,
+      "name": "Every list is one parameter and the paths cap is gone",
+      "evidence": "The repeat_n and MAX_PATHS greps are empty, and json_each now binds the lists in search.rs, get.rs, excerpt.rs and scope.rs. The core 40,000-path test and the rewritten MCP 40,000-path test pass. Branch-binary spot-check: 40,000 --path values via the CLI, and 40,000 paths via MCP, each return the one real hit with no error and a null reason."
+    },
+    {
+      "k": 6,
+      "name": "Sessions with no project survive an exclusion",
+      "evidence": "scope.rs:186 keeps the IS NULL guard on both json_each NOT IN clauses. a_session_with_no_project_survives_an_exclusion and a_session_excluded_under_its_worktree_key_is_neither_quoted_nor_counted pass, and both fail when the guard is removed in a scratch copy."
+    },
+    {
+      "k": 7,
+      "name": "The workspace suite passes",
+      "evidence": "cargo test --workspace --all-features at the branch head: 1,028 passed, 0 failed, exit 0, no warning lines."
+    }
+  ],
+  "gaps": [],
+  "human_checks": []
+}
