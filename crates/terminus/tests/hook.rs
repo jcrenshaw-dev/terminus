@@ -765,6 +765,9 @@ fn reading_the_hooks_stdout_to_eof_returns_at_once_while_the_ingest_still_runs()
         .expect("write the payload");
 
     let limit = Duration::from_millis(250);
+    // A miss is the runner's when a single freeze took half the limit: a
+    // value of its own, so a check that forces the limit down leaves it be.
+    let stall_line = Duration::from_millis(125);
     let started = Instant::now();
     // The read runs on a thread of its own and times itself there, so a poll
     // below that wakes late does not charge its own delay to the hook. The
@@ -777,33 +780,71 @@ fn reading_the_hooks_stdout_to_eof_returns_at_once_while_the_ingest_still_runs()
         let result = pipe.read_to_end(&mut bytes).map(|_| bytes);
         let _ = done.send((result, started.elapsed()));
     });
-    let (stdout, elapsed) = loop {
+    let mut last_poll = started;
+    let mut longest_gap = Duration::ZERO;
+    // When a poll first saw the hook gone, counted from `started`. The status
+    // is left for the `wait` below, which returns the one collected here.
+    let mut exited_at = None;
+    let outcome = loop {
+        let now = Instant::now();
+        longest_gap = longest_gap.max(now - last_poll);
+        last_poll = now;
+        if exited_at.is_none() && child.try_wait().expect("poll the hook").is_some() {
+            exited_at = Some(started.elapsed());
+        }
         match read.try_recv() {
-            Ok(result) => break result,
+            Ok(result) => break Some(result),
             Err(mpsc::TryRecvError::Disconnected) => {
                 panic!("the reading thread ended without saying how the read ended")
             }
             Err(mpsc::TryRecvError::Empty) => {}
         }
-        assert!(
-            started.elapsed() < limit,
-            "reading the hook's stdout to EOF was still open after {:?}: the \
-             ingest is holding a handle the hook inherited",
-            started.elapsed()
-        );
+        if started.elapsed() >= limit {
+            break None;
+        }
         std::thread::sleep(Duration::from_millis(5));
     };
     // Sampled the moment the poll sees the read's result: a pass only ever
     // adds its row, so none now means none when the read returned.
     let runs_at_eof = runs(&hook);
-    let stdout = stdout.expect("read the hook's stdout to EOF");
 
+    let stdout = match outcome {
+        Some((stdout, elapsed)) if elapsed < limit => stdout,
+        missed => {
+            let read_at = missed.as_ref().map(|(_, elapsed)| *elapsed);
+            let spawn = time_a_spawn();
+            // A hook gone before its stdout reached EOF left the write end
+            // open in something it started.
+            let held = exited_at.is_some_and(|exit| read_at.is_none_or(|read| exit < read));
+            let verdict = if runner_stalled(longest_gap, &spawn, stall_line) {
+                "the runner stalled"
+            } else if held {
+                "a process the hook started held stdout open"
+            } else {
+                "the hook was blocked"
+            };
+            panic!(
+                "reading the hook's stdout to EOF {} against a limit of {}; the \
+                 hook {}; the longest gap between polls was {}; a /usr/bin/true \
+                 spawn {}. Verdict: {verdict}",
+                match read_at {
+                    Some(at) => format!("returned after {}", ms(at)),
+                    None => format!("was still open after {}", ms(started.elapsed())),
+                },
+                ms(limit),
+                match exited_at {
+                    Some(at) => format!("had exited, first seen {} after the read began", ms(at)),
+                    None => "had not exited".to_owned(),
+                },
+                ms(longest_gap),
+                spawn
+                    .as_ref()
+                    .map_or_else(Clone::clone, |took| format!("took {}", ms(*took))),
+            );
+        }
+    };
+    let stdout = stdout.expect("read the hook's stdout to EOF");
     assert!(stdout.is_empty(), "the hook wrote {stdout:?} to stdout");
-    assert!(
-        elapsed < limit,
-        "reading the hook's stdout to EOF took {elapsed:?}: the ingest is \
-         holding a handle the hook inherited"
-    );
     assert!(child.wait().expect("wait for the hook").success());
 
     // The pass reached the hold. Only the ready file is polled for, and there
