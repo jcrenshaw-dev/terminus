@@ -16,7 +16,7 @@ The indexing half is called by the ingest pass in [0003: Ingest](0003-ingest.md)
 | Projection | The text a turn actually said, read from four parts of its record, with no JSON keys, numbers or booleans. |
 | Expansion token | A camelCase or PascalCase piece of a word in the body that the body does not already hold, appended so a query for the piece finds the whole word. |
 | Entity | One `(kind, value_norm)` pair in `entities`, taken from a turn's structured tool fields. The kinds are `path`, `command`, `error`, `symbol` and `tool`. |
-| Query token | One piece of the typed string, split on every character that is not a letter or a digit, as the index splits text. |
+| Query token | One piece of the typed string, split on every character that is not a letter or a digit, kept only when at least one of its characters is one the tokenizer makes a token from. |
 | Exact match | A stored entity value whose tokens are exactly the query's tokens, in order. |
 | Covered match | A stored entity value all of whose tokens are in the query, which asks for more besides. |
 | Scope | Which project a read answers about: the directory the caller stands in, a named path, or `*` for every project. |
@@ -35,6 +35,7 @@ Indexing and querying live in the library crate, `crates/terminus-core`, under `
 | [`crates/terminus-core/src/index/entity.rs`](../../crates/terminus-core/src/index/entity.rs) | The five entity kinds, extraction from a record's tool fields, the cap of `MAX_ENTITIES_PER_TURN`, 48, and the path and error normalization. |
 | [`crates/terminus-core/src/recall/mod.rs`](../../crates/terminus-core/src/recall/mod.rs) | The query layer the terminal commands and the MCP server share. Nothing in it writes, and every function takes a connection the caller opened. |
 | [`crates/terminus-core/src/recall/query.rs`](../../crates/terminus-core/src/recall/query.rs) | Turns a typed string into query tokens and the FTS5 expression, and decides whether a stored entity value is an exact or a covered match. |
+| [`crates/terminus-core/src/recall/unindexable.rs`](../../crates/terminus-core/src/recall/unindexable.rs) | The code points `unicode61` makes no token from, checked against the bundled SQLite by its own test. |
 | [`crates/terminus-core/src/recall/search.rs`](../../crates/terminus-core/src/recall/search.rs) | One search: the filters, the ranking query, the entity re-rank and the cut to the limit. `MAX_RESULTS` and `DEFAULT_RESULTS`. |
 | [`crates/terminus-core/src/recall/scope.rs`](../../crates/terminus-core/src/recall/scope.rs) | Resolves a scope to one project key by longest-prefix match against the stored keys, and lists the excluded ones. |
 | [`crates/terminus-core/src/recall/excerpt.rs`](../../crates/terminus-core/src/recall/excerpt.rs) | Cuts each hit's excerpt from the block rows its turn covers, through the same projection ingest indexed. |
@@ -71,7 +72,7 @@ Search writes three derived tables at ingest and reads them, with `turns` and `s
 
 JSON keys are never emitted, and neither are numbers or booleans. The text stops at `MAX_BODY_BYTES`. Under `[capture] mode` `lean` or `minimal`, an elided `toolUseResult` or `attachment` contributes nothing.
 
-Then `index::expand` appends expansion tokens. The table uses FTS5's default tokenizer, plain `unicode61`, with no custom tokenizer, and `unicode61` already splits on every character that is not a letter or a digit. So snake_case, kebab-case and path parts are already tokens of their own: a query for `worker` finds `src/worker/S.ts` and a query for `manager` finds `search_manager_new`, with nothing appended. What `unicode61` does not split is a case boundary, so `SearchManager` would not be found by `manager`. For each word, the expansion appends its camelCase or PascalCase pieces, `Search` and `Manager` here, but only pieces the body does not already contain, in the order the text gives them, up to `MAX_EXPANSION_BYTES`. Digits stay with their piece, so `S3Client` gives `S3` and `Client`, and the last capital of a run starts the next piece, so `HTTPServer` gives `HTTP` and `Server`.
+Then `index::expand` appends expansion tokens. The table uses FTS5's default tokenizer, plain `unicode61`, with no custom tokenizer. `unicode61` makes tokens from characters in the Unicode letter, number and private-use categories and splits on everything else, so snake_case, kebab-case and path parts are already tokens of their own: a query for `worker` finds `src/worker/S.ts` and a query for `manager` finds `search_manager_new`, with nothing appended. What it splits on includes some characters Rust counts as letters, such as combining marks like U+0345 and circled letters like U+24B6, so the query drops a word made only of them. What `unicode61` does not split is a case boundary, so `SearchManager` would not be found by `manager`. For each word, the expansion appends its camelCase or PascalCase pieces, `Search` and `Manager` here, but only pieces the body does not already contain, in the order the text gives them, up to `MAX_EXPANSION_BYTES`. Digits stay with their piece, so `S3Client` gives `S3` and `Client`, and the last capital of a run starts the next piece, so `HTTPServer` gives `HTTP` and `Server`.
 
 ### What becomes an entity
 
@@ -121,7 +122,7 @@ Options are in [commands.md](../commands.md#reading-the-archive), and the `--jso
 
 ```mermaid
 flowchart TD
-  W["the words typed"] --> P["Query::parse: split on every non-alphanumeric, drop case-folded repeats, keep the first 32"]
+  W["the words typed"] --> P["Query::parse: split on every non-alphanumeric, drop words the tokenizer makes no token from, drop case-folded repeats, keep the first 32"]
   P --> S["scope::resolve: longest-prefix match of the path against stored project keys"]
   S --> R{"a project, or every project?"}
   R -->|"neither"| M["empty result with the reason"]
