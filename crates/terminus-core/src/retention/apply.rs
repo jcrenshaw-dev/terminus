@@ -34,6 +34,10 @@ pub struct Applied {
     pub over: usize,
     /// Sessions an excluded project holds, which retention passed over.
     pub excluded: usize,
+    /// Sessions selected for deletion whose transcript was back on disk when
+    /// the delete came, so [`apply`] kept them (#43). Not a failure and not in
+    /// `notes`: the session is simply still archived.
+    pub kept: usize,
     /// Whatever could not be done, said rather than raised. There is no log
     /// file, so these travel into `runs.error` with the pass's other failures.
     pub notes: Vec<String>,
@@ -46,6 +50,7 @@ impl Applied {
             && self.deleted.is_empty()
             && self.over == 0
             && self.excluded == 0
+            && self.kept == 0
             && self.notes.is_empty()
     }
 
@@ -90,6 +95,13 @@ impl Applied {
                 self.excluded
             ));
         }
+        if self.kept > 0 {
+            out.push(format!(
+                "{} session(s) selected for deletion were kept because their transcript was back \
+                 on disk when the delete came; they are still archived",
+                self.kept
+            ));
+        }
         out
     }
 }
@@ -107,12 +119,13 @@ pub fn apply(store: &mut Store, selection: &super::Selection) -> Applied {
     }
     for session_key in &selection.delete {
         match delete_one(store.conn_mut(), session_key) {
-            Ok(observation) => {
+            Ok(Some(observation)) => {
                 out.deleted.push(session_key.clone());
                 if observation {
                     out.observations_lost += 1;
                 }
             }
+            Ok(None) => out.kept += 1,
             Err(e) => out
                 .notes
                 .push(format!("{session_key}: the deletion failed: {e}")),
@@ -144,7 +157,18 @@ fn evict_one(conn: &mut Connection, session_key: &str) -> Result<()> {
 }
 
 /// Remove one session and everything keyed on it, answering whether an
-/// `observations` row went with it.
+/// `observations` row went with it, or `None` when the session was kept.
+///
+/// **It asks about the transcript again first (#43).** [`super::evaluate`] named
+/// this session when its transcript was gone, and a transcript can come back
+/// between that and now. So the stored `session_meta.transcript_path` is read
+/// again, in the same transaction as the delete it guards, and a session whose
+/// transcript is back is left untouched and counted on [`Applied::kept`]. The
+/// stored path, never the key: after a moved `.claude` directory the key names a
+/// path that is gone. The check is per session, not once at the top of
+/// [`apply`], so a transcript that comes back partway through a batch is still
+/// caught. It narrows the window between selection and delete without closing
+/// it, because the ingest lock guards the store and not the transcript tree.
 ///
 /// **Child first, and that is not tidiness.** The derived tables and their
 /// order are `reindex::clear_derived`'s, which this calls first. The bundled
@@ -166,11 +190,19 @@ fn evict_one(conn: &mut Connection, session_key: &str) -> Result<()> {
 /// joins them on exactly that equality). Leaving it would let a row claim bytes
 /// for a session that is gone - and `recover`'s orphan sweep would delete it on
 /// the next pass and report a repair for damage retention caused.
-fn delete_one(conn: &mut Connection, session_key: &str) -> Result<bool> {
+fn delete_one(conn: &mut Connection, session_key: &str) -> Result<Option<bool>> {
     let tx = conn.transaction()?;
+    let transcript_path: String = tx.query_row(
+        "SELECT transcript_path FROM session_meta WHERE session_key = ?1",
+        [session_key],
+        |r| r.get(0),
+    )?;
+    if !super::transcript_is_gone(&transcript_path) {
+        return Ok(None);
+    }
     let observations = delete_session(&tx, session_key)?;
     tx.commit()?;
-    Ok(observations > 0)
+    Ok(Some(observations > 0))
 }
 
 /// Delete one session and every row keyed on it, inside the caller's

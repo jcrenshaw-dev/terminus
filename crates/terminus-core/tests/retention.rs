@@ -461,6 +461,7 @@ fn a_deletion_removes_every_row_the_session_owns() {
     let bench = bench();
     let key = bench.archive("doomed.jsonl");
     bench.plant_observation(&key);
+    bench.remove_transcript(&key);
     for (table, count) in bench.rows(&key) {
         assert!(count > 0, "{table} has nothing to delete");
     }
@@ -516,6 +517,7 @@ fn a_decision_naming_the_deleted_session_survives_it() {
             [&session_id],
         )
         .unwrap();
+    bench.remove_transcript(&key);
 
     bench.apply(&Selection {
         delete: vec![key.clone()],
@@ -544,6 +546,8 @@ fn a_failure_on_one_session_does_not_stop_the_next() {
     let fine = bench.archive("fine.jsonl");
     bench.plant_observation(&doomed);
     bench.plant_observation(&fine);
+    bench.remove_transcript(&doomed);
+    bench.remove_transcript(&fine);
     bench
         .conn()
         .execute_batch(&format!(
@@ -580,6 +584,51 @@ fn a_failure_on_one_session_does_not_stop_the_next() {
             "{table} still holds a row for the deleted session"
         );
     }
+}
+
+/// A transcript that comes back between selection and delete keeps its session
+/// (#43). `evaluate` names the session while the transcript is gone, the bytes
+/// are written back, and `apply` asks again just before the delete: nothing
+/// goes, and the kept session is a note, never an error.
+#[test]
+fn a_transcript_that_comes_back_before_the_delete_keeps_its_session() {
+    let bench = bench();
+    let key = bench.archive("returning.jsonl");
+    let rows = bench.rows(&key);
+    let matched = bench.matches(testkit::UNIQUE_TOKEN);
+    assert!(matched > 0, "the fixture has to be searchable to start with");
+
+    // Setup only: these are the two columns `evaluate` reads.
+    bench
+        .conn()
+        .execute(
+            "UPDATE session_meta SET is_final = 1, last_turn_at = ?2 WHERE session_key = ?1",
+            rusqlite::params![key, ANCIENT],
+        )
+        .unwrap();
+    let bytes = std::fs::read(&key).unwrap();
+    bench.remove_transcript(&key);
+
+    let selection = bench.evaluate(&config(DELETE_30));
+    assert_eq!(selection.delete, vec![key.clone()], "the premise");
+
+    std::fs::write(&key, bytes).unwrap();
+    let applied = bench.apply(&selection);
+
+    assert!(applied.deleted.is_empty(), "{:?}", applied.deleted);
+    assert!(applied.notes.is_empty(), "{:?}", applied.notes);
+    assert!(applied.errors().is_empty(), "{:?}", applied.errors());
+    assert_eq!(applied.kept, 1);
+    assert!(
+        applied
+            .notes()
+            .iter()
+            .any(|l| l.contains("transcript was back on disk")),
+        "the kept session has to be said: {:?}",
+        applied.notes()
+    );
+    assert_eq!(bench.rows(&key), rows, "a kept session lost a row");
+    assert_eq!(bench.matches(testkit::UNIQUE_TOKEN), matched);
 }
 
 // Eviction on the ingest side. An evicted session's block rows were deleted on

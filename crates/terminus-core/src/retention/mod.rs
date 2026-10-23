@@ -198,7 +198,8 @@ pub fn evaluate(conn: &Connection, config: &Config, now: &str) -> Result<Selecti
                 // delete rule beyond the age: a session whose transcript is still
                 // on disk is rediscovered by `discover::discover` on the next hook
                 // spawn and re-ingested from offset 0, so deleting it reclaims
-                // nothing measurable.
+                // nothing measurable. `apply` asks again just before each
+                // delete, because the transcript can come back after this (#43).
                 if transcript_is_gone(&row.transcript_path) {
                     out.delete.push(row.session_key);
                 }
