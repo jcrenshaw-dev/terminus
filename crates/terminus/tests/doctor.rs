@@ -694,6 +694,133 @@ fn a_last_run_with_only_notes_is_ok() {
     assert_eq!(report.state("last_run"), "ok", "{}", report.whole);
 }
 
+/// One `session-basic.jsonl` transcript as `discover` finds one, a
+/// `<uuid>.jsonl` directly inside a project directory.
+fn place_basic(fixture: &Fixture) -> PathBuf {
+    let project = fixture.claude_dir.join("projects").join("-data-code-x");
+    std::fs::create_dir_all(&project).unwrap();
+    let path = project.join("44444444-4444-4444-8444-444444444444.jsonl");
+    std::fs::write(&path, testkit::fixture_bytes("session-basic.jsonl")).unwrap();
+    path.canonicalize().unwrap()
+}
+
+fn store(fixture: &Fixture) -> rusqlite::Connection {
+    rusqlite::Connection::open(
+        fixture
+            .root
+            .join("data")
+            .join(terminus_core::store::DB_FILE_NAME),
+    )
+    .unwrap()
+}
+
+/// A bare `terminus ingest`, which must exit 0.
+fn ingest(fixture: &Fixture) {
+    let out = fixture.run(&["ingest"]);
+    assert_eq!(out.status.code(), Some(0), "ingest failed: {}", text(&out));
+}
+
+/// `terminus status`'s stdout, from a run that exited 0.
+fn status(fixture: &Fixture) -> String {
+    let out = fixture.run(&["status"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    String::from_utf8(out.stdout).unwrap()
+}
+
+/// A pass that only recovered is not an error (#96).
+///
+/// The damage is real: the session's watermark is pushed past what its archive
+/// holds, the state a killed pass leaves, and the next `terminus ingest` has to
+/// lower it. Nothing is planted in `runs`, so what `status` and `doctor` show
+/// is what that pass wrote.
+#[test]
+fn a_pass_that_only_lowered_a_watermark_is_not_an_error() {
+    let fixture = fixture();
+    fixture.install();
+    let path = place_basic(&fixture);
+    ingest(&fixture);
+
+    let key = terminus_core::ingest::path_key(&path).unwrap();
+    let conn = store(&fixture);
+    let committed: i64 = conn
+        .query_row(
+            "SELECT uncompressed_len FROM session_meta WHERE session_key = ?1",
+            [&key],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let changed = conn
+        .execute(
+            "UPDATE watermarks SET byte_offset = ?2 WHERE transcript_path = ?1",
+            rusqlite::params![key, committed + 4096],
+        )
+        .unwrap();
+    assert_eq!(changed, 1, "the session has no watermark to push");
+    drop(conn);
+    ingest(&fixture);
+
+    let printed = status(&fixture);
+    assert!(
+        !printed.contains("  error"),
+        "a pass that only recovered printed an error: {printed}"
+    );
+    let (_, notes) = printed
+        .split_once("  notes\n")
+        .unwrap_or_else(|| panic!("status printed no notes: {printed}"));
+    let line = notes
+        .lines()
+        .take_while(|line| line.starts_with("    "))
+        .map(str::trim_start)
+        .find(|line| line.starts_with(&format!("{key}: ")))
+        .unwrap_or_else(|| panic!("no note names {key}: {printed}"))
+        .to_owned();
+    assert!(line.ends_with("lowered"), "{line}");
+
+    let out = fixture.run(&["status", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let document: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let run = &document["data"]["last_run"];
+    assert_eq!(run["error"], serde_json::Value::Null, "{document}");
+    assert!(
+        run["notes"]
+            .as_str()
+            .is_some_and(|notes| notes.lines().any(|l| l == line)),
+        "{document}"
+    );
+
+    let (code, report) = fixture.doctor();
+    assert_eq!(code, Some(0), "{}", report.whole);
+    assert_eq!(report.state("last_run"), "ok", "{}", report.whole);
+}
+
+/// A pass that skipped a transcript is a problem until a later run fails
+/// nothing. The transcript is cut shorter than what its archive already holds,
+/// which the walk names and skips.
+#[test]
+fn a_pass_that_skipped_a_shrunk_transcript_is_a_problem() {
+    let fixture = fixture();
+    fixture.install();
+    let path = place_basic(&fixture);
+    ingest(&fixture);
+
+    std::fs::write(&path, b"{}\n").unwrap();
+    // Exit 0: a skipped file is not a failed pass.
+    ingest(&fixture);
+
+    let printed = status(&fixture);
+    let (_, under_error) = printed
+        .split_once("  error\n")
+        .unwrap_or_else(|| panic!("status printed no error: {printed}"));
+    assert!(
+        under_error.contains(path.to_str().unwrap()),
+        "status does not name the transcript under error: {printed}"
+    );
+
+    let (code, report) = fixture.doctor();
+    assert_eq!(code, Some(1), "{}", report.whole);
+    assert_eq!(report.problems(), ["last_run"], "{}", report.whole);
+}
+
 /// Every name directly inside `dir`, sorted.
 fn entries(dir: &Path) -> Vec<String> {
     let mut found: Vec<String> = std::fs::read_dir(dir)
