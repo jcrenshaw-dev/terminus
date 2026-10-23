@@ -13,8 +13,8 @@
 
 use std::path::{Path, PathBuf};
 
-/// Where a piece of text came from. Code comments refuse a phase number;
-/// markdown prose may name one.
+/// Where a piece of text came from. Code comments refuse a phase or task
+/// number; markdown prose may name one.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Kind {
     Code,
@@ -76,6 +76,11 @@ fn tag_at(bytes: &[u8], at: usize, kind: Kind) -> Option<usize> {
     }
     if kind == Kind::Code && rest.len() > 6 && rest[..6].eq_ignore_ascii_case(b"phase ") {
         if let Some(end) = digits_end(bytes, at + 6, 1, usize::MAX) {
+            return Some(end);
+        }
+    }
+    if kind == Kind::Code && rest.len() > 5 && rest[..5].eq_ignore_ascii_case(b"task ") {
+        if let Some(end) = digits_end(bytes, at + 5, 1, usize::MAX) {
             return Some(end);
         }
     }
@@ -379,16 +384,21 @@ fn every_family_fires_in_a_code_comment() {
 }
 
 #[test]
-fn a_phase_number_fires_in_code_in_any_case_and_not_in_markdown() {
-    for word in ["phase", "Phase", "PHASE"] {
+fn a_phase_or_task_number_fires_in_code_in_any_case_and_not_in_markdown() {
+    for word in ["phase", "Phase", "PHASE", "task", "Task", "TASK"] {
         let text = format!("// lands in {word} {}", 4);
         assert_eq!(tags(&text, Kind::Code), vec![format!("{word} 4")], "{text}");
         assert!(tags(&text, Kind::Markdown).is_empty(), "{text}");
     }
-    // A phase with no number, or a word that only ends in phase, is prose.
+    let possessive = format!("// {}'s work still ran", tag("Task ", "5"));
+    assert_eq!(tags(&possessive, Kind::Code), vec![tag("Task ", "5")]);
+    // A phase or task with no number, or a word that only ends in one, is
+    // prose.
     assert!(tags("each phase of the pass", Kind::Code).is_empty());
-    let compound = format!("subphase {}", 2);
-    assert!(tags(&compound, Kind::Code).is_empty());
+    assert!(tags("each task of the pass", Kind::Code).is_empty());
+    for compound in [format!("subphase {}", 2), format!("subtask {}", 2)] {
+        assert!(tags(&compound, Kind::Code).is_empty(), "{compound}");
+    }
 }
 
 #[test]
