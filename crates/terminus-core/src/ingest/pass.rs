@@ -24,18 +24,19 @@
 //! session, so the divergence reaches `terminus verify` rather than living only
 //! in a `runs` row nobody diffs. The archive itself is still untouched.
 //!
-//! `ingest::run`'s single-file behaviour and its refusals are unchanged. The
-//! skip lives here, in the pass, and not in `ingest_locked` - a caller that
-//! named one file deserves the error it asked about.
+//! The walk records a file's failure and goes on. A named file's failure, from
+//! `ingest::run`, comes back to its caller once its row is written: the skip
+//! lives here, in the walk, and not in `ingest_locked` - a caller that named
+//! one file deserves the error it asked about.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::config::Config;
 use crate::discover;
 use crate::error::Result;
 use crate::ingest::driver::{self, Walk};
-use crate::ingest::{Claim, RunRow};
+use crate::ingest::Claim;
 use crate::project::Resolver;
 use crate::store::Store;
 
@@ -402,18 +403,8 @@ fn walk(
                 continue;
             }
         };
-        // A fresh `Instant` per file: the elapsed time the pass reports is the
-        // walk's, measured by the driver, not this file's.
-        let ingested = crate::ingest::ingest_locked(
-            store,
-            rows,
-            &path,
-            session_key,
-            Instant::now(),
-            RunRow::PassOwns,
-            projects,
-            mode,
-        );
+        let ingested =
+            crate::ingest::ingest_locked(store, rows, &path, session_key, projects, mode);
         driver::tally(store, summary, &path, ingested);
     }
     Ok(())

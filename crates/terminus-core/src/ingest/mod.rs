@@ -2,9 +2,11 @@
 //! tree across a fixed set of worker threads in [`backfill`].
 //!
 //! The order of the first steps is the design. The path is canonicalized before
-//! anything else, the lock is taken **before** the store is opened, and
-//! everything the pass writes commits in **one** transaction so a killed
-//! process leaves no partially indexed session.
+//! anything else, the lock is taken **before** the store is opened, and the
+//! file's bytes, turns and watermark commit in **one** transaction so a killed
+//! process leaves no partially indexed session. The run's `runs` row is written
+//! after that transaction, by the driver every pass runs through, so a kill
+//! between the two leaves a committed file with no row and nothing worse.
 //!
 //! Reads happen outside that transaction and writes inside it, which is safe
 //! for exactly one reason: the `LOCK` guard above is the only writer, so
@@ -21,7 +23,6 @@ pub mod runs;
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 pub use lock::{Attempt, IngestLock, LOCK_FILE_NAME};
 
@@ -44,8 +45,9 @@ pub enum Outcome {
     LockHeld,
     /// The transcript has no complete record past the stored watermark, or it
     /// grew after [`Existing::read`] found it no longer than the watermark, so
-    /// its hashes were never fetched and the next pass appends it. No row
-    /// is added anywhere, not even to `runs`. The one write it can make is to
+    /// its hashes were never fetched and the next pass appends it. Nothing is
+    /// added to the archive; the run's one `runs` row records it as one file
+    /// seen and none committed. The one archive write it can make is to
     /// the archived session's `session_meta.transcript_path`, and only when
     /// the file was read from somewhere else than the path stored there, so a
     /// moved file's row names where it is now.
@@ -107,12 +109,9 @@ pub fn run_with(
     transcript: &Path,
     config: &crate::config::Config,
 ) -> Result<Outcome> {
-    let started = Instant::now();
-
     // Before anything else, and resolving symlinks: `~/.claude` is a symlink
     // chain on the development machine (`DESIGN-BRIEF.md:406`), so the same
     // transcript reached by two paths would otherwise get two archive rows.
-    // This resolves CONTEXT's third flagged assumption as "canonicalize".
     let canonical = transcript
         .canonicalize()
         .map_err(|e| Error::io(transcript, e))?;
@@ -125,45 +124,80 @@ pub fn run_with(
         return Ok(Outcome::Excluded(project));
     }
 
-    let _guard = match lock::try_acquire(data_dir)? {
-        Attempt::Held => return Ok(Outcome::LockHeld),
-        Attempt::Acquired(guard) => guard,
+    // A list of one, through the same driver as the tree pass: the lock,
+    // recovery, and one `runs` row whether the file commits, is up to date or
+    // fails. A failure comes back as its typed error once the row is written.
+    let mut one = Named {
+        path: &canonical,
+        mode: config.capture_mode(),
+        session_key: String::new(),
+        ingested: Ingested::UpToDate,
     };
-
-    // Recovery first, under the lock, before this transcript is read.
-    // `ingest::run` is a run: without this it would proceed against a watermark
-    // ahead of what this file's committed blocks hold, `read_tail` would resume
-    // from an offset the archive never reached, and the gap would be lost from
-    // the archive in silence. It also brings a store older than this build
-    // forward, so a pass never appends turn rows in one shape beside rows
-    // written in another.
-    let (mut store, _recovered) = crate::recover::recover(data_dir)?;
-
-    // This key's row only, after recovery, which rewrites rows. The walk and
-    // backfill read every row through the same query, and `Existing::read`
-    // asks it which file holds the key on all three paths.
-    let session_key = path_key(&canonical)?;
-    let rows = read_rows(store.conn(), Some(&session_key))?;
-
-    // One resolver for one invocation: a single file has one `cwd`, so the memo
-    // buys nothing here and costs nothing either, and `ingest_locked` takes the
-    // same shape whether its caller named one file or walked two thousand.
-    let mut projects = Resolver::new();
-    Ok(
-        match ingest_locked(
-            &mut store,
-            &rows,
-            &canonical,
-            session_key,
-            started,
-            RunRow::PerFile,
-            &mut projects,
-            config.capture_mode(),
-        )? {
+    Ok(match driver::drive(data_dir, &mut one)? {
+        pass::PassOutcome::LockHeld => Outcome::LockHeld,
+        pass::PassOutcome::Ran(_) => match one.ingested {
             Ingested::Committed(pass) => Outcome::Committed(pass),
             Ingested::UpToDate => Outcome::UpToDate,
         },
-    )
+    })
+}
+
+/// One named file, as the driver walks it: that key's row only, and none of
+/// the tree pass's other steps.
+struct Named<'a> {
+    /// The canonical path, never a link.
+    path: &'a Path,
+    mode: CaptureMode,
+    /// What [`path_key`] made of `path`, once the lock is held.
+    session_key: String,
+    /// What the file did, once the walk has run.
+    ingested: Ingested,
+}
+
+impl driver::Walk for Named<'_> {
+    fn only(&mut self) -> Result<Option<String>> {
+        // After the lock, so a path that cannot key a session is this file's
+        // failure and leaves its row. This key's row only, read by the driver
+        // after recovery, which rewrites rows; the walk and backfill read every
+        // row through the same query, and `Existing::read` asks it which file
+        // holds the key on all three paths.
+        self.session_key = path_key(self.path)?;
+        Ok(Some(self.session_key.clone()))
+    }
+
+    fn walk(&mut self, store: &mut Store, rows: &Rows, summary: &mut pass::Summary) -> Result<()> {
+        summary.files_walked = 1;
+        // One resolver for one invocation: a single file has one `cwd`, so the
+        // memo buys nothing here and costs nothing either, and `ingest_locked`
+        // takes the same shape whether its caller named one file or walked two
+        // thousand.
+        let ingested = ingest_locked(
+            store,
+            rows,
+            self.path,
+            std::mem::take(&mut self.session_key),
+            &mut Resolver::new(),
+            self.mode,
+        )?;
+        if let Ingested::Committed(pass) = &ingested {
+            summary.files_committed = 1;
+            summary.bytes_read = pass.bytes_read;
+            summary.turns_added = pass.turns_added;
+        }
+        self.ingested = ingested;
+        Ok(())
+    }
+
+    /// Anything that failed after recovery is this file's failure, counted as
+    /// one failed file and not repeated as a `pass failed:` line. It sets no
+    /// divergence flag: only the walk flags a divergence.
+    fn failed(&mut self, summary: &mut pass::Summary, e: &Error) -> Option<String> {
+        summary.files_walked = 1;
+        summary
+            .failures
+            .push((self.path.to_path_buf(), e.to_string()));
+        None
+    }
 }
 
 /// A file named like an archived session whose file is gone, and whose first
@@ -235,23 +269,6 @@ pub(crate) fn claim(
     })
 }
 
-/// Who owns the `runs` row for this file's transaction.
-///
-/// One row per pass, not per file. `record_run` inserts the literals
-/// `files_seen` 1, `files_committed` 1 and `files_failed` 0 from inside the
-/// per-file transaction, which is right for a caller that named one file and is
-/// committing it, and wrong for a tree walk - reused unchanged it would write
-/// roughly 2,071 rows per hook-triggered pass, and the "last ingest run"
-/// `status` reports would name one file rather than the pass.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RunRow {
-    /// `ingest::run`: this file IS the run, and its row commits in the same
-    /// transaction as the pass.
-    PerFile,
-    /// The tree pass owns the row and writes one after the whole walk.
-    PassOwns,
-}
-
 /// The pass itself, with the lock already held and the store already open.
 ///
 /// `path` is the file to read, never a link, and `session_key` is what
@@ -260,20 +277,17 @@ pub(crate) enum RunRow {
 /// report their parent's sessionId, and keying on that writes a 3 KB agent
 /// transcript over a parent session's archive. The watermark is keyed on the
 /// same value.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn ingest_locked(
     store: &mut Store,
     rows: &Rows,
     path: &Path,
     session_key: String,
-    started: Instant,
-    run_row: RunRow,
     projects: &mut Resolver,
     mode: CaptureMode,
 ) -> Result<Ingested> {
     let existing = Existing::read(store.conn(), rows, &session_key, path)?;
     let prepared = prepare(path, session_key, &existing, mode)?;
-    apply(store, prepared, started, run_row, projects)
+    apply(store, prepared, projects)
 }
 
 /// Everything one file's pass produces before anything is written.
@@ -557,8 +571,6 @@ pub(crate) fn prepare(
 pub(crate) fn apply(
     store: &mut Store,
     prepared: Prepared,
-    started: Instant,
-    run_row: RunRow,
     projects: &mut Resolver,
 ) -> Result<Ingested> {
     let Prepared {
@@ -690,9 +702,6 @@ pub(crate) fn apply(
     }
     fault::stall(fault::IN_TX_AFTER_TURNS);
     write_watermark(&tx, &session_key, pass.watermark)?;
-    if run_row == RunRow::PerFile {
-        record_run(&tx, &pass, started.elapsed())?;
-    }
     fault::stall(fault::IN_TX_BEFORE_COMMIT);
     tx.commit()?;
     fault::stall(fault::AFTER_COMMIT);
@@ -1637,35 +1646,6 @@ fn write_session_meta(tx: &Connection, row: MetaRow<'_>) -> Result<()> {
     Ok(())
 }
 
-/// Write the one `runs` row a committed pass leaves behind.
-///
-/// There is no log file; `status` surfaces this table. This records only a
-/// single-file run that committed, inside the same transaction as the run. A
-/// tree pass writes its own row, failed or not, in a transaction of its own
-/// after the walk (`pass::record_pass`).
-pub(crate) fn record_run(
-    conn: &Connection,
-    pass: &Pass,
-    elapsed: std::time::Duration,
-) -> Result<()> {
-    conn.execute(
-        "INSERT INTO runs (started_at, finished_at, duration_ms, files_seen, files_committed,
-                           files_failed, bytes_read, turns_added)
-         VALUES (
-            strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?1),
-            strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-            ?2, 1, 1, 0, ?3, ?4
-         )",
-        rusqlite::params![
-            format!("-{} seconds", elapsed.as_secs_f64()),
-            elapsed.as_millis() as i64,
-            pass.bytes_read as i64,
-            pass.turns_added as i64,
-        ],
-    )?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1728,14 +1708,7 @@ mod tests {
 
         let mut projects = Resolver::new();
         let prepared = prepare(&path, key.clone(), &existing, CaptureMode::Full).unwrap();
-        let outcome = apply(
-            &mut store,
-            prepared,
-            Instant::now(),
-            RunRow::PassOwns,
-            &mut projects,
-        )
-        .unwrap();
+        let outcome = apply(&mut store, prepared, &mut projects).unwrap();
         assert_eq!(outcome, Ingested::UpToDate);
         assert_eq!(watermark(store.conn(), &key), mark);
         assert_eq!(block_rows(store.conn()), rows);
@@ -1743,14 +1716,7 @@ mod tests {
         let rows = read_rows(store.conn(), Some(&key)).unwrap();
         let existing = Existing::read(store.conn(), &rows, &key, &path).unwrap();
         let prepared = prepare(&path, key.clone(), &existing, CaptureMode::Full).unwrap();
-        let outcome = apply(
-            &mut store,
-            prepared,
-            Instant::now(),
-            RunRow::PassOwns,
-            &mut projects,
-        )
-        .unwrap();
+        let outcome = apply(&mut store, prepared, &mut projects).unwrap();
         let Ingested::Committed(pass) = outcome else {
             panic!("the next read did not commit: {outcome:?}");
         };

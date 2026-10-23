@@ -52,13 +52,12 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread::ThreadId;
-use std::time::Instant;
 
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::ingest::driver::{self, Walk};
 use crate::ingest::pass::{PassOutcome, Summary};
-use crate::ingest::{claim, Claim, Existing, Prepared, Rows, RunRow};
+use crate::ingest::{claim, Claim, Existing, Prepared, Rows};
 use crate::project::Resolver;
 use crate::store::Store;
 
@@ -379,11 +378,7 @@ fn commit_one(
     summary: &mut Summary,
     projects: &mut Resolver,
 ) {
-    let applied = prepared.and_then(|prepared| {
-        // A fresh `Instant` per file: the elapsed time the pass reports is the
-        // run's, measured by the driver, not this file's.
-        crate::ingest::apply(store, prepared, Instant::now(), RunRow::PassOwns, projects)
-    });
+    let applied = prepared.and_then(|prepared| crate::ingest::apply(store, prepared, projects));
     // The same handler the sequential walk ends each file with, so a file
     // counts, fails and flags a divergence the same way on both.
     driver::tally(store, summary, path, applied);

@@ -225,16 +225,111 @@ fn every_turn_row_addresses_its_own_record() {
     }
 }
 
-/// A rerun over an unchanged file adds no row to any table, not even `runs`.
+/// A rerun over an unchanged file adds no row to any table but `runs`, which
+/// gains the run's one row: one file seen, none committed, none failed (#31).
 #[test]
-fn a_rerun_on_an_unchanged_file_writes_nothing() {
+fn a_rerun_on_an_unchanged_file_writes_only_its_runs_row() {
     let bench = bench();
     let path = bench.copy("session-basic.jsonl");
     committed(bench.ingest(&path));
 
     let before = counts(&bench.conn());
     assert_eq!(bench.ingest(&path), Outcome::UpToDate);
-    assert_eq!(counts(&bench.conn()), before);
+    let after = counts(&bench.conn());
+    let moved: Vec<(&str, i64)> = before
+        .iter()
+        .zip(&after)
+        .filter(|(b, a)| b.1 != a.1)
+        .map(|(b, a)| (b.0.as_str(), a.1 - b.1))
+        .collect();
+    assert_eq!(
+        moved,
+        vec![("runs", 1)],
+        "an up-to-date rerun moved a table"
+    );
+
+    let run = last_run(&bench.conn());
+    assert_eq!((run.seen, run.committed, run.failed), (1, 0, 0));
+    assert_eq!(run.error, None);
+}
+
+/// The counts and the error of the newest `runs` row.
+#[derive(Debug)]
+struct LastRun {
+    seen: i64,
+    committed: i64,
+    failed: i64,
+    bytes_read: i64,
+    turns_added: i64,
+    error: Option<String>,
+}
+
+fn last_run(conn: &Connection) -> LastRun {
+    conn.query_row(
+        "SELECT files_seen, files_committed, files_failed, bytes_read, turns_added, error
+           FROM runs ORDER BY id DESC LIMIT 1",
+        [],
+        |r| {
+            Ok(LastRun {
+                seen: r.get(0)?,
+                committed: r.get(1)?,
+                failed: r.get(2)?,
+                bytes_read: r.get(3)?,
+                turns_added: r.get(4)?,
+                error: r.get(5)?,
+            })
+        },
+    )
+    .unwrap()
+}
+
+fn runs(conn: &Connection) -> i64 {
+    conn.query_row("SELECT count(*) FROM runs", [], |r| r.get(0))
+        .unwrap()
+}
+
+/// A named file leaves one `runs` row on every run that holds the lock (#31):
+/// when it commits, when it is up to date, and when it fails. The failure
+/// still comes back to the caller as its typed error, and the row names the
+/// file.
+#[test]
+fn a_named_file_writes_one_runs_row_whether_it_commits_is_up_to_date_or_fails() {
+    let bench = bench();
+    let path = bench.copy("session-basic.jsonl");
+
+    let pass = committed(bench.ingest(&path));
+    assert_eq!(runs(&bench.conn()), 1);
+    let run = last_run(&bench.conn());
+    assert_eq!((run.seen, run.committed, run.failed), (1, 1, 0));
+    assert_eq!(run.bytes_read, pass.bytes_read as i64);
+    assert_eq!(run.turns_added, pass.turns_added as i64);
+    assert_eq!(run.error, None);
+
+    assert_eq!(bench.ingest(&path), Outcome::UpToDate);
+    assert_eq!(runs(&bench.conn()), 2);
+    let run = last_run(&bench.conn());
+    assert_eq!((run.seen, run.committed, run.failed), (1, 0, 0));
+    assert_eq!(run.error, None);
+
+    std::fs::write(&path, b"{}\n").unwrap();
+    let err = ingest::run(&bench.data_dir, &path).unwrap_err();
+    assert!(
+        matches!(err, terminus_core::Error::TranscriptDiverged { .. }),
+        "a shrunk file did not fail as diverged: {err}"
+    );
+    assert_eq!(runs(&bench.conn()), 3);
+    let run = last_run(&bench.conn());
+    assert_eq!((run.seen, run.committed, run.failed), (1, 0, 1));
+    let error = run.error.expect("the failed run's row has no error");
+    let canonical = path.canonicalize().unwrap();
+    assert!(
+        error.contains(&*canonical.to_string_lossy()),
+        "the row's error does not name the file: {error}"
+    );
+    assert!(
+        !error.contains("pass failed:"),
+        "one failed file was reported twice: {error}"
+    );
 }
 
 /// Ingest a transcript cut mid-record, let it grow, ingest again: the result
