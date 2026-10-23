@@ -1692,42 +1692,36 @@ fn a_server_with_no_store_answers_with_a_reason_and_creates_no_file() {
     );
 }
 
-/// The `paths` filter binds one SQL placeholder each, so an unbounded
-/// client-supplied array was an operational SQLite failure handed back as an
-/// ordinary empty result carrying the whole generated statement.
+/// #108: a `paths` array longer than SQLite's 32,766 variables is filtered on
+/// in full, with no error and no cap notice.
 ///
-/// Two wrong behaviours in the one answer: a model reads `isError:false` with
-/// no hits as "no matches" rather than "your filter was rejected", and the
-/// reason itself pushed megabytes into the context the budget exists to
-/// protect.
+/// The one path a turn carries is last, so a list cut anywhere would lose it
+/// and answer with no hit. Before #108 the filter bound one parameter per path,
+/// and an array this long was a SQLite failure carrying the whole generated
+/// statement as its reason.
 #[test]
-fn a_path_filter_longer_than_the_cap_is_bounded_and_said_so() {
+fn a_path_filter_past_the_variable_limit_is_filtered_on_in_full() {
     let bench = bench();
     bench.ingest_fixtures();
     let alpha = bench.project("session-recall.jsonl");
 
-    let paths: Vec<String> = (0..40_000).map(|n| format!("/x/{n}")).collect();
+    let mut paths: Vec<String> = (0..39_999).map(|n| format!("/x/{n}")).collect();
+    paths.push("docs/RETRY.md".into());
+    assert_eq!(paths.len(), 40_000);
     let (document, is_error) = bench.call_flagged(
         &alpha,
         "recall_search",
-        serde_json::json!({ "query": "the", "paths": paths }),
+        serde_json::json!({ "query": "docs/RETRY.md", "paths": paths }),
     );
 
+    assert!(!is_error, "a long filter is not a failed call: {document}");
+    assert!(!hits(&document).is_empty(), "{document}");
     let reason = document["reason"].as_str().unwrap_or_default();
-    assert!(
-        reason.contains("paths were filtered on"),
-        "the cap was not reported: {reason}"
-    );
     assert!(
         !reason.contains("SELECT") && !reason.contains("sqlite:"),
         "the generated SQL reached the model's context: {reason}"
     );
-    assert!(
-        reason.len() < 400,
-        "the reason is {} bytes, which is a context budget problem",
-        reason.len()
-    );
-    assert!(!is_error, "a bounded filter is not a failed call");
+    assert!(document["reason"].is_null(), "{document}");
 }
 
 /// An excluded project's name must not reach a client that never asked for it.
