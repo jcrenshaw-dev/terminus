@@ -88,8 +88,8 @@ stderr is left for warnings and irregularities, which are still printed in JSON
 mode - a store whose derived tables predate this build says so on stderr and
 still writes only the document to stdout.
 
-Without `--json` the split is unchanged from what phase 1 and 2 shipped: the
-data on stdout, the counts and the warnings on stderr.
+Without `--json` the data goes to stdout, and the counts and the warnings go to
+stderr.
 
 ## `data` by command
 
@@ -372,9 +372,10 @@ and unchanged.
   another, or `*` for every project. A session the idle rule has not closed
   yet has no row, and neither does an excluded project's session - including one archived before the exclusion was
   configured.
-- `mechanical` is the OBS-01 fact set, and every one of its values is
-  parser-derived: **no model is called and no network connection is opened** by
-  the ingest step that wrote it or by this command that reads it back.
+- `mechanical` is the set of facts an observation records, and every one of its
+  values is parser-derived: **no model is called and no network connection is
+  opened** by the ingest step that wrote it or by this command that reads it
+  back.
   `commands` carries whole command lines with their arguments, which is what the
   `entities` table cannot answer - it holds basenames.
 - `truncated` names the fact lists a cap cut, by field name. A list that is
@@ -546,7 +547,7 @@ other's total is the mistake it exists to prevent.
   `0x40000000` and uses for nothing, present only on a database that has grown
   past 1 GiB. Without those two the sum is short and the reconciliation is a
   claim rather than a property.
-- Exclusion is retroactive (ING-08), so a project excluded after its sessions
+- Exclusion is retroactive, so a project excluded after its sessions
   were archived appears in neither archive total. `footprint` is a property of
   the database file and is not filtered by anything.
 - `usage` is a read: it opens read-only and creates no store.
@@ -568,11 +569,11 @@ read, and it opens without a terminus build. A copy of the store file is a
 snapshot, not an export.
 
 - **`export`'s output is the unredacted transcripts.** Nothing is filtered on
-  the way out. Redaction is keyed on destination and never on operation
-  (PRIV-01), and a directory the user named is not egress - so `notice` is the
-  answer instead: the same words go into the manifest, onto the terminal ahead
-  of the counts, and into this document, because a caller scripting an export is
-  the one most likely to be writing somewhere shared.
+  the way out. Redaction is keyed on destination and never on operation, and a
+  directory the user named is not egress - so `notice` is the answer instead:
+  the same words go into the manifest, onto the terminal ahead of the counts,
+  and into this document, because a caller scripting an export is the one most
+  likely to be writing somewhere shared.
 - `bytes` is the total uncompressed stream written, which is what the files add
   up to - not the compressed size in the archive and not the size of the
   database.
@@ -580,7 +581,7 @@ snapshot, not an export.
   **present, empty file** and named in the manifest with `"evicted": true`, so
   an export never silently drops a session it could not fill.
 - A project the config excludes is in neither the manifest nor the directory.
-  Export is a read path and ING-08 binds every read path alike.
+  Export is a read path and exclusion binds every read path alike.
 - **A destination that already holds anything is refused**, exit 1, with nothing
   written - not merely one that already holds an export. A file this command did
   not write is never overwritten, and every refusal lands before the first byte.
@@ -646,15 +647,14 @@ the same 14 keys: `binary`, `settings_file`, `hook_SessionStart`,
   `autoCompactEnabled` that is neither true nor false.
 - `fix` is a shell command wherever one exists. Where the repair is a value in
   the user's own settings file, it is that edit written out literally, because
-  terminus never changes either of the two Claude Code settings it reports
-  (INST-06).
+  terminus never changes either of the two Claude Code settings it reports.
 - `doctor` writes nothing anywhere: no file, no directory, on any path,
   including the data directory it reports as absent.
 
-`install`, `uninstall` and `data move` deliberately have no `--json` (D-24,
-D-17), and each refuses the flag as misuse. Install prints a receipt written for
-a person, uninstall asks a question before `--purge` deletes the archive, and
-`data move` asks once before it moves the data directory, which a single JSON
+`install`, `uninstall` and `data move` deliberately have no `--json`, and each
+refuses the flag as misuse. Install prints a receipt written for a person,
+uninstall asks a question before `--purge` deletes the archive, and `data move`
+asks once before it moves the data directory, which a single JSON
 document on stdout cannot do.
 
 ## MCP tool results
