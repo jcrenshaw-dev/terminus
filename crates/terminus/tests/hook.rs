@@ -449,16 +449,60 @@ fn a_stdin_that_is_opened_and_never_closed_does_not_hold_the_hook() {
 
     let started = Instant::now();
     let deadline = started + Duration::from_secs(10);
+    // A miss is the runner's when a single freeze took half the limit: a
+    // value of its own, so a check that forces the limit down leaves it be.
+    let stall_line = Duration::from_secs(5);
+    let mut last_poll = started;
+    let mut longest_gap = Duration::ZERO;
     let status = loop {
+        let now = Instant::now();
+        longest_gap = longest_gap.max(now - last_poll);
+        last_poll = now;
         if let Some(status) = child.try_wait().expect("poll the hook") {
             break status;
         }
-        assert!(
-            Instant::now() < deadline,
-            "the hook is still running {:?} after a writer stopped writing: it \
-             is blocked in an unbounded read on stdin",
-            started.elapsed()
-        );
+        if Instant::now() >= deadline {
+            let elapsed = started.elapsed();
+            // Timed before the kill, while whatever held the runner may still
+            // be holding it.
+            let spawn = time_a_spawn();
+            // The hook holds its stderr open until it ends, so the kill comes
+            // before the read.
+            let _ = child.kill();
+            let ended = wait_for(&mut child, Duration::from_secs(5));
+            let stderr = match child.stderr.take() {
+                Some(pipe) => read_for(pipe, Duration::from_secs(5)),
+                None => String::new(),
+            };
+            let evidence = if stderr.contains("stopped waiting on a stdin") {
+                "had logged that it stopped waiting on stdin, so it was past \
+                 stdin and had not exited"
+            } else {
+                "had not logged that it stopped waiting on stdin, so it was \
+                 still waiting on stdin"
+            };
+            let verdict = if runner_stalled(longest_gap, &spawn, stall_line) {
+                "the runner stalled"
+            } else {
+                "the hook was blocked"
+            };
+            panic!(
+                "the hook was still running {} after a writer stopped writing; \
+                 the longest gap between polls was {}; a /usr/bin/true spawn \
+                 {}; the hook {evidence}, and after the kill it {}; its \
+                 stderr: {stderr:?}. Verdict: {verdict}",
+                ms(elapsed),
+                ms(longest_gap),
+                spawn
+                    .as_ref()
+                    .map_or_else(Clone::clone, |took| format!("took {}", ms(*took))),
+                if ended {
+                    "had ended"
+                } else {
+                    "was still running 5 s later"
+                },
+            );
+        }
         std::thread::sleep(Duration::from_millis(10));
     };
 
@@ -638,6 +682,41 @@ fn read_for(mut pipe: impl Read + Send + 'static, wait: Duration) -> String {
         Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
         Err(_) => format!("still open after {wait:?}"),
     }
+}
+
+/// How long one spawn of `/usr/bin/true` takes now, or why it did not run.
+///
+/// Called only once a timing test has missed its limit, to tell a stalled
+/// runner from a blocked hook: a freeze that hits only the disk leaves the
+/// test's polls on time but slows this spawn as much as it slows the hook.
+/// It goes through [`output`] like every spawn in this file, so the time
+/// includes any wait behind a sibling test's binary copy ([`COPYING`]).
+fn time_a_spawn() -> Result<Duration, String> {
+    let started = Instant::now();
+    match output(&mut Command::new("/usr/bin/true")) {
+        Ok(done) if done.status.success() => Ok(started.elapsed()),
+        Ok(done) => Err(format!(
+            "exited {} after {}",
+            done.status,
+            ms(started.elapsed())
+        )),
+        Err(e) => Err(format!("did not run: {e}")),
+    }
+}
+
+/// Whether a missed limit says nothing about the hook: the test's own polls
+/// were held apart, or a trivial spawn took, at least `stall_line`.
+fn runner_stalled(
+    longest_gap: Duration,
+    spawn: &Result<Duration, String>,
+    stall_line: Duration,
+) -> bool {
+    longest_gap >= stall_line || spawn.as_ref().is_ok_and(|took| *took >= stall_line)
+}
+
+/// A duration in milliseconds, the unit every timing message here uses.
+fn ms(duration: Duration) -> String {
+    format!("{:.1} ms", duration.as_secs_f64() * 1000.0)
 }
 
 /// The hook hands the ingest nothing the harness gave it.
