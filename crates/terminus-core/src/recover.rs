@@ -77,8 +77,11 @@ impl Recovered {
         !self.lowered.is_empty() || !self.removed.is_empty()
     }
 
-    /// One line per repair, for a `runs.error` or a `status` report: one per
-    /// lowered watermark, then one per removed watermark.
+    /// One line per repair, for the `runs` row's notes: one per lowered
+    /// watermark, then one per removed watermark. Notes and not errors (#96),
+    /// because a repair is recovery doing its job, and its only lines are
+    /// these lowered or removed watermarks - a pass that repaired one and
+    /// failed nothing failed nothing.
     pub fn lines(&self) -> Vec<String> {
         let mut out = Vec::new();
         for w in &self.lowered {
@@ -100,15 +103,16 @@ impl Recovered {
 /// Open the store for work, recovering it first: bring the derived tables up to
 /// date, then sweep the watermarks.
 ///
-/// One callable with two callers - the tree pass and single-file
-/// `ingest::run` - because recovery runs on every run and `ingest::run` is a
-/// run. Wiring only the pass would leave `terminus ingest <path.jsonl>`
-/// proceeding against a watermark ahead of what that file's committed blob
-/// holds, so `read_tail` would resume from an offset the archive never reached
-/// and the gap would be lost from the blob in silence.
+/// One callable with one caller, the pass driver, which the tree pass, the
+/// backfill and single-file `ingest::run` all run through, because recovery
+/// runs on every run and `ingest::run` is a run. Wiring only the pass would
+/// leave `terminus ingest <path.jsonl>` proceeding against a watermark ahead
+/// of what that file's committed blob holds, so `read_tail` would resume from
+/// an offset the archive never reached and the gap would be lost from the
+/// blob in silence.
 ///
-/// Both callers already hold the ingest lock when they get here, and both call
-/// it before any transcript is read.
+/// The driver already holds the ingest lock when it gets here, and calls it
+/// before any transcript is read.
 pub fn recover(data_dir: &Path) -> Result<(Store, Recovered)> {
     let started = Instant::now();
     let mut store = crate::reindex::up_to_date(Store::open(data_dir)?)?;

@@ -13,11 +13,13 @@ use crate::ingest::pass::{note, Summary};
 /// there is no log file, by design, and `terminus status` surfaces this table -
 /// so everything worth a human's attention goes in one of them. `error` holds
 /// what went wrong: the path and reason of every file that was skipped, every
-/// directory that could not be listed, every watermark recovery had to repair,
-/// every step that could not run, and the failure that ended the pass if one
-/// did. `notes` holds what a healthy pass did worth saying - labels written,
-/// sessions retention evicted or deleted - so `doctor` can flag `error` alone.
-/// Each stays null when there is genuinely nothing to say.
+/// directory that could not be listed, every step that could not run, and the
+/// failure that ended the pass if one did. `notes` holds what a healthy pass
+/// did worth saying - every watermark recovery repaired, first because
+/// recovery runs first, then labels written and sessions retention evicted or
+/// deleted - so `doctor` can flag `error` alone, and a pass that only
+/// recovered shows no error (#96). Each stays null when there is genuinely
+/// nothing to say.
 ///
 /// `fatal` is the line that says the pass as a whole failed, already worded by
 /// the walk that failed, and it goes last.
@@ -30,13 +32,13 @@ pub(crate) fn insert(
     for (path, reason) in summary.failures.iter().chain(&summary.unreadable) {
         errors.push(note(path, reason));
     }
-    errors.extend(summary.recovery.lines());
     errors.extend(summary.feedback.lines());
     errors.extend(summary.outcomes.errors());
     errors.extend(summary.observations.lines());
     errors.extend(summary.retention.errors());
     errors.extend(fatal);
-    let mut notes = summary.outcomes.notes();
+    let mut notes = summary.recovery.lines();
+    notes.extend(summary.outcomes.notes());
     notes.extend(summary.retention.notes());
     let joined = |lines: Vec<String>| (!lines.is_empty()).then(|| lines.join("\n"));
     let error = joined(errors);
