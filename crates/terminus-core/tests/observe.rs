@@ -452,3 +452,40 @@ fn an_excluded_project_gets_no_observation() {
     assert_eq!(observed.written, 0, "{observed:?}");
     assert!(bench.rows().is_empty());
 }
+
+/// More newly finalized sessions than one pass may observe: the pass writes
+/// the bound's worth, and the line naming the rest goes under `notes` with
+/// `error` left null, because nothing failed (#96).
+#[test]
+fn a_pass_over_the_bound_notes_the_waiting_sessions_and_reports_no_error() {
+    let bench = pass_bench();
+    let at = ts("-10 hours");
+    for i in 0..=observe::MAX_PER_PASS {
+        let session = format!("{i:08x}-0000-4000-8000-{i:012x}");
+        bench.transcript(&session, &at, "cargo test");
+    }
+
+    let summary = bench.pass();
+    assert_eq!(
+        summary.observations.written,
+        observe::MAX_PER_PASS,
+        "{:?}",
+        summary.observations
+    );
+    assert_eq!(bench.rows().len(), observe::MAX_PER_PASS);
+
+    let (error, notes): (Option<String>, Option<String>) = bench
+        .conn()
+        .query_row(
+            "SELECT error, notes FROM runs ORDER BY id DESC LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(error, None, "the waiting line was written as an error");
+    let notes = notes.expect("the pass wrote no notes");
+    assert!(
+        notes.contains("1 more finalized session(s) are waiting to be observed"),
+        "{notes}"
+    );
+}
