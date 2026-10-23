@@ -256,6 +256,62 @@ fn the_parent_uuid_fallback_still_links_a_fork() {
     );
 }
 
+impl Tree {
+    /// A later session whose first record names the message of `record(1, ..)`
+    /// as its `parentUuid`, with its own `sessionId` and, when `foreign` is
+    /// set, a `session_id` naming another session.
+    fn continuing(&self, foreign: Option<&str>) -> PathBuf {
+        let foreign = match foreign {
+            Some(id) => format!("\"session_id\":\"{id}\","),
+            None => String::new(),
+        };
+        self.write(
+            &format!("{}.jsonl", uuid(2)),
+            &format!(
+                "{{\"type\":\"user\",\"uuid\":\"dddddddd-0000-4000-8000-000000000001\",\
+                  \"parentUuid\":\"cccccccc-0000-4000-8000-000000000001\",\
+                  \"timestamp\":\"2026-08-12T11:00:00.000Z\",\"sessionId\":\"{}\",{foreign}\
+                  \"cwd\":\"/data/code/verbatim\"}}\n",
+                session(2)
+            ),
+        )
+    }
+}
+
+/// A session archived before its predecessor gets its link on the next pass,
+/// though its own file did not change and was not committed again (#11).
+#[test]
+fn a_continuing_session_is_linked_once_its_predecessor_is_archived() {
+    let tree = tree();
+    let later = tree.continuing(None);
+
+    // Pass one: the later session alone, so the parent message resolves to nothing.
+    assert_eq!(tree.pass().files_committed, 1);
+    assert_eq!(tree.continues_from(&later), None);
+
+    // Pass two commits only the predecessor, so the later session was not
+    // ingested again and only the sweep can have linked it.
+    tree.transcript(1, &session(1), None);
+    assert_eq!(tree.pass().files_committed, 1);
+    assert_eq!(tree.continues_from(&later), Some(session(1)));
+}
+
+/// The sweep fills NULLs only: a foreign `session_id` recorded at ingest wins
+/// over the `parentUuid` the sweep would resolve (#11).
+#[test]
+fn a_link_already_recorded_survives_the_sweep() {
+    let tree = tree();
+    let foreign = session(9);
+    let later = tree.continuing(Some(&foreign));
+
+    assert_eq!(tree.pass().files_committed, 1);
+    assert_eq!(tree.continues_from(&later), Some(foreign.clone()));
+
+    tree.transcript(1, &session(1), None);
+    assert_eq!(tree.pass().files_committed, 1);
+    assert_eq!(tree.continues_from(&later), Some(foreign));
+}
+
 // ---------------------------------------------------------------------------
 // A sidecar's parent, which comes from the path and never the records.
 // ---------------------------------------------------------------------------

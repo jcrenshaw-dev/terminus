@@ -4,9 +4,10 @@
 //! different walk, so they run through one function in one order: take the
 //! lock, recover, read the rows, walk, and write one `runs` row. Each caller
 //! hands [`drive`] its own [`Walk`]. The steps only the tree pass runs - the
-//! decision log drain, labels, observations, retention and the snapshot gate -
-//! are that walk's own, and every step a walk does not name does nothing, so
-//! the backfill and a named file stay out of them by construction.
+//! decision log drain, continuation links, labels, observations, retention and
+//! the snapshot gate - are that walk's own, and every step a walk does not name
+//! does nothing, so the backfill and a named file stay out of them by
+//! construction.
 //!
 //! The driver starts no thread. The backfill's workers are started inside its
 //! own walk, which is reached only by `terminus backfill`.

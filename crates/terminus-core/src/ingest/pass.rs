@@ -58,6 +58,10 @@ pub struct Summary {
     pub excluded: Vec<PathBuf>,
     /// What recovery repaired before the walk began.
     pub recovery: crate::recover::Recovered,
+    /// The line saying the continuation-link sweep could not finish, when it
+    /// could not. It reaches `runs.error`; a healthy sweep leaves it `None`
+    /// and says nothing.
+    pub continuations: Option<String>,
     /// What the decision log drained into the store before the walk.
     pub feedback: crate::feedback::Drained,
     /// What the walk's own turns then made of those decisions.
@@ -328,6 +332,20 @@ impl Walk for Tree<'_> {
     }
 
     fn after_walk(&mut self, store: &mut Store, summary: &mut Summary) {
+        // Continuation links, first after the walk and on every tree pass
+        // whatever the walk committed (#11). A session archived before its
+        // predecessor has a NULL link its own file will never change, and the
+        // predecessor may have come from `terminus backfill` or a named file,
+        // neither of which runs this, so the tree pass is where it is noticed.
+        // It reads only what the walk and earlier passes archived, so it sits
+        // directly after the walk, ahead of the steps that judge sessions.
+        //
+        // Nothing here fails the pass: a sweep that could not finish is one
+        // line in `runs.error`, and the next tree pass tries again.
+        summary.continuations = crate::ingest::fill_continuations(store.conn())
+            .err()
+            .map(|e| format!("continuation links could not be filled: {e}"));
+
         // Decision outcomes, AFTER the walk and before the `runs` row. The
         // turns this pass just committed are what a session's idleness is
         // measured from and what a decision's outcome is read off, so running

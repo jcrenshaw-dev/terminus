@@ -1485,6 +1485,10 @@ fn next_session_no(conn: &Connection) -> Result<i64> {
 /// column in one namespace.
 ///
 /// Both paths reject a link to this transcript's own session id.
+///
+/// A `parentUuid` predecessor that is not archived yet leaves the column NULL
+/// here, and the tree pass's sweep fills it once the predecessor is archived
+/// (#11).
 fn continues_from(conn: &Connection, session_key: &str, scan: &Scan) -> Result<Option<String>> {
     if let Some(foreign) = lineage::foreign_predecessor(scan) {
         return Ok(Some(foreign));
@@ -1536,6 +1540,46 @@ fn parent_session_id(
     // A different FILE may still report the same session id - every sidecar
     // reports its parent's - so the self-link test applies to the fallback too.
     Ok(resolved.filter(|id| !lineage::is_self_link(id, own)))
+}
+
+/// Fill the continuation link of every session that has none yet, for the
+/// `parentUuid` predecessors that were archived after it (#11).
+///
+/// Ingest resolves the link once, when a session's first turn is written, so a
+/// session archived before its predecessor keeps a NULL link for good unless
+/// something looks again. This looks again: every session with a NULL
+/// `continues_from` whose first turn names a `parentUuid` goes through
+/// [`parent_session_id`], the rule ingest uses. A foreign `session_id` is
+/// recorded at ingest, so such a session is never selected, and the UPDATE
+/// fills a NULL only, so no link is ever overwritten.
+///
+/// The turns are reached through `UNIQUE (session_key, turn_seq)` for the first
+/// turn and `idx_turns_uuid` for the parent, never by scanning `turns`: this
+/// runs on every tree pass, and so on every hook spawn.
+pub(crate) fn fill_continuations(conn: &Connection) -> Result<()> {
+    let pending: Vec<(String, Option<String>, String)> = conn
+        .prepare(
+            "SELECT m.session_key, m.session_id, t.parent_uuid
+             FROM session_meta m CROSS JOIN turns t
+             WHERE m.continues_from IS NULL
+               AND t.session_key = m.session_key AND t.turn_seq = 0
+               AND t.parent_uuid IS NOT NULL",
+        )?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<std::result::Result<_, _>>()?;
+
+    for (session_key, own, parent_uuid) in pending {
+        let resolved = parent_session_id(conn, &session_key, &parent_uuid, own.as_deref())?;
+        let Some(predecessor) = resolved else {
+            continue;
+        };
+        conn.execute(
+            "UPDATE session_meta SET continues_from = ?1
+             WHERE session_key = ?2 AND continues_from IS NULL",
+            rusqlite::params![predecessor, session_key],
+        )?;
+    }
+    Ok(())
 }
 
 /// Everything one `session_meta` upsert writes.

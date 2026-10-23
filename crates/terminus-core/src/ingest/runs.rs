@@ -81,6 +81,7 @@ pub(crate) fn insert(
         errors.push(note(path, reason));
     }
     errors.extend(summary.feedback.lines());
+    errors.extend(summary.continuations.clone());
     errors.extend(summary.outcomes.errors());
     errors.extend(summary.observations.errors());
     errors.extend(summary.retention.errors());
