@@ -1502,6 +1502,25 @@ fn continues_from(conn: &Connection, session_key: &str, scan: &Scan) -> Result<O
         return Ok(None);
     };
 
+    parent_session_id(
+        conn,
+        session_key,
+        parent_uuid,
+        lineage::own_session_id(scan),
+    )
+}
+
+/// The session id of the other file holding the message `parent_uuid`, or
+/// `None`: the `parentUuid` half of [`continues_from`], written once so every
+/// caller resolves a predecessor by the same rules.
+///
+/// `own` is the session id the transcript reports for itself.
+fn parent_session_id(
+    conn: &Connection,
+    session_key: &str,
+    parent_uuid: &str,
+    own: Option<&str>,
+) -> Result<Option<String>> {
     let resolved: Option<String> = conn
         .query_row(
             "SELECT m.session_id
@@ -1516,7 +1535,7 @@ fn continues_from(conn: &Connection, session_key: &str, scan: &Scan) -> Result<O
 
     // A different FILE may still report the same session id - every sidecar
     // reports its parent's - so the self-link test applies to the fallback too.
-    Ok(resolved.filter(|id| !lineage::is_self_link(id, lineage::own_session_id(scan))))
+    Ok(resolved.filter(|id| !lineage::is_self_link(id, own)))
 }
 
 /// Everything one `session_meta` upsert writes.
