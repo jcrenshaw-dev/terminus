@@ -71,8 +71,8 @@ Deferred. Tracked as open issues, not in this roadmap: #109 (scope enforced thre
 | SRCH-01 | Phase 4 | Complete |
 | SRCH-02 | Phase 4 | Complete |
 | SRCH-03 | Phase 4 | Complete |
-| PASS-01 | Phase 5 | Pending |
-| PASS-02 | Phase 5 | Pending |
+| PASS-01 | Phase 5 | Complete |
+| PASS-02 | Phase 5 | Complete |
 
 Bare headers - `/cad-plan` seeds a row per requirement when its phase is
 planned (`references/req-traceability.md`).
