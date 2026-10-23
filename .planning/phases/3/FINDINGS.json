@@ -1,0 +1,32 @@
+{
+  "auto_passed": 4,
+  "gaps": 0,
+  "added": 0,
+  "skipped": 0,
+  "rejected": 0,
+  "rejected_entries": [],
+  "skipped_entries": [
+    {
+      "list": "human_checks",
+      "reason": "already-recorded",
+      "item": 3,
+      "status": "pending",
+      "entry": {
+        "name": "The stdout test fails fast and names the cause when stdout is held or the fault point is missing",
+        "expected": "The held-stdout half is already observed (fails at 253 ms naming 'a process the hook started held stdout open'). Remaining half: delete the `.env(fault::AT, fault::AFTER_BLOB)` line at crates/terminus/tests/hook.rs:754 and run `cargo test -p terminus --all-features --test hook -- --exact reading_the_hooks_stdout_to_eof_returns_at_once_while_the_ingest_still_runs`. It fails with a panic naming `testkit` (\"the ingest never reached `after-blob` within 20s ... unless terminus-core is built with its `testkit` feature\"), and its `test result:` line reports `finished in` about 20 s, under 60 s. Restore the line, and `git diff --exit-code -- crates/terminus/tests/hook.rs` exits 0.",
+        "why_human": "Not human-only. It is runnable now and should be executed, not asked. The verifier left it unrun because one run lasts the test's full 20 s arrival deadline, over the verifier's ~10 s per-check limit, and the plan's form of it edits hook.rs, which the verifier may not change. The code path is consistent with it (ingest/mod.rs:897-900, hook.rs:852-863)."
+      }
+    },
+    {
+      "list": "human_checks",
+      "reason": "already-recorded",
+      "item": 4,
+      "status": "pending",
+      "entry": {
+        "name": "The macos-15-intel release job passes the stdout test on the milestone pull request",
+        "expected": "In every CI run of the milestone's pull request, the macos-15-intel release job reports reading_the_hooks_stdout_to_eof_returns_at_once_while_the_ingest_still_runs as ok. In particular, the single ps lookup finds exactly one held ingest, and no 'never reached `after-blob`' or 'expected the one held ingest' panic appears.",
+        "why_human": "Out-of-reach resource. It needs GitHub Actions' macos-15-intel runner on the milestone pull request. That needs a push, which costs CI and is John's call, and the verifier may not touch the network. #75 is a release-build timing failure seen only on that runner, and the macOS `ps` argv spelling the new lookup depends on can only be confirmed there. Linux runs cannot stand in."
+      }
+    }
+  ]
+}

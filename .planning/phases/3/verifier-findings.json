@@ -1,0 +1,97 @@
+{
+  "status": "needs_human",
+  "score": "6/8",
+  "truths": [
+    {
+      "n": 1,
+      "truth": "The stdout test holds the ingest at the testkit fault point AFTER_BLOB and proves the read returned mid-pass from the ready file and no runs row at EOF, with no await_process and no ps poll for a process that may have exited",
+      "status": "VERIFIED",
+      "uat_item": 1,
+      "evidence": "Exists/substantive: crates/terminus/tests/hook.rs:738-888. `perl -ne 'print if /^fn reading_the_hooks_stdout_to_eof/../^}/' | grep -c await_process` prints 0; await_process is called only at hook.rs:278 and :1025 (the two sibling tests). The hook command sets fault::AT=fault::AFTER_BLOB and fault::READY at :754-755. The ready file is put in a data dir created first (:749-750). The transcript is now 1 repeat (:745). The runs count is sampled when the poll sees the read result (:809) through a new read-only `runs` helper shaped like `committed` (:917-928). The arrival wait polls only `ready.exists()` with a 20 s deadline (:852-863). The runs_at_eof == 0 assertion comes after it (:867-871). The one ps() call (:875-886) runs after the ready file proves the ingest is in its 30 s stall, then sigkill + drain. Wiring: the AFTER_BLOB stall is in `prepare` at crates/terminus-core/src/ingest/mod.rs:506, before `apply`'s transaction. Every runs insert comes later: record_run inside apply's tx (mod.rs:672-673), pass::record_pass after the walk (pass.rs:508-554), backfill::record_pass (backfill.rs:445-486). spawn::detached passes the env on unchanged (spawn.rs:64-70, spawn_from :118-137). `cargo tree -p terminus -e features -i terminus-core` shows the dev-dependency turning on feature \"testkit\". Traced value: TERMINUS_FAULT_AT set at hook.rs:754 reaches the detached ingest; fault::stall (mod.rs:897-905) writes the READY path; the test sees it at hook.rs:853. Behaves: the stdout run passed in debug (finished in 0.03s) and --release (0.02s). Passing requires the ready file within 20 s, runs_at_eof == 0, and exactly one held ingest found by ps."
+    },
+    {
+      "n": 2,
+      "truth": "cargo test -p terminus --all-features --test hook passes in debug and release, and the stdout test passes 20 release runs in a row",
+      "status": "VERIFIED",
+      "uat_item": 2,
+      "evidence": "Run 2026-10-23 at load average 0.62. `cargo test -p terminus --all-features --test hook`: 8 passed, 0 failed, finished in 1.35s. Same with --release: 8 passed, 0 failed, finished in 0.52s. The plan's exact 20-run loop (`--release ... --exact reading_the_hooks_stdout_to_eof_returns_at_once_while_the_ingest_still_runs | grep -q 'test result: ok. 1 passed' || echo run $i failed`) reported 0 failures in 20 runs."
+    },
+    {
+      "n": 3,
+      "truth": "When a process the hook started holds the hook's stdout, the stdout test fails at its 250 ms limit, not after the hold, and names 'a process the hook started held stdout open'",
+      "status": "VERIFIED",
+      "uat_item": null,
+      "evidence": "Observed with no source change. A scratchpad LD_PRELOAD shim made the `hook SessionStart` process fork a child that sleeps 30 s holding the hook's stdout. The test cannot tell this child from an ingest made to inherit stdout. The release test binary panicked at hook.rs:826: \"reading the hook's stdout to EOF was still open after 253.1 ms against a limit of 250.0 ms; the hook had exited, first seen 5.1 ms after the read began; the longest gap between polls was 5.1 ms; a /usr/bin/true spawn took 0.3 ms. Verdict: a process the hook started held stdout open\". It finished in 0.25s against a 30 s holder, so the read is bounded (reading thread plus a poll loop at :776-807). A control run with the shim loaded but inactive passed. The held branch is the else-if at :818-822. This is the first half of UAT item 3 only. The second half is truth 4."
+    },
+    {
+      "n": 4,
+      "truth": "With the fault point's environment variable removed, the stdout test fails within its 20 s arrival deadline with a message naming testkit, not at CI's 15-minute kill",
+      "status": "UNCERTAIN",
+      "uat_item": 3,
+      "evidence": "Code supports it but no run observed it. With AT unset, fault::stall returns before it writes READY (ingest/mod.rs:897-900), so the ready file never appears. Every step before the arrival wait is bounded: the poll loop breaks at 250 ms (:804-806), and child.wait follows a read that already reached EOF. The arrival wait is bounded at ARRIVAL_TIMEOUT 20 s (:740, :852-863), and its panic text names `testkit` (:856-858). It runs before the runs_at_eof assertion and the ps lookup, so a fast unheld pass cannot fail elsewhere first. Not run: one run lasts the full 20 s arrival deadline, over this verifier's ~10 s per-check limit, and the plan's no-fault mutation edits hook.rs, which this verifier may not do."
+    },
+    {
+      "n": 5,
+      "truth": "The macos-15-intel release job passes the stdout test in every CI run of the milestone pull request",
+      "status": "UNCERTAIN",
+      "uat_item": 4,
+      "evidence": "Only that runner can settle this. Local evidence is Linux x86_64 only: truths 1 and 2. CONTEXT's flagged assumption (macOS `ps -e -ww` argv spelling of the held ingest) is checked only there. The new single ps lookup (hook.rs:875-879) uses the same argv equality as the sibling tests' await_process (:246)."
+    },
+    {
+      "n": 6,
+      "truth": "A timing miss in either #104 test prints the longest poll gap, a /usr/bin/true spawn time and the hook's own evidence, and names exactly one verdict",
+      "status": "VERIFIED",
+      "uat_item": 5,
+      "evidence": "Seven forced misses, all observed on the real limits rather than limit 0 (a missed limit enters the same failure branch), with no source change. Stdout test (panic at hook.rs:826). (a) Shim delays the hook 1 s: 'still open after 252.9 ms ... the hook had not exited; the longest gap between polls was 5.1 ms; a /usr/bin/true spawn took 0.3 ms. Verdict: the hook was blocked'. (b) Same, with the test process SIGSTOPped for 200 ms in its poll window: 'longest gap between polls was 203.3 ms ... Verdict: the runner stalled'. (c) Held stdout: 'Verdict: a process the hook started held stdout open' (truth 3). Stdin test (panic at hook.rs:489; TERMINUS_TEST_DRAIN_DEADLINE_MS is inherited by the hook through Command's default env). (d) 20000 ms: 'still running 10003.0 ms ... longest gap 10.1 ms; spawn took 0.4 ms; the hook had not logged that it stopped waiting on stdin, so it was still waiting on stdin ... Verdict: the hook was blocked'. (e) Same, plus a 6 s SIGSTOP: 'longest gap between polls was 6004.5 ms ... Verdict: the runner stalled'. (f) 100 ms, with an exit-time shim destructor keeping the hook alive: 'the hook had logged that it stopped waiting on stdin, so it was past stdin and had not exited ... its stderr: \"terminus: UserPromptSubmit stopped waiting on a stdin that stayed open for 100 ms\\n\". Verdict: the hook was blocked'. Run (f) exercises the drain-line branch that SUMMARY listed as open. For every captured output, `grep -oE '<verdict phrases>' | sort -u | wc -l` printed 1. Code: one if/else verdict chain per test (stdin :484, stdout :819), sharing runner_stalled (:709-716) and time_a_spawn (:694-705). time_a_spawn runs only on the failure path and goes through `output`, under the COPYING guard. Stall lines are separate values: 5 s (:454) and 125 ms (:770)."
+    },
+    {
+      "n": 7,
+      "truth": "The phase's diff leaves .github/workflows/test.yml unchanged, keeps the 250 ms and 10 s limits, and changes no test function other than the two #104 tests",
+      "status": "VERIFIED",
+      "uat_item": 6,
+      "evidence": "`git diff --name-only ba581ad -- . ':(exclude).planning' ':(exclude)fuzz/Cargo.lock'` prints only crates/terminus/tests/hook.rs. `git diff --quiet ba581ad -- .github/workflows/test.yml` exits 0. Limits: from_secs(10) at hook.rs:451 and from_millis(250) at :767. `git diff -U0 ba581ad HEAD` new-side hunks: +33 (use line); +452..505, inside the stdin test (fn at :432); +687..721, new helpers time_a_spawn/runner_stalled/ms; +728..886, the stdout test's doc comment and body (fn at :738); +915..929, new `runs` helper. No hunk touches another test function. `git diff HEAD -- hook.rs cmd/spawn.rs` is empty, so every mutation was reverted."
+    },
+    {
+      "n": 8,
+      "truth": "The phase's edits carry no planning tags, no build warnings and no unreferenced debt markers",
+      "status": "VERIFIED",
+      "uat_item": null,
+      "evidence": "`cargo test -p terminus-core --test planning_tags`: 11 passed. The plan's tag regex over `git diff ba581ad -- crates/terminus/tests/hook.rs | grep '^+'` matched nothing. TODO/FIXME/XXX/HACK/placeholder/todo!/unimplemented! over the added lines matched nothing. After touching hook.rs, `--no-run` builds in debug and --release printed no warning or `tests/hook.rs:` line."
+    }
+  ],
+  "passes": [
+    {
+      "k": 1,
+      "name": "The stdout test holds the ingest at a fault point instead of polling ps",
+      "evidence": "hook.rs:738-888: fault::AT=AFTER_BLOB and READY at :754-755; await_process count in the fn is 0 (only :278, :1025); ready-file-only arrival wait :852-863; runs_at_eof sampled :809 and asserted 0 at :867-871; a single ps lookup of the held ingest :875-886. The stall (ingest/mod.rs:506) precedes every runs insert (mod.rs:672-673, pass.rs:508-554, backfill.rs:445-486). The stdout run passed in debug and release."
+    },
+    {
+      "k": 2,
+      "name": "The hook tests pass in debug and release, and the stdout test passes 20 release runs in a row",
+      "evidence": "Hook file: 8 passed in debug (1.35s) and in --release (0.52s) at load 0.62. The plan's 20-run --release loop had 0 failures."
+    },
+    {
+      "k": 5,
+      "name": "A forced timing miss in either #104 test names one verdict with its evidence",
+      "evidence": "Seven observed misses on the real limits. Stdout: blocked (gap 5.1 ms, spawn 0.3 ms, hook had not exited), runner stalled (gap 203.3 ms), held stdout (hook had exited at 5.1 ms). Stdin: blocked without the drain line, runner stalled (gap 6004.5 ms), blocked with the drain line present (stderr quoted). Each output names exactly 1 distinct verdict."
+    },
+    {
+      "k": 6,
+      "name": "The phase's diff stays inside the two #104 tests",
+      "evidence": "The scope check from ba581ad lists only hook.rs. test.yml diff is quiet. Limits are at :451 and :767. -U0 hunks fall only in the use line, the stdin test, the new helpers time_a_spawn/runner_stalled/ms, the stdout test, and the new runs helper."
+    }
+  ],
+  "gaps": [],
+  "human_checks": [
+    {
+      "name": "The stdout test fails fast and names the cause when stdout is held or the fault point is missing",
+      "expected": "The held-stdout half is already observed (fails at 253 ms naming 'a process the hook started held stdout open'). Remaining half: delete the `.env(fault::AT, fault::AFTER_BLOB)` line at crates/terminus/tests/hook.rs:754 and run `cargo test -p terminus --all-features --test hook -- --exact reading_the_hooks_stdout_to_eof_returns_at_once_while_the_ingest_still_runs`. It fails with a panic naming `testkit` (\"the ingest never reached `after-blob` within 20s ... unless terminus-core is built with its `testkit` feature\"), and its `test result:` line reports `finished in` about 20 s, under 60 s. Restore the line, and `git diff --exit-code -- crates/terminus/tests/hook.rs` exits 0.",
+      "why_human": "Not human-only. It is runnable now and should be executed, not asked. The verifier left it unrun because one run lasts the test's full 20 s arrival deadline, over the verifier's ~10 s per-check limit, and the plan's form of it edits hook.rs, which the verifier may not change. The code path is consistent with it (ingest/mod.rs:897-900, hook.rs:852-863)."
+    },
+    {
+      "name": "The macos-15-intel release job passes the stdout test on the milestone pull request",
+      "expected": "In every CI run of the milestone's pull request, the macos-15-intel release job reports reading_the_hooks_stdout_to_eof_returns_at_once_while_the_ingest_still_runs as ok. In particular, the single ps lookup finds exactly one held ingest, and no 'never reached `after-blob`' or 'expected the one held ingest' panic appears.",
+      "why_human": "Out-of-reach resource. It needs GitHub Actions' macos-15-intel runner on the milestone pull request. That needs a push, which costs CI and is John's call, and the verifier may not touch the network. #75 is a release-build timing failure seen only on that runner, and the macOS `ps` argv spelling the new lookup depends on can only be confirmed there. Linux runs cannot stand in."
+    }
+  ]
+}
