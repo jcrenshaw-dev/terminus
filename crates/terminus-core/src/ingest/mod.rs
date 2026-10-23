@@ -51,11 +51,25 @@ pub enum Outcome {
     /// The transcript is inside a project the config excludes, named with the
     /// directory that excluded it. Nothing was opened and nothing was written.
     ///
-    /// Only [`run`] produces this: `ingest_locked` is reached from the pass
-    /// only for a file discovery already cleared.
+    /// Only [`run`] produces this, before the lock is taken. The per-file
+    /// result a walk matches, [`Ingested`], cannot carry it: a walk reaches a
+    /// file only once discovery has cleared it.
     Excluded(PathBuf),
     /// The pass committed.
     Committed(Pass),
+}
+
+/// What one file's ingest did, with the lock already held.
+///
+/// Two arms and no more. A held lock and an exclusion are answers about the
+/// run, decided before any file is read, so they live only on the public
+/// [`Outcome`], and a walk that matches this has no arm to wave past for them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Ingested {
+    /// The file's new bytes committed.
+    Committed(Pass),
+    /// Nothing new past the watermark; see [`Outcome::UpToDate`].
+    UpToDate,
 }
 
 /// What a committed pass moved.
@@ -133,15 +147,20 @@ pub fn run_with(
     // buys nothing here and costs nothing either, and `ingest_locked` takes the
     // same shape whether its caller named one file or walked two thousand.
     let mut projects = Resolver::new();
-    ingest_locked(
-        &mut store,
-        &rows,
-        &canonical,
-        session_key,
-        started,
-        RunRow::PerFile,
-        &mut projects,
-        config.capture_mode(),
+    Ok(
+        match ingest_locked(
+            &mut store,
+            &rows,
+            &canonical,
+            session_key,
+            started,
+            RunRow::PerFile,
+            &mut projects,
+            config.capture_mode(),
+        )? {
+            Ingested::Committed(pass) => Outcome::Committed(pass),
+            Ingested::UpToDate => Outcome::UpToDate,
+        },
     )
 }
 
@@ -249,7 +268,7 @@ pub(crate) fn ingest_locked(
     run_row: RunRow,
     projects: &mut Resolver,
     mode: CaptureMode,
-) -> Result<Outcome> {
+) -> Result<Ingested> {
     let existing = Existing::read(store.conn(), rows, &session_key, path)?;
     let prepared = prepare(path, session_key, &existing, mode)?;
     apply(store, prepared, started, run_row, projects)
@@ -539,7 +558,7 @@ pub(crate) fn apply(
     started: Instant,
     run_row: RunRow,
     projects: &mut Resolver,
-) -> Result<Outcome> {
+) -> Result<Ingested> {
     let Prepared {
         session_key,
         path,
@@ -564,7 +583,7 @@ pub(crate) fn apply(
                 rusqlite::params![session_key, path.to_string_lossy()],
             )?;
         }
-        return Ok(Outcome::UpToDate);
+        return Ok(Ingested::UpToDate);
     };
     let Work {
         stream_base,
@@ -676,7 +695,7 @@ pub(crate) fn apply(
     tx.commit()?;
     fault::stall(fault::AFTER_COMMIT);
 
-    Ok(Outcome::Committed(pass))
+    Ok(Ingested::Committed(pass))
 }
 
 /// The `agent-*.meta.json` that would sit beside a sidecar transcript.
@@ -1715,7 +1734,7 @@ mod tests {
             &mut projects,
         )
         .unwrap();
-        assert_eq!(outcome, Outcome::UpToDate);
+        assert_eq!(outcome, Ingested::UpToDate);
         assert_eq!(watermark(store.conn(), &key), mark);
         assert_eq!(block_rows(store.conn()), rows);
 
@@ -1730,7 +1749,7 @@ mod tests {
             &mut projects,
         )
         .unwrap();
-        let Outcome::Committed(pass) = outcome else {
+        let Ingested::Committed(pass) = outcome else {
             panic!("the next read did not commit: {outcome:?}");
         };
         assert_eq!(pass.bytes_read, record.len() as u64);

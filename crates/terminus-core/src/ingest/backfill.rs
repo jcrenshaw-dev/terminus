@@ -55,7 +55,7 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::ingest::lock::{self, Attempt};
 use crate::ingest::pass::{note, PassOutcome, Summary};
-use crate::ingest::{claim, read_rows, Claim, Existing, Outcome, Prepared, Rows, RunRow};
+use crate::ingest::{claim, read_rows, Claim, Existing, Ingested, Prepared, Rows, RunRow};
 use crate::project::Resolver;
 use crate::store::Store;
 
@@ -393,7 +393,7 @@ fn commit_one(
     });
 
     match applied {
-        Ok(Outcome::Committed(pass)) => {
+        Ok(Ingested::Committed(pass)) => {
             summary.files_committed += 1;
             summary.bytes_read += pass.bytes_read;
             summary.turns_added += pass.turns_added;
@@ -402,7 +402,7 @@ fn commit_one(
             // without `testkit`.
             crate::ingest::fault::stall_after_files(summary.files_committed);
         }
-        Ok(Outcome::UpToDate | Outcome::LockHeld | Outcome::Excluded(_)) => {}
+        Ok(Ingested::UpToDate) => {}
         Err(e) => {
             let mut reason = e.to_string();
             // The divergence flag, matched on the variant and never on the

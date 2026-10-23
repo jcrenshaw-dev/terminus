@@ -34,7 +34,7 @@ use crate::config::Config;
 use crate::discover;
 use crate::error::Result;
 use crate::ingest::lock::{self, Attempt};
-use crate::ingest::{Claim, Outcome, RunRow};
+use crate::ingest::{Claim, Ingested, RunRow};
 use crate::project::Resolver;
 
 /// What one pass over the tree did.
@@ -434,7 +434,7 @@ fn walk(
             projects,
             mode,
         ) {
-            Ok(Outcome::Committed(pass)) => {
+            Ok(Ingested::Committed(pass)) => {
                 summary.files_committed += 1;
                 summary.bytes_read += pass.bytes_read;
                 summary.turns_added += pass.turns_added;
@@ -444,10 +444,8 @@ fn walk(
                 // small transcripts nearly never.
                 crate::ingest::fault::stall_after_files(summary.files_committed);
             }
-            // Nothing new past the watermark, or - both unreachable here - a
-            // lock this process already owns, and an exclusion only the
-            // single-file entry point tests, on files this walk never yielded.
-            Ok(Outcome::UpToDate | Outcome::LockHeld | Outcome::Excluded(_)) => {}
+            // Nothing new past the watermark.
+            Ok(Ingested::UpToDate) => {}
             Err(e) => {
                 // Recorded and skipped. The tree is the unit of work; one
                 // damaged transcript is not a reason to archive none of it.
