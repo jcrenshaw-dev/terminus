@@ -685,22 +685,43 @@ fn reading_the_hooks_stdout_to_eof_returns_at_once_while_the_ingest_still_runs()
         .write_all(&testkit::fixture_bytes("hooks/session-start.json"))
         .expect("write the payload");
 
+    let limit = Duration::from_millis(250);
     let started = Instant::now();
-    let mut stdout = Vec::new();
-    child
-        .stdout
-        .take()
-        .expect("the hook's stdout")
-        .read_to_end(&mut stdout)
-        .expect("read the hook's stdout to EOF");
-    let elapsed = started.elapsed();
-    // Sampled the moment the read returns: a pass only ever adds its row, so
-    // none now means none when the read returned.
+    // The read runs on a thread of its own and times itself there, so a poll
+    // below that wakes late does not charge its own delay to the hook. The
+    // thread is never joined: a pipe a held ingest keeps open stays open for
+    // the whole hold, and joining would bring back the wait the limit removes.
+    let mut pipe = child.stdout.take().expect("the hook's stdout");
+    let (done, read) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = pipe.read_to_end(&mut bytes).map(|_| bytes);
+        let _ = done.send((result, started.elapsed()));
+    });
+    let (stdout, elapsed) = loop {
+        match read.try_recv() {
+            Ok(result) => break result,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                panic!("the reading thread ended without saying how the read ended")
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+        }
+        assert!(
+            started.elapsed() < limit,
+            "reading the hook's stdout to EOF was still open after {:?}: the \
+             ingest is holding a handle the hook inherited",
+            started.elapsed()
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    // Sampled the moment the poll sees the read's result: a pass only ever
+    // adds its row, so none now means none when the read returned.
     let runs_at_eof = runs(&hook);
+    let stdout = stdout.expect("read the hook's stdout to EOF");
 
     assert!(stdout.is_empty(), "the hook wrote {stdout:?} to stdout");
     assert!(
-        elapsed < Duration::from_millis(250),
+        elapsed < limit,
         "reading the hook's stdout to EOF took {elapsed:?}: the ingest is \
          holding a handle the hook inherited"
     );
