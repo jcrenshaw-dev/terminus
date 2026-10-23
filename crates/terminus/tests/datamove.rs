@@ -1,7 +1,7 @@
-//! `terminus data move <path>` at the process boundary (STOR-07, AC5).
+//! `terminus data move <path>` at the process boundary.
 //!
 //! **No spawn here sets `TERMINUS_DATA_DIR`.** The environment override outranks
-//! the location pointer by design (D-06), so a bench that set it would pass
+//! the location pointer by design, so a bench that set it would pass
 //! whether the pointer worked or not. Every spawn points the PLATFORM data-dir
 //! variable at a temporary directory instead - `XDG_DATA_HOME` or `HOME`
 //! depending on the target - which is the same protection by the only route
@@ -26,10 +26,10 @@ use terminus_core::testkit;
 
 /// A settings file with nothing of terminus's in it.
 ///
-/// AC5's byte-identical claim is about the file the user has, and the move must
+/// The byte-identical claim is about the file the user has, and the move must
 /// not touch it whether install ever ran or not: the hook entries are written
 /// as `args: ["hook", <event>]` and the MCP entry as `args: ["mcp"]`, so no
-/// store path is spelled anywhere in either (D-14) and there is nothing here a
+/// store path is spelled anywhere in either and there is nothing here a
 /// relocation could invalidate.
 const SETTINGS: &str = r#"{
   "cleanupPeriodDays": 7,
@@ -113,7 +113,7 @@ impl Bench {
 
     /// One archived session, through the binary's own ingest, so the directory
     /// that moves is one a real pass built - `snapshots` included, since
-    /// snapshots run by default (STOR-06).
+    /// snapshots run by default.
     fn ingest(&self) -> &Self {
         let project = self.claude_dir.join("projects").join("-data-code-x");
         std::fs::create_dir_all(&project).unwrap();
@@ -128,7 +128,7 @@ impl Bench {
     }
 
     /// An undrained injection decision, which is the file a move that carried
-    /// only `terminus.db` would strand (D-06). Its contents do not matter to the
+    /// only `terminus.db` would strand. Its contents do not matter to the
     /// move; its presence in the directory does.
     fn decision(&self) -> PathBuf {
         let dir = self.data_dir().join("decisions");
@@ -222,7 +222,7 @@ fn listed(dir: &Path) -> Vec<String> {
     names
 }
 
-/// AC5's first half: everything moves, the old directory is gone, the pointer
+/// Everything moves, the old directory is gone, the pointer
 /// names the new one, and the settings file was never opened.
 #[test]
 fn the_whole_directory_moves_and_the_settings_file_does_not_change() {
@@ -283,8 +283,8 @@ fn the_whole_directory_moves_and_the_settings_file_does_not_change() {
     );
 }
 
-/// AC5's second half: the two components that resolve the store for themselves
-/// - a hook spawn and an MCP server - both land on the moved one.
+/// The two components that resolve the store for themselves - a hook spawn
+/// and an MCP server - both land on the moved one.
 #[test]
 fn a_hook_and_an_mcp_server_both_answer_off_the_new_location() {
     let bench = bench();
@@ -397,7 +397,7 @@ fn a_destination_that_already_holds_files_is_refused() {
     assert!(!bench.pointer().exists(), "the pointer was written anyway");
 }
 
-/// A destination given with a trailing slash is recorded without it (D-08).
+/// A destination given with a trailing slash is recorded without it.
 ///
 /// The slash is what lets `symlink_metadata` follow a link, so the path the
 /// checks run on and the path the pointer records have to be the same
@@ -427,7 +427,7 @@ fn directory(path: &Path, mode: u32) {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
 }
 
-/// A refusal before the question (D-07): exit 1, no `move it?` line, the store
+/// A refusal before the question: exit 1, no `move it?` line, the store
 /// where it was and no pointer.
 fn assert_refused_before_asking(bench: &Bench, out: &Output) {
     assert_eq!(out.status.code(), Some(1), "{}", text(out));
@@ -444,7 +444,7 @@ fn assert_refused_before_asking(bench: &Bench, out: &Output) {
 }
 
 /// A symlink is refused whether or not the path ends in a slash, which is the
-/// form `symlink_metadata` would otherwise follow (D-07, D-08).
+/// form `symlink_metadata` would otherwise follow.
 #[test]
 fn a_symlink_destination_is_refused_with_or_without_a_trailing_slash() {
     let bench = bench();
@@ -467,7 +467,7 @@ fn a_symlink_destination_is_refused_with_or_without_a_trailing_slash() {
 }
 
 /// A directory open to other accounts is refused, never narrowed, and the
-/// refusal carries the command that fixes it (D-10).
+/// refusal carries the command that fixes it.
 #[test]
 fn a_destination_open_to_other_accounts_is_refused_with_the_chmod() {
     let bench = bench();
@@ -598,7 +598,7 @@ fn assert_refused_after_the_answer(bench: &Bench, out: &Output, destination: &Pa
 
 /// #59 itself: the destination is made while the question waits. An empty 0700
 /// directory passes the rule, so only the absent-then-present comparison
-/// stops it (D-11).
+/// stops it.
 #[test]
 fn a_destination_created_while_the_question_waits_is_refused() {
     let bench = bench();

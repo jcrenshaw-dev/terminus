@@ -1,5 +1,5 @@
 //! `terminus uninstall`: what it takes back out, what it puts back, and what it
-//! refuses to touch (INST-07, AC7).
+//! refuses to touch.
 //!
 //! Every spawn here points `TERMINUS_BIN_DIR`, `CLAUDE_CONFIG_DIR`,
 //! `TERMINUS_DATA_DIR`, `TERMINUS_CONFIG_DIR` and `HOME` at temporary
@@ -8,7 +8,7 @@
 //! machine is actually running on. `PATH` is a fixture directory holding a
 //! fake `claude` and nothing else, so no test can start the real one.
 //!
-//! AC7's "restores it to its pre-install bytes" is asserted as a byte
+//! Restoring a file to its pre-install bytes is asserted as a byte
 //! comparison against the seed and never as a `jq` or `serde_json` comparison.
 //! Those would pass on a file whose keys had been reordered and whose
 //! indentation had changed, which is exactly the failure the whole `json_file`
@@ -288,10 +288,10 @@ fn our_entries(settings: &serde_json::Value, stable: &Path) -> Vec<serde_json::V
         .collect()
 }
 
-/// AC7's first half: a settings file untouched since install comes back byte
+/// A settings file untouched since install comes back byte
 /// for byte. `.claude.json` is never written by terminus, so with a `claude`
 /// that writes nothing it is byte-identical after install, a rerun and
-/// uninstall (AC2).
+/// uninstall.
 ///
 /// Byte for byte is the assertion because it is the only one that can fail for
 /// the right reason. The settings file went through terminus's renderer on the
@@ -351,7 +351,7 @@ fn install_then_uninstall_leaves_both_files_exactly_as_they_were() {
     );
 }
 
-/// D-13: with a user-level entry there, uninstall asks `claude` to remove it,
+/// With a user-level entry there, uninstall asks `claude` to remove it,
 /// with `--scope user` and the traffic variable, and writes nothing itself.
 ///
 /// The fake writes nothing, so `.claude.json` keeps the entry. That is the
@@ -387,7 +387,7 @@ fn only_the_terminus_key_leaves_mcp_servers() {
     assert_eq!(bytes(&fixture.claude_json()), seeded);
 }
 
-/// D-13: when `claude` is not on `PATH`, or fails, the registration stays and
+/// When `claude` is not on `PATH`, or fails, the registration stays and
 /// uninstall prints the command that removes it. The hook entries and the
 /// binary still go, and the exit status says it is not done.
 #[test]
@@ -418,7 +418,7 @@ fn a_registration_claude_cannot_remove_prints_the_command_and_the_rest_still_goe
     }
 }
 
-/// D-15: a `.claude.json.terminus-backup` an older install left is reported
+/// A `.claude.json.terminus-backup` an older install left is reported
 /// and left alone. Putting it back would roll back Claude Code's own state.
 #[test]
 fn an_old_claude_json_backup_is_reported_and_left_alone() {
@@ -439,7 +439,7 @@ fn an_old_claude_json_backup_is_reported_and_left_alone() {
     assert_eq!(bytes(&fixture.claude_json()), CLAUDE_JSON);
 }
 
-/// D-15 when `~/.claude.json` does not parse: the old backup is still
+/// When `~/.claude.json` does not parse, the old backup is still
 /// reported, since a broken live file is when the user most needs to know the
 /// old copy is there, and neither file is touched.
 #[test]
@@ -461,8 +461,8 @@ fn an_old_claude_json_backup_is_reported_when_claude_json_does_not_parse() {
     assert_eq!(bytes(&fixture.claude_json()), "{");
 }
 
-/// D-13's whole point: a `/config` change made after install survives
-/// uninstall, and the entries still go.
+/// The comparison's whole point: a `/config` change made after install
+/// survives uninstall, and the entries still go.
 ///
 /// `theme` is the realistic one - `settings.json` carries 29 keys and Claude
 /// Code's own UI writes most of them between an install and an uninstall - and
@@ -514,7 +514,7 @@ fn an_edit_made_after_install_survives_and_the_entries_still_go() {
     );
 }
 
-/// INST-07: the archive is not collateral, and its path is on the screen.
+/// The archive is not collateral, and its path is on the screen.
 #[test]
 fn the_data_directory_is_left_alone_and_its_path_printed() {
     let fixture = fixture();
@@ -602,8 +602,9 @@ fn uninstall_on_a_machine_that_was_never_installed_changes_nothing() {
     assert_eq!(bytes(&fixture.claude_json()), CLAUDE_JSON);
 }
 
-/// D-07 read backwards: a file at the stable path that is not a terminus build
-/// is somebody else's, and uninstall reports it rather than deleting it.
+/// The marker check read backwards: a file at the stable path that is not a
+/// terminus build is somebody else's, and uninstall reports it rather than
+/// deleting it.
 ///
 /// Not hypothetical - as of 2026-08-13 `~/.local/bin/verbatim`, the stable path
 /// before the rename, was a different 12 MB program on this machine whose
@@ -698,7 +699,7 @@ fn a_dangling_link_outside_the_versions_folder_is_reported_and_kept() {
     );
 }
 
-/// Uninstall is human-only: `--json` is an argument it does not have (D-24).
+/// Uninstall is human-only: `--json` is an argument it does not have.
 #[test]
 fn uninstall_rejects_json() {
     let fixture = fixture();
@@ -720,7 +721,7 @@ fn deleted_bytes(output: &Output) -> u64 {
 }
 
 /// The archive is the product, so the question is asked and an unanswerable
-/// prompt is a refusal rather than an assumed yes (INST-08, D-20).
+/// prompt is a refusal rather than an assumed yes.
 ///
 /// This is the shape a script gets: `--purge` with stdin closed and no `--yes`.
 /// Exit non-zero, and every byte still there.

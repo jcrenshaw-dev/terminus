@@ -3,8 +3,8 @@
 //! Two properties are worth more than the rest and they are both about
 //! processes rather than about output. The hook must return to the harness
 //! having written nothing and holding nothing, and the ingest it started must
-//! outlive both of the kills Claude Code aims at a hook it has given up on
-//! (D-03). Neither is provable from a return value, so these tests read the
+//! outlive both of the kills Claude Code aims at a hook it has given up on.
+//! Neither is provable from a return value, so these tests read the
 //! process table.
 //!
 //! Every spawn here sets `TERMINUS_DATA_DIR`, `TERMINUS_CONFIG_DIR` **and**
@@ -258,7 +258,7 @@ fn await_process(argv: &str) -> Proc {
     }
 }
 
-/// Task 1 / D-03: the process that does the work is in neither set Claude Code
+/// The process that does the work is in neither set Claude Code
 /// kills a hook through.
 ///
 /// It is spawned through the hand-off half of `cmd::spawn` directly - the
@@ -371,7 +371,7 @@ fn drain(argv: &str) {
     }
 }
 
-/// AC1: the four events, the exact payloads, the clean stdout and the budget.
+/// The four events, the exact payloads, the clean stdout and the budget.
 ///
 /// The p99 is printed rather than only asserted, so a regression names a number
 /// a reader can compare against the next run instead of a boolean.
@@ -395,7 +395,7 @@ fn every_event_exits_zero_with_an_empty_stdout_inside_the_budget() {
                 output.status.code(),
                 String::from_utf8_lossy(&output.stderr)
             );
-            // D-15: Claude Code validates any hook stdout that parses as JSON
+            // Claude Code validates any hook stdout that parses as JSON
             // against the event name, so a stray line is a protocol error and
             // not noise.
             assert!(
@@ -745,7 +745,7 @@ fn sigkill(pid: i32) {
     unsafe { kill(pid, SIGKILL) };
 }
 
-/// AC2 / D-03: the kill Claude Code actually performs, and an ingest that
+/// The kill Claude Code actually performs, and an ingest that
 /// finishes anyway.
 ///
 /// The hook is left blocked on a stdin nobody closes, which is the only state a
@@ -867,14 +867,14 @@ fn the_ingest_survives_a_group_kill_and_a_descendant_sweep() {
     assert_eq!(error, None, "the pass recorded an error: {error:?}");
 }
 
-/// PRIV-03's knob, written the only way anything can turn it on.
+/// `[privacy] redact_recall`, written the only way anything can turn it on.
 const KNOB_ON: &str = "[privacy]\nredact_recall = true\n";
 
-/// AC7: the same four events, the same hundred runs, the same budget, with
+/// The same four events, the same hundred runs, the same budget, with
 /// `[privacy] redact_recall = true` on the config the hook loads.
 ///
 /// The knob puts the egress rule set on the `SessionStart` path, between the
-/// projection and the budget, and D-06 measured that at roughly 1.1 ms worst
+/// projection and the budget, and that was measured at roughly 1.1 ms worst
 /// case for the brief's two quotes. That is a claim about a cost, so it is
 /// asserted where the cost is paid: the wall clock of a spawn the harness
 /// waits on, against the same 10 ms the run without the knob is held to.

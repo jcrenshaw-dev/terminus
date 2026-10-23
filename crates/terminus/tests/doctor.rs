@@ -1,5 +1,5 @@
 //! `terminus doctor`: the report, the commands it prints, and the fact that it
-//! writes nothing anywhere (INST-06, AC6).
+//! writes nothing anywhere.
 //!
 //! Every spawn here points `TERMINUS_BIN_DIR`, `CLAUDE_CONFIG_DIR`,
 //! `TERMINUS_DATA_DIR`, `TERMINUS_CONFIG_DIR` and `HOME` at temporary
@@ -192,7 +192,7 @@ impl Fixture {
     /// Run a command doctor printed, through a shell, exactly as it was
     /// printed.
     ///
-    /// The point of AC6 is that the command in the report is a command: not a
+    /// The point is that the command in the report is a command: not a
     /// description, not a sentence with a path in it. So the test runs the
     /// string rather than asserting on its text. Stdin is null: nothing a fix
     /// runs may wait on an answer.
@@ -345,7 +345,7 @@ fn after_install_every_wiring_check_is_ok() {
     );
 }
 
-/// AC6, the whole of it: a problem, a command, and the command works.
+/// The whole contract: a problem, a command, and the command works.
 ///
 /// The command is run rather than matched, because the requirement is not that
 /// doctor prints a plausible string - it is that what it prints fixes the thing
@@ -522,7 +522,7 @@ fn break_registration(fixture: &Fixture, missing: bool) {
     write(&claude_json, &value);
 }
 
-/// D-16: with no `claude` on `PATH`, install cannot place the entry either, so
+/// With no `claude` on `PATH`, install cannot place the entry either, so
 /// the fix is the `claude mcp` command itself. With the remove in front when an
 /// entry is there, because `add-json` refuses a name that exists.
 #[test]
@@ -560,7 +560,7 @@ fn without_claude_on_path_the_mcp_fix_is_the_claude_mcp_command() {
     }
 }
 
-/// D-04: doctor's own `claude --version` carries the traffic variable. The
+/// Doctor's own `claude --version` carries the traffic variable. The
 /// fixture takes it out of doctor's environment, so a logged `1` can only have
 /// come from doctor.
 #[test]
@@ -579,12 +579,12 @@ fn doctors_claude_version_runs_with_nonessential_traffic_off() {
 // The store and the data directory, neither of which doctor creates
 // ---------------------------------------------------------------------------
 
-/// AC6's first half: a machine before its first ingest is a state, not a
+/// A machine before its first ingest is a state, not a
 /// failure, and the report leaves it exactly that.
 ///
 /// The listing is taken of the *parent*, before and after, so a created WAL
 /// file, a `LOCK`, or a directory made on the way to somewhere else fails this
-/// test too. `Store::open` would create all three (D-12), which is why doctor
+/// test too. `Store::open` would create all three, which is why doctor
 /// opens through the read path instead.
 #[test]
 fn a_data_directory_that_does_not_exist_is_a_state_and_stays_absent() {
@@ -625,7 +625,7 @@ fn after_one_ingest_the_store_and_the_last_run_are_reported() {
     fixture.install();
 
     // A `<uuid>.jsonl` directly inside a project directory, because that is
-    // what `discover` calls a transcript (D-16); a fixture kept under its own
+    // what `discover` calls a transcript; a fixture kept under its own
     // name would be walked past and the store would stay empty.
     let project = fixture.claude_dir.join("projects").join("-data-code-x");
     std::fs::create_dir_all(&project).unwrap();
@@ -710,7 +710,7 @@ fn entries(dir: &Path) -> Vec<String> {
 
 /// Both values, the file each came from, and not one byte written back.
 ///
-/// The byte comparison is the requirement: INST-06 says doctor never repairs,
+/// The byte comparison is the requirement: doctor never repairs,
 /// and the settings file is the thing it would be most tempting to repair,
 /// since `install` already knows how to raise `cleanupPeriodDays`.
 #[test]
@@ -804,7 +804,7 @@ fn a_project_settings_file_outranks_the_user_one() {
 // ---------------------------------------------------------------------------
 
 /// One document, the envelope's four keys, and `data` keyed by check name with
-/// the same three fields under every one of them (D-24, RCL-06).
+/// the same three fields under every one of them.
 #[test]
 fn the_json_document_carries_every_check_by_name() {
     let fixture = fixture();

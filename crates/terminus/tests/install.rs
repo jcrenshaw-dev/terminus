@@ -12,7 +12,7 @@
 //! `PATH` is a fixture directory holding a fake `claude` and nothing else, so
 //! no test can start the real one.
 //!
-//! The assertions are the ones AC4 and AC5 are written in, spelled in Rust
+//! The assertions are the ones install's contract states, spelled in Rust
 //! rather than in `jq`: "every other key byte-identical" is a comparison of the
 //! file with terminus's own additions removed against the file as it was
 //! seeded, and "in its original position" is a comparison of the top-level key
@@ -545,7 +545,7 @@ fn a_marked_plain_file_at_the_stable_path_becomes_the_link() {
     );
 }
 
-/// D-03: a rebuild at the same version replaces that version's file, and a
+/// A rebuild at the same version replaces that version's file, and a
 /// rerun from the same build leaves the file alone.
 #[test]
 fn a_rebuild_at_the_same_version_replaces_its_file_and_a_rerun_does_not() {
@@ -593,7 +593,7 @@ fn a_rebuild_at_the_same_version_replaces_its_file_and_a_rerun_does_not() {
     );
 }
 
-/// D-07: a program that is not a terminus build is refused, not overwritten,
+/// A program that is not a terminus build is refused, not overwritten,
 /// and the refusal names a command that makes the same install succeed.
 #[test]
 fn a_foreign_binary_at_the_stable_path_stops_everything() {
@@ -799,9 +799,9 @@ fn a_symlink_at_the_backup_name_is_not_written_through() {
 // Task 3: the four hook entries
 // ---------------------------------------------------------------------------
 
-/// AC4 and AC5 for `settings.json`: four entries after two runs, the user's own
-/// group untouched, every other key where it was, one backup, and an upgrade
-/// that rewrites no byte of `hooks`.
+/// Install's contract for `settings.json`: four entries after two runs, the
+/// user's own group untouched, every other key where it was, one backup, and
+/// an upgrade that rewrites no byte of `hooks`.
 #[test]
 fn two_installs_leave_one_hook_entry_per_event_and_change_nothing_else() {
     let fixture = fixture();
@@ -825,7 +825,7 @@ fn two_installs_leave_one_hook_entry_per_event_and_change_nothing_else() {
     expected.sort();
     assert_eq!(events, expected);
     for entry in &ours {
-        // Exec form (D-01): `args` present, and `hook` in front of the event.
+        // Exec form: `args` present, and `hook` in front of the event.
         assert_eq!(entry["type"], "command");
         assert_eq!(entry["args"][0], "hook");
     }
@@ -863,7 +863,7 @@ fn two_installs_leave_one_hook_entry_per_event_and_change_nothing_else() {
     );
 }
 
-/// INST-05: replacing the binary and rerunning install changes no byte of the
+/// Replacing the binary and rerunning install changes no byte of the
 /// `hooks` object, because the path the entries name never moved.
 #[test]
 fn an_upgrade_rewrites_no_byte_of_the_hooks_object() {
@@ -883,7 +883,7 @@ fn an_upgrade_rewrites_no_byte_of_the_hooks_object() {
     assert_eq!(std::fs::read_to_string(fixture.settings()).unwrap(), raw);
 }
 
-/// INST-05: an entry that is terminus's and the wrong shape is repaired, not
+/// An entry that is terminus's and the wrong shape is repaired, not
 /// counted as done.
 ///
 /// A hand edit, or an entry an older terminus wrote with a different arg shape,
@@ -935,10 +935,10 @@ fn an_entry_of_ours_in_the_wrong_shape_is_repaired_rather_than_skipped() {
         serde_json::Value::from(30),
         "a key beside ours was dropped"
     );
-    // AC2 still holds: one entry per event, four in all.
+    // Still one entry per event, four in all.
     assert_eq!(our_entries(&settings, &fixture.stable()).len(), 4);
 
-    // AC3 still holds: with everything in the intended shape, a second install
+    // And with everything in the intended shape, a second install still
     // rewrites nothing.
     let after_first = std::fs::read_to_string(fixture.settings()).unwrap();
     assert!(fixture.run(&["install"]).status.success());
@@ -987,7 +987,7 @@ fn two_installs_leave_claude_json_alone_and_each_asks_claude_for_the_add() {
 
 /// An entry under terminus's key in the wrong shape is removed and placed
 /// again, and the add keeps what the user put beside the three keys terminus
-/// owns (D-02, D-06).
+/// owns.
 #[test]
 fn a_stale_mcp_registration_is_removed_and_added_again() {
     let fixture = fixture();
@@ -1019,7 +1019,7 @@ fn a_stale_mcp_registration_is_removed_and_added_again() {
     );
 }
 
-/// An entry already current starts no `claude` at all (D-01).
+/// An entry already current starts no `claude` at all.
 #[test]
 fn a_current_mcp_registration_runs_no_claude() {
     let fixture = fixture();
@@ -1044,7 +1044,7 @@ fn a_current_mcp_registration_runs_no_claude() {
 }
 
 /// What every incomplete install must still have done, and how it must say
-/// so (D-05): the binary placed, the four hook entries merged, the backfill
+/// so: the binary placed, the four hook entries merged, the backfill
 /// started, `.claude.json` untouched, the command that finishes it, and exit 1.
 fn assert_incomplete(fixture: &Fixture, output: &Output, claude_json: &str) -> String {
     let said = text(output);
@@ -1119,10 +1119,10 @@ fn an_unreadable_claude_json_leaves_the_install_incomplete_and_runs_no_claude() 
 }
 
 // ---------------------------------------------------------------------------
-// Install asks nothing (phase 3 D-08, D-12)
+// Install asks nothing
 // ---------------------------------------------------------------------------
 
-/// D-12: a settings file terminus's renderer did not produce is rewritten in
+/// A settings file terminus's renderer did not produce is rewritten in
 /// full, two-space indented, without a question. The backup holds the original
 /// bytes and the summary says what happened to the file.
 #[test]
@@ -1162,7 +1162,7 @@ fn a_differently_formatted_file_is_rewritten_in_full_and_the_summary_says_so() {
     );
 }
 
-/// AC1: `--yes` and `-y` are misuse now that there is nothing to say yes to.
+/// `--yes` and `-y` are misuse, because there is nothing to say yes to.
 /// Exit 2, and nothing is placed, written or run.
 #[test]
 fn install_takes_no_yes_flag() {
@@ -1199,7 +1199,7 @@ fn finish_within(mut child: Child, seconds: u64) -> Output {
     child.wait_with_output().unwrap()
 }
 
-/// AC1: install reads nothing from stdin. A run with stdin closed and a run
+/// Install reads nothing from stdin. A run with stdin closed and a run
 /// with stdin open and never written both finish, ask nothing, and leave the
 /// same files and the same `claude` calls behind.
 ///
@@ -1277,7 +1277,7 @@ fn install_reads_nothing_from_stdin() {
     assert_eq!(calls(&closed).len(), 1, "{:?}", calls(&closed));
 }
 
-/// D-24: `install` is human-only. `--json` is misuse, exit 2.
+/// `install` is human-only. `--json` is misuse, exit 2.
 #[test]
 fn install_takes_no_json_flag() {
     let fixture = fixture();
@@ -1291,7 +1291,7 @@ fn install_takes_no_json_flag() {
 // Task 6: the advisories, and the settings install never changes
 // ---------------------------------------------------------------------------
 
-/// INST-04 and D-11: the receipt states `cleanupPeriodDays` at every value,
+/// The receipt states `cleanupPeriodDays` at every value,
 /// says what is already gone, and prints the line that raises it, and install
 /// changes neither it nor `autoCompactEnabled`. It also names every file the
 /// run touched and where to watch the backfill.
@@ -1359,7 +1359,7 @@ fn install_reports_the_two_settings_it_never_changes() {
     }
 }
 
-/// D-10: with a transcript on disk, the receipt carries the backfill estimate.
+/// With a transcript on disk, the receipt carries the backfill estimate.
 #[test]
 fn the_receipt_carries_the_backfill_estimate() {
     let fixture = fixture();
@@ -1421,7 +1421,8 @@ fn the_summary_names_the_data_directory_and_the_backups_it_wrote() {
     assert_eq!(fixture.backups().len(), 1);
 }
 
-/// AC8/ING-11, the case a user actually hits: `~/.local/bin/terminus install`.
+/// The backfill install starts, from the command a user actually runs:
+/// `~/.local/bin/terminus install`.
 ///
 /// A backfill that will not start is silent, because a backfill cannot fail an
 /// install, so the store growing is the only proof it ran. The rerun install is
@@ -1470,7 +1471,7 @@ fn install_from_the_stable_path_still_starts_its_backfill() {
     wait_for_sessions(&fixture, 2);
 }
 
-/// D-02: install run through the link it made last time changes neither the
+/// Install run through the link it made last time changes neither the
 /// link nor the version file.
 #[test]
 fn install_from_the_stable_path_touches_neither_the_link_nor_the_file() {
@@ -1552,7 +1553,7 @@ fn wait_for_sessions(fixture: &Fixture, expected: i64) {
     }
 }
 
-/// STOR-10 and D-07: on a store in an older archive format, install still
+/// On a store in an older archive format, install still
 /// places the binary and writes both settings files, then prints the refusal
 /// with its clean-install steps instead of promising that the next hook will
 /// archive, and exits non-zero so `install.sh` fails with it.

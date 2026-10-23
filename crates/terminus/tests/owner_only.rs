@@ -1,8 +1,8 @@
 //! Owner-only at creation, observed through the shipped binary under a umask
-//! that would otherwise widen everything (PRIV-04, AC1).
+//! that would otherwise widen everything.
 //!
 //! **The umask is set for the spawn, not for the test process.** Every command
-//! here goes through `sh -c 'umask 022; exec "$0" "$@"'` (D-08). A test that
+//! here goes through `sh -c 'umask 022; exec "$0" "$@"'`. A test that
 //! called `umask()` in-process would need a `libc` dev-dependency this project
 //! does not have, would leak into every other test in the binary, and - worse -
 //! a developer whose own umask is already 077 would get a green run out of a
@@ -40,8 +40,8 @@ enum Located {
     /// in this crate does and what the export and end-to-end tests want.
     Explicitly,
     /// The PLATFORM data directory, with `TERMINUS_DATA_DIR` removed. `data
-    /// move` writes a location pointer and the environment override outranks it
-    /// (D-06), so a bench that set the variable would pass whether the move
+    /// move` writes a location pointer and the environment override outranks
+    /// it, so a bench that set the variable would pass whether the move
     /// worked or not - the reason `tests/datamove.rs` gives for the same shape.
     ByPlatform,
 }
@@ -260,11 +260,11 @@ fn contents(dir: &Path) -> Vec<PathBuf> {
     paths
 }
 
-/// AC1's export clause: `terminus export` writes a directory nobody else on the
+/// `terminus export` writes a directory nobody else on the
 /// machine can open, holding files nobody else can read.
 ///
 /// This is the one command whose destination the USER names, and it is still
-/// forced to 0700/0600 (D-11) - what lands there is every prompt and every tool
+/// forced to 0700/0600 - what lands there is every prompt and every tool
 /// result, unredacted, and the fact that the path was asked for does not make
 /// it less so.
 #[test]
@@ -293,7 +293,7 @@ fn an_export_directory_and_every_file_in_it_are_owner_only() {
     }
 }
 
-/// What a build before this phase left on disk: every directory 0755, every
+/// What a build that set no modes left on disk: every directory 0755, every
 /// file 0644.
 ///
 /// The source is widened DELIBERATELY, because `std::fs::copy` reproduces the
@@ -330,12 +330,12 @@ fn assert_tree_is_owner_only(dir: &Path) {
     }
 }
 
-/// AC1's move clause: `terminus data move` writes the modes this build states
-/// rather than the modes it found (D-10).
+/// `terminus data move` writes the modes this build states rather than the
+/// modes it found.
 ///
 /// The one command that reads a mode off one place and writes it to another.
-/// Left as `std::fs::copy`, it is the single path that can undo the whole
-/// phase: a store carried off an older build, or restored out of a tar, would
+/// Left as `std::fs::copy`, it is the single path that can undo owner-only
+/// storage: a store carried off an older build, or restored out of a tar, would
 /// arrive at its new home exactly as wide as it left. So the source here is
 /// deliberately made 755/644 first and the destination is asserted owner-only
 /// anyway - and the `LOCK` the move creates fresh at the destination is on the
@@ -347,7 +347,7 @@ fn a_data_move_writes_an_owner_only_tree_however_wide_the_source_was() {
     bench.ok(&["ingest"]);
 
     let source = bench.data_dir.clone();
-    // The first pass takes a snapshot (STOR-06), which is what puts a
+    // The first pass takes a snapshot, which is what puts a
     // SUBDIRECTORY in the tree about to move - `contents` refuses an empty one,
     // so a pass that took none fails here rather than leaving the recursive
     // half of `copy_tree` untested.
@@ -374,8 +374,8 @@ fn a_data_move_writes_an_owner_only_tree_however_wide_the_source_was() {
 /// name a file (`inject::state`'s allow-list, mirrored in `inject::decision`).
 const SESSION_ID: &str = "0e5e6a1e-9f2b-4c7a-8d31-6b4f2a9c1d55";
 
-/// AC1 whole: one fresh ingest, one `SessionStart`, one `UserPromptSubmit`, one
-/// export, and then every path the phase claims, asserted one at a time.
+/// One fresh ingest, one `SessionStart`, one `UserPromptSubmit`, one export,
+/// and then every path that must be owner-only, asserted one at a time.
 ///
 /// Three things this test has to arrange for, none of them incidental:
 ///
@@ -387,21 +387,20 @@ const SESSION_ID: &str = "0e5e6a1e-9f2b-4c7a-8d31-6b4f2a9c1d55";
 /// `a_pass_reports_the_lock_rather_than_waiting_for_it` is that claim.
 ///
 /// **A read transaction is held open on `terminus.db`** for the same span.
-/// SQLite deletes `-wal` and `-shm` when the last connection closes, which is
-/// why CONTEXT D-02's umask-022 baseline lists neither: a test that looked for
-/// them after the ingest process exited would find nothing to stat. A held
-/// reader keeps both on disk. Their mode is SQLite's own doing - it takes it
-/// from the main database rather than from the umask of whatever process
-/// created them (D-02) - so these two assertions test that flagged assumption
-/// directly, and the fact that this process made them is not a hole in the
-/// test.
+/// SQLite deletes `-wal` and `-shm` when the last connection closes, so a
+/// test that looked for them after the ingest process exited would find
+/// nothing to stat. A held reader keeps both on disk. Their mode is SQLite's
+/// own doing - it takes it from the main database rather than from the umask
+/// of whatever process created them - so these two assertions test SQLite's
+/// rule directly, and the fact that this process made them is not a hole in
+/// the test.
 ///
 /// **The `SessionStart` says `source: "compact"`**, which
 /// `inject::brief::owe_compaction` answers by saving the session's state file
 /// before it looks at the store at all, so `injection/` is populated whether
 /// the brief renders or not. The `UserPromptSubmit` needs no such arrangement:
 /// every prompt writes a decision record, including the ones that inject
-/// nothing (D-11).
+/// nothing.
 #[test]
 fn everything_a_fresh_install_writes_is_owner_only_under_umask_022() {
     let bench = bench();
