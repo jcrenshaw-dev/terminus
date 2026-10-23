@@ -924,6 +924,36 @@ fn a_path_filter_is_structural_and_not_textual() {
     assert_eq!(unique, union.hits.len(), "a turn came back twice");
 }
 
+/// #108: the path list is one bound parameter, so a list longer than SQLite's
+/// 32,766 variables still runs, and none of it is cut.
+///
+/// The one path a turn carries is last, so a list cut anywhere would lose it
+/// and answer with no hit.
+#[test]
+fn a_path_list_past_the_variable_limit_still_finds_its_turn() {
+    let bench = bench();
+    let conn = bench.conn();
+
+    let mut paths: Vec<String> = (0..39_999).map(|n| format!("nowhere/{n}.md")).collect();
+    paths.push("docs/RETRY.md".into());
+
+    let response = narrowed(
+        &conn,
+        "docs/RETRY.md",
+        Filters {
+            paths,
+            ..Filters::default()
+        },
+    )
+    .expect("40,000 paths are one parameter, not 40,000");
+    assert_eq!(response.hits.len(), 1, "{:?}", response.hits);
+    assert_eq!(
+        tool_of(&conn, response.hits[0].turn_id).as_deref(),
+        Some("Read"),
+        "the hit should be the tool call that opened the file"
+    );
+}
+
 /// The window is a lexicographic comparison against `turns.ts`, and a bare
 /// date covers its own whole day.
 #[test]

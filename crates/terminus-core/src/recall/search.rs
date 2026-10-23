@@ -640,18 +640,15 @@ impl Filters {
         if !self.paths.is_empty() {
             // EXISTS rather than a join: a turn carrying three of the named
             // paths is still one hit, and a join would return it three times
-            // and spend three excerpt reads saying so.
+            // and spend three excerpt reads saying so. The list is one JSON
+            // array read through `json_each`, so its length is not bounded by
+            // SQLite's variable limit (#108).
             sql.push_str(
-                " AND EXISTS (SELECT 1 FROM paths p WHERE p.turn_id = t.id AND p.path IN (",
+                " AND EXISTS (SELECT 1 FROM paths p WHERE p.turn_id = t.id \
+                 AND p.path IN (SELECT value FROM json_each(?)))\n",
             );
-            for (index, path) in self.paths.iter().enumerate() {
-                if index > 0 {
-                    sql.push(',');
-                }
-                sql.push('?');
-                params.push(Box::new(path.clone()));
-            }
-            sql.push_str("))\n");
+            let paths: serde_json::Value = self.paths.iter().map(String::as_str).collect();
+            params.push(Box::new(paths.to_string()));
         }
         // A turn with no timestamp is outside every window, because SQL's
         // `NULL >= x` is NULL. That is the wanted answer: a turn that cannot say
