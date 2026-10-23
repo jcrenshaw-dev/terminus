@@ -15,7 +15,8 @@ use terminus_core::observe::egress;
 /// A key value nothing here can produce by accident.
 const KEY: &str = "sk-TERMINUSEGRESS-71c4a8-do-not-log";
 
-/// A text carrying a secret in each of the two shapes the plan names.
+/// A text carrying a secret in each of two shapes: an authorization header and
+/// an exported API key.
 fn body() -> String {
     format!(
         "POST /v1/chat/completions HTTP/1.1\r\n\

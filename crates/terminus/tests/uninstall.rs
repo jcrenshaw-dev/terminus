@@ -744,7 +744,8 @@ fn purge_with_nothing_to_read_refuses_and_keeps_the_archive() {
         "the archive was deleted without an answer"
     );
     assert_eq!(fixture.footprint(), before, "the store was written to");
-    // Task 5's work still ran: the purge refusal is about the archive alone.
+    // Removing the binary still ran: the purge refusal is about the archive
+    // alone.
     assert!(!fixture.stable().exists());
 }
 

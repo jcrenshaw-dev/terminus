@@ -89,9 +89,9 @@ pub const DEFAULT_CONTEXT_SIDE: usize = 5;
 
 /// The `annotations` object every tool here carries.
 ///
-/// All four hints, not only the one the acceptance criterion names: a client
-/// that reads `destructiveHint` and finds it absent has to assume the default,
-/// and the default for a tool that does not say is the cautious one.
+/// All four hints are set: a client that reads `destructiveHint` and finds it
+/// absent has to assume the default, and the default for a tool that does not
+/// say is the cautious one.
 fn read_only() -> Value {
     json!({
         "readOnlyHint": true,

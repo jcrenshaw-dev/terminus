@@ -29,7 +29,7 @@ use terminus_core::ingest::pass::{self, PassOutcome, Summary};
 use terminus_core::store::{DB_FILE_NAME, TABLES};
 use terminus_core::{discover, testkit};
 
-/// The worker count the plan's `Verify` names, and enough to be more than one.
+/// Enough workers to be more than one.
 const WORKERS: usize = 4;
 
 /// The tables the post-walk half of a pass writes, which a backfill never runs.

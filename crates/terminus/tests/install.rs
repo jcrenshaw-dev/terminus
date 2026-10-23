@@ -407,7 +407,7 @@ fn without_ours(
 }
 
 // ---------------------------------------------------------------------------
-// Task 1: the binary at the stable path
+// The binary at the stable path
 // ---------------------------------------------------------------------------
 
 /// The stable path is a link to this build stored under its version, the file
@@ -796,7 +796,7 @@ fn a_symlink_at_the_backup_name_is_not_written_through() {
 }
 
 // ---------------------------------------------------------------------------
-// Task 3: the four hook entries
+// The four hook entries
 // ---------------------------------------------------------------------------
 
 /// Install's contract for `settings.json`: four entries after two runs, the
@@ -950,7 +950,7 @@ fn an_entry_of_ours_in_the_wrong_shape_is_repaired_rather_than_skipped() {
 }
 
 // ---------------------------------------------------------------------------
-// Task 4: the MCP registration
+// The MCP registration
 // ---------------------------------------------------------------------------
 
 /// Install places the MCP entry by running `claude mcp add-json`, and never
@@ -1288,7 +1288,7 @@ fn install_takes_no_json_flag() {
 }
 
 // ---------------------------------------------------------------------------
-// Task 6: the advisories, and the settings install never changes
+// The advisories, and the settings install never changes
 // ---------------------------------------------------------------------------
 
 /// The receipt states `cleanupPeriodDays` at every value,
