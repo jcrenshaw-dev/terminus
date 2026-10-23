@@ -703,12 +703,11 @@ tool result:
 
 - Each hit is a `terminus search --json` hit without `matched_on`, read and
   ordered the same way. The document has no `query` and no `truncated`.
-- `query` is required. `limit` defaults to 10 and is lowered to 50, and only
-  the first 25 `paths` are filtered on. `project` defaults to the project the
-  server's working directory sits in.
+- `query` is required. `limit` defaults to 10 and is lowered to 50. `project`
+  defaults to the project the server's working directory sits in.
 - `reason` is one line, the first that applies: why the result is empty, then a
-  `limit` lowered to 50, then a query cut to its first tokens, then `paths` cut
-  to the first 25. It is null when none applies.
+  `limit` lowered to 50, then a query cut to its first tokens. It is null when
+  none applies.
 
 ### `recall_context`
 

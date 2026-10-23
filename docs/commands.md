@@ -237,7 +237,7 @@ The MCP server, started by Claude Code for each session over stdio and registere
 
 It serves three tools. All three are read-only, answer about the session's project unless given another, and never return an excluded project:
 
-- `recall_search`: the search `terminus search` runs, with the same query, `project`, `paths` (at most 25), `tool`, `kind`, `since`, `until` and `limit` (default 10, at most 50).
+- `recall_search`: the search `terminus search` runs, with the same query, `project`, `paths`, `tool`, `kind`, `since`, `until` and `limit` (default 10, at most 50).
 - `recall_context`: the turns before and after one turn id, default 5 each side and at most 25, stopping at the session's ends.
 - `recall_get`: the full archived text of up to 25 turn ids.
 
