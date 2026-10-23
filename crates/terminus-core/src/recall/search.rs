@@ -329,10 +329,17 @@ const CANDIDATE_POOL: usize = MAX_RESULTS * 4;
 
 /// Run one search.
 ///
-/// A query that reduced to no tokens returns no hits without asking SQLite
-/// anything: `MATCH ''` is itself an fts5 error, so the empty result is
-/// produced rather than caught, with [`Reason::NothingSearchable`] saying why.
+/// The order is fixed. The time bounds are checked first, through
+/// [`checked_bound`], so a bound that names no instant is
+/// [`crate::error::Error::InvalidTimeFilter`] wherever the caller stands (#24).
+/// Then the scope is resolved, and a scope that leaves nothing to search -
+/// everything excluded, nothing archived, an unknown or excluded project -
+/// answers with its reason. Then a query that reduced to no tokens returns no
+/// hits without asking SQLite anything: `MATCH ''` is itself an fts5 error, so
+/// the empty result is produced rather than caught, with
+/// [`Reason::NothingSearchable`] saying why.
 pub fn run(conn: &Connection, config: &Config, request: &Request) -> Result<Response> {
+    let bounds = request.filters.bounds()?;
     let scoped = scope::resolve(conn, config, &request.scope)?;
     if let Some(reason) = scoped.reason() {
         return Ok(Response {
@@ -353,7 +360,7 @@ pub fn run(conn: &Connection, config: &Config, request: &Request) -> Result<Resp
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(expression)];
 
     scoped.push_filter(&mut sql, &mut params);
-    request.filters.push_onto(&mut sql, &mut params)?;
+    request.filters.push_onto(&bounds, &mut sql, &mut params);
     // Conjunctive with everything above and applied inside the ranking query,
     // not after it: a bound applied to the results would let a later-archived
     // turn take a slot in the candidate pool and push a turn that WAS indexed
@@ -593,13 +600,35 @@ fn weight_by_entities(conn: &Connection, query: &Query, hits: &mut [Hit]) -> Res
     Ok(())
 }
 
+/// The time bounds of one search, each already through [`checked_bound`].
+struct Bounds {
+    since: Option<String>,
+    until: Option<String>,
+}
+
 impl Filters {
-    /// Append every filter that is set, conjunctively.
+    /// Check both time bounds, once per search.
+    fn bounds(&self) -> Result<Bounds> {
+        let check = |field, bound: &Option<String>| {
+            bound
+                .as_deref()
+                .map(|raw| checked_bound(field, raw))
+                .transpose()
+        };
+        Ok(Bounds {
+            since: check(FIELD_SINCE, &self.since)?,
+            until: check(FIELD_UNTIL, &self.until)?,
+        })
+    }
+
+    /// Append every filter that is set, conjunctively, with the time bounds as
+    /// [`Filters::bounds`] checked them.
     fn push_onto(
         &self,
+        bounds: &Bounds,
         sql: &mut String,
         params: &mut Vec<Box<dyn rusqlite::ToSql>>,
-    ) -> Result<()> {
+    ) {
         if let Some(tool) = &self.tool {
             sql.push_str(" AND t.tool_name = ?\n");
             params.push(Box::new(tool.clone()));
@@ -627,15 +656,14 @@ impl Filters {
         // A turn with no timestamp is outside every window, because SQL's
         // `NULL >= x` is NULL. That is the wanted answer: a turn that cannot say
         // when it happened cannot be shown as evidence of when something did.
-        if let Some(since) = &self.since {
+        if let Some(since) = &bounds.since {
             sql.push_str(" AND t.ts >= ?\n");
-            params.push(Box::new(checked_bound(FIELD_SINCE, since)?));
+            params.push(Box::new(since.clone()));
         }
-        if let Some(until) = &self.until {
+        if let Some(until) = &bounds.until {
             sql.push_str(" AND t.ts <= ?\n");
-            params.push(Box::new(checked_bound(FIELD_UNTIL, until)?));
+            params.push(Box::new(until.clone()));
         }
-        Ok(())
     }
 }
 

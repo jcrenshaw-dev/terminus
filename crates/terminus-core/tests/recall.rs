@@ -1121,6 +1121,76 @@ fn a_real_edge_date_passes_and_an_impossible_one_says_which_bound() {
     }
 }
 
+/// #24: a bad date is the caller's error wherever the caller stands.
+///
+/// The dates are checked before the scope is resolved, so no scope answer - a
+/// directory no project covers, a config excluding everything - can turn a
+/// bound that names no instant into an empty result that looks like an answer.
+#[test]
+fn a_bad_date_is_refused_before_any_scope_answer() {
+    let bench = bench();
+    let conn = bench.conn();
+    let uncovered = bench.root.join("no-project-here");
+
+    let run = |exclusions: &[&str], scope: Scope, filters: Filters| {
+        search::run(
+            &conn,
+            &config(exclusions),
+            &Request::new(Query::parse("the"), scope).filters(filters),
+        )
+    };
+
+    for (field, raw, filters) in [
+        (
+            "since",
+            "2026-02-30",
+            Filters {
+                since: Some("2026-02-30".into()),
+                ..Filters::default()
+            },
+        ),
+        (
+            "until",
+            "last tuesday",
+            Filters {
+                until: Some("last tuesday".into()),
+                ..Filters::default()
+            },
+        ),
+    ] {
+        match run(&[], Scope::Directory(uncovered.clone()), filters) {
+            Err(terminus_core::Error::InvalidTimeFilter { field: got, value }) => {
+                assert_eq!(got, field);
+                assert_eq!(value, raw);
+            }
+            other => panic!("`{raw}` as {field} was not a caller error: {other:?}"),
+        }
+    }
+
+    let bad_since = Filters {
+        since: Some("2026-02-30".into()),
+        ..Filters::default()
+    };
+    assert!(matches!(
+        run(&["/"], Scope::Everything, bad_since),
+        Err(terminus_core::Error::InvalidTimeFilter { field: "since", .. })
+    ));
+
+    // The control: a real date from the same directory gets the scope's answer.
+    let real = Filters {
+        since: Some("2026-02-28".into()),
+        ..Filters::default()
+    };
+    let response = run(&[], Scope::Directory(uncovered.clone()), real).unwrap();
+    assert!(response.hits.is_empty());
+    assert_eq!(
+        response.reason,
+        Some(Reason::UnknownProject {
+            named: uncovered.to_string_lossy().into_owned()
+        })
+    );
+}
+
 /// An entity match is a whole stored value, never one query token against one.
 ///
 /// `path` and `error` values are multi-token by construction, so a
