@@ -4,8 +4,56 @@
 //! same way for a tree pass, a backfill and one named file, so the last run
 //! `terminus status` reports means the same thing whichever of the three ran.
 
+use rusqlite::OptionalExtension;
+
 use crate::error::Result;
 use crate::ingest::pass::{note, Summary};
+
+/// The last run, as `terminus status` prints it and `terminus doctor` judges
+/// it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Run {
+    pub started_at: String,
+    /// Null in the column reads as 0.
+    pub duration_ms: i64,
+    pub files_seen: i64,
+    pub files_committed: i64,
+    pub files_failed: i64,
+    pub bytes_read: i64,
+    pub turns_added: i64,
+    pub error: Option<String>,
+    pub notes: Option<String>,
+}
+
+/// The newest `runs` row, by id (#31).
+///
+/// `Ok(None)` is an empty table and `Err` is a read that failed, so "no run
+/// yet" and "the query failed" stay two answers without a separate count. The
+/// one reader `status` and `doctor` both go through, so the two cannot read
+/// the row into different shapes.
+pub fn last(conn: &rusqlite::Connection) -> Result<Option<Run>> {
+    Ok(conn
+        .query_row(
+            "SELECT started_at, coalesce(duration_ms, 0), files_seen, files_committed,
+                    files_failed, bytes_read, turns_added, error, notes
+             FROM runs ORDER BY id DESC LIMIT 1",
+            [],
+            |r| {
+                Ok(Run {
+                    started_at: r.get(0)?,
+                    duration_ms: r.get(1)?,
+                    files_seen: r.get(2)?,
+                    files_committed: r.get(3)?,
+                    files_failed: r.get(4)?,
+                    bytes_read: r.get(5)?,
+                    turns_added: r.get(6)?,
+                    error: r.get(7)?,
+                    notes: r.get(8)?,
+                })
+            },
+        )
+        .optional()?)
+}
 
 /// The one `runs` row a pass leaves behind.
 ///

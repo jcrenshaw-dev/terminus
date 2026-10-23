@@ -24,6 +24,7 @@ use std::path::Path;
 use serde_json::json;
 use serde_json::Value;
 use terminus_core::config::visible;
+use terminus_core::ingest::runs::{self, Run};
 use terminus_core::store::DB_FILE_NAME;
 
 use super::json::Document;
@@ -50,32 +51,10 @@ pub fn run(json: bool) -> Result<(), Failure> {
     let conn = store.conn();
 
     let counts = read(visible::counts(conn, config))?;
-    // Counted first rather than reached for with an optional row, so that "no
-    // run yet" and "the query failed" stay two different answers.
-    let runs: i64 = read(conn.query_row("SELECT count(*) FROM runs", [], |r| r.get(0)))?;
-    let last: Option<Run> = if runs == 0 {
-        None
-    } else {
-        Some(read(conn.query_row(
-            "SELECT started_at, coalesce(duration_ms, 0), files_seen, files_committed,
-                    files_failed, bytes_read, turns_added, error, notes
-             FROM runs ORDER BY id DESC LIMIT 1",
-            [],
-            |r| {
-                Ok(Run {
-                    started_at: r.get(0)?,
-                    duration_ms: r.get(1)?,
-                    files_seen: r.get(2)?,
-                    files_committed: r.get(3)?,
-                    files_failed: r.get(4)?,
-                    bytes_read: r.get(5)?,
-                    turns_added: r.get(6)?,
-                    error: r.get(7)?,
-                    notes: r.get(8)?,
-                })
-            },
-        ))?)
-    };
+    // An optional row from the one core reader: an empty table is `None` and a
+    // failed read is an error, so "no run yet" and "the query failed" stay two
+    // different answers.
+    let last: Option<Run> = read(runs::last(conn))?;
 
     if json {
         // The same numbers the human output prints, and no others: two accounts
@@ -182,18 +161,6 @@ fn document(
                 }),
             },
         )
-}
-
-struct Run {
-    started_at: String,
-    duration_ms: i64,
-    files_seen: i64,
-    files_committed: i64,
-    files_failed: i64,
-    bytes_read: i64,
-    turns_added: i64,
-    error: Option<String>,
-    notes: Option<String>,
 }
 
 /// The store's footprint: the database and its WAL sidecars together, because

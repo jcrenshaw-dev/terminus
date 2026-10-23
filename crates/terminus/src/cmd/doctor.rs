@@ -638,21 +638,6 @@ impl Doctor {
     }
 }
 
-/// The last pass an ingest left an account of.
-///
-/// There is no log file, by design, so the `runs` table is the only place a
-/// detached ingest's failure is written down. That is why doctor reports it at
-/// all: the user never saw the process, and this is the record it left.
-struct Run {
-    started_at: String,
-    duration_ms: i64,
-    files_seen: i64,
-    files_committed: i64,
-    files_failed: i64,
-    turns_added: i64,
-    error: Option<String>,
-}
-
 impl Doctor {
     // -----------------------------------------------------------------------
     // Terminus's own state: the roots it walks, the directory it writes into,
@@ -840,54 +825,27 @@ impl Doctor {
         };
         self.push(check);
 
-        let count: Result<i64, String> = conn
-            .query_row("SELECT count(*) FROM runs", [], |r| r.get(0))
-            .map_err(|e| e.to_string());
-        let check = match count {
+        // The last pass an ingest left an account of. There is no log file,
+        // by design, so the `runs` table is the only place a detached ingest's
+        // failure is written down. That is why doctor reports it at all: the
+        // user never saw the process, and this is the record it left.
+        let check = match terminus_core::ingest::runs::last(conn) {
             Err(error) => Check::new(
                 "last_run",
                 State::Problem,
                 format!("the runs table could not be read: {error}"),
             ),
-            Ok(0) => Check::new(
+            Ok(None) => Check::new(
                 "last_run",
                 State::Note,
                 "no ingest has run yet; the next hook Claude Code fires starts one",
             ),
-            Ok(_) => {
-                let last = conn
-                    .query_row(
-                        "SELECT started_at, coalesce(duration_ms, 0), files_seen, files_committed,
-                                files_failed, turns_added, error
-                         FROM runs ORDER BY id DESC LIMIT 1",
-                        [],
-                        |r| {
-                            Ok(Run {
-                                started_at: r.get(0)?,
-                                duration_ms: r.get(1)?,
-                                files_seen: r.get(2)?,
-                                files_committed: r.get(3)?,
-                                files_failed: r.get(4)?,
-                                turns_added: r.get(5)?,
-                                error: r.get(6)?,
-                            })
-                        },
-                    )
-                    .map_err(|e| e.to_string());
-                match last {
-                    Err(error) => Check::new(
-                        "last_run",
-                        State::Problem,
-                        format!("the last run could not be read: {error}"),
-                    ),
-                    Ok(run) => self.last_run(&run),
-                }
-            }
+            Ok(Some(run)) => self.last_run(&run),
         };
         self.push(check);
     }
 
-    fn last_run(&self, run: &Run) -> Check {
+    fn last_run(&self, run: &terminus_core::ingest::runs::Run) -> Check {
         let finding = format!(
             "{}: {} file(s) walked, {} committed, {} failed, {} turn(s) added in {} ms",
             run.started_at,
