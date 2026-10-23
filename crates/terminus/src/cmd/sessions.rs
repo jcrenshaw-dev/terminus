@@ -245,12 +245,8 @@ pub fn parse(parser: &mut lexopt::Parser) -> Result<Args, Failure> {
     while let Some(arg) = parser.next().map_err(|e| Failure::Misuse(e.to_string()))? {
         match arg {
             Long("project") => project = Some(super::value(parser, "project")?),
-            Long("since") => {
-                window.since = Some(super::time_bound("since", &super::value(parser, "since")?)?)
-            }
-            Long("until") => {
-                window.until = Some(super::time_bound("until", &super::value(parser, "until")?)?)
-            }
+            Long("since") => window.since = Some(super::date_value(parser, "since")?),
+            Long("until") => window.until = Some(super::date_value(parser, "until")?),
             Long("limit") => {
                 let raw = super::value(parser, "limit")?;
                 limit = raw

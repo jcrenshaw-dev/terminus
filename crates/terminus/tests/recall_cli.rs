@@ -458,17 +458,7 @@ fn a_bad_command_line_is_misuse_and_not_an_empty_result() {
 
     for args in [
         vec!["search", "--nope", "x"],
-        // `--project *` and not the default scope: `scope::resolve` runs first
-        // inside `search::run` and short-circuits a directory no archived
-        // project covers, so the bound is never reached to be rejected there.
-        vec![
-            "search",
-            "--project",
-            "*",
-            "--since",
-            "last tuesday",
-            "cargo",
-        ],
+        vec!["search", "--since", "last tuesday", "cargo"],
         vec!["search", "--limit", "many", "cargo"],
         vec!["search"],
     ] {
@@ -482,6 +472,57 @@ fn a_bad_command_line_is_misuse_and_not_an_empty_result() {
         );
         assert_eq!(stdout(&out), "", "misuse must print nothing to stdout");
     }
+
+    assert_impossible_dates_are_misuse(&bench);
+}
+
+/// Well-shaped bounds no calendar or clock has, each with the flag and the
+/// value its refusal must name.
+const IMPOSSIBLE_DATES: [(&[&str], &str, &str); 3] = [
+    (
+        &["search", "--since", "2026-02-30", "x"],
+        "--since",
+        "2026-02-30",
+    ),
+    (
+        &["search", "--until", "2026-08-12T25:00:00.000Z", "x"],
+        "--until",
+        "2026-08-12T25:00:00.000Z",
+    ),
+    (
+        &["sessions", "--until", "2026-13-01"],
+        "--until",
+        "2026-13-01",
+    ),
+];
+
+/// Each of [`IMPOSSIBLE_DATES`], run from the work directory no project covers,
+/// exits 2, prints nothing on stdout and names its flag and value on stderr.
+fn assert_impossible_dates_are_misuse(bench: &Bench) {
+    for (args, flag, value) in IMPOSSIBLE_DATES {
+        let out = bench.run(args);
+        let line = args.join(" ");
+        assert_eq!(out.status.code(), Some(2), "`{line}`: {}", stderr(&out));
+        assert_eq!(stdout(&out), "", "`{line}` printed to stdout");
+        assert!(
+            stderr(&out).contains(flag) && stderr(&out).contains(value),
+            "`{line}` did not name {flag} {value}: {}",
+            stderr(&out)
+        );
+    }
+}
+
+/// #24: an impossible date is misuse with no store as well. A data directory
+/// with nothing archived answers before the query layer is reached, so the
+/// check has to run while the arguments are read.
+#[test]
+fn an_impossible_date_is_misuse_with_no_store() {
+    let bench = bench();
+    assert_impossible_dates_are_misuse(&bench);
+    assert!(
+        !bench.data_dir.exists(),
+        "a refused command created the data directory"
+    );
 }
 
 /// `--json` puts a document on stdout and nothing else, with every diagnostic on

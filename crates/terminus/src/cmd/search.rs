@@ -24,7 +24,6 @@
 //! unfilter the model-facing paths the knob exists to cover.
 
 use terminus_core::recall::{search, Filters, Query, Request, MAX_RESULTS};
-use terminus_core::Error;
 
 use super::json::Document;
 use super::read::{self, Opened};
@@ -78,15 +77,6 @@ pub fn run(args: Args) -> Result<(), Failure> {
 
     let response = match search::run(reader.store().conn(), config, &request) {
         Ok(response) => response,
-        // A malformed `--since` is a mistake in the command line, not an empty
-        // result: every string compares cleanly against every other, so the
-        // alternative is a plausible wrong answer that nothing reports.
-        Err(Error::InvalidTimeFilter { field, value }) => {
-            return Err(Failure::Misuse(format!(
-                "--{field} {value:?} is not a time; expected YYYY-MM-DD or \
-                 YYYY-MM-DDTHH:MM:SS.mmmZ"
-            )))
-        }
         Err(other) => return Err(Failure::Operational(other.to_string())),
     };
 
@@ -229,14 +219,11 @@ pub fn parse(parser: &mut lexopt::Parser) -> Result<Args, Failure> {
             // Repeatable: a turn carrying any of the named paths is a hit, and
             // it is one hit however many of them it carries.
             Long("path") => filters.paths.push(super::value(parser, "path")?),
-            // Validated here rather than only inside the query layer: a bad
-            // bound must be misuse whatever project the caller is standing in.
-            Long("since") => {
-                filters.since = Some(super::time_bound("since", &super::value(parser, "since")?)?)
-            }
-            Long("until") => {
-                filters.until = Some(super::time_bound("until", &super::value(parser, "until")?)?)
-            }
+            // Checked here as well as inside the query layer: a data directory
+            // with no store answers before the query layer is reached, and a
+            // bad bound is misuse there too.
+            Long("since") => filters.since = Some(super::date_value(parser, "since")?),
+            Long("until") => filters.until = Some(super::date_value(parser, "until")?),
             Long("limit") => {
                 let raw = super::value(parser, "limit")?;
                 limit = raw

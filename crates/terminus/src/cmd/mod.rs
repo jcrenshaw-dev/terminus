@@ -180,6 +180,19 @@ pub fn value(parser: &mut lexopt::Parser, flag: &str) -> Result<String, Failure>
         .map(|v| v.to_string_lossy().into_owned())
 }
 
+/// The value of `--since` or `--until`, through terminus-core's date check,
+/// [`terminus_core::recall::checked_bound`], as a misuse when it fails.
+///
+/// The check is the library's and not the CLI's, so every command and the MCP
+/// server refuse the same values and extend a bare date the same way. The core
+/// message starts with the field, so the flag's dashes in front of it name the
+/// flag as it was typed, beside the value.
+pub fn date_value(parser: &mut lexopt::Parser, flag: &'static str) -> Result<String, Failure> {
+    let raw = value(parser, flag)?;
+    terminus_core::recall::checked_bound(flag, &raw)
+        .map_err(|error| Failure::Misuse(format!("--{error}")))
+}
+
 /// One end of a time window, as a string that compares against a stored
 /// timestamp directly.
 ///
