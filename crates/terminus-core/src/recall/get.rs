@@ -242,16 +242,15 @@ struct Row {
 /// A LEFT join to `session_meta` for the same reason `search::run` uses one: a
 /// session archived without a meta row is damage to see, not damage to hide.
 fn rows_for(conn: &Connection, ids: &[i64]) -> Result<BTreeMap<i64, Row>> {
-    let placeholders = std::iter::repeat_n("?", ids.len())
-        .collect::<Vec<_>>()
-        .join(",");
-    let mut statement = conn.prepare(&format!(
+    // One JSON array, so the id list is one bound parameter (#108).
+    let ids: serde_json::Value = ids.iter().copied().collect();
+    let mut statement = conn.prepare(
         "SELECT t.id, t.session_key, t.turn_seq, t.record_type, t.tool_name, t.ts,
                 t.stream_offset, t.byte_len, m.project, m.project_pre_worktree, m.is_evicted
          FROM turns t LEFT JOIN session_meta m ON m.session_key = t.session_key
-         WHERE t.id IN ({placeholders})"
-    ))?;
-    let rows = statement.query_map(rusqlite::params_from_iter(ids.iter()), |row| {
+         WHERE t.id IN (SELECT value FROM json_each(?1))",
+    )?;
+    let rows = statement.query_map([ids.to_string()], |row| {
         Ok(Row {
             turn_id: row.get(0)?,
             session_key: row.get(1)?,

@@ -1118,8 +1118,8 @@ fn an_unknown_id_is_a_reason_beside_the_records_that_did_answer() {
 }
 
 /// The bound this tool needs and the terminal path does not: a client-supplied
-/// list longer than the cap is truncated and reported, never bound one SQL
-/// placeholder at a time until the query fails.
+/// list longer than the cap is truncated and reported, never read in full at
+/// the cost of a decompressed session per id.
 #[test]
 fn a_list_longer_than_the_cap_is_truncated_and_said_so() {
     let bench = bench();

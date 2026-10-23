@@ -511,15 +511,14 @@ fn weight_by_entities(conn: &Connection, query: &Query, hits: &mut [Hit]) -> Res
         return Ok(());
     }
 
-    let ids: Vec<i64> = hits.iter().map(|hit| hit.turn_id).collect();
-    let placeholders = std::iter::repeat_n("?", ids.len())
-        .collect::<Vec<_>>()
-        .join(",");
-    let mut statement = conn.prepare(&format!(
-        "SELECT turn_id, kind, value_norm FROM entities WHERE turn_id IN ({placeholders})"
-    ))?;
+    // One JSON array, so the id list is one bound parameter (#108).
+    let ids: serde_json::Value = hits.iter().map(|hit| hit.turn_id).collect();
+    let mut statement = conn.prepare(
+        "SELECT turn_id, kind, value_norm FROM entities
+         WHERE turn_id IN (SELECT value FROM json_each(?1))",
+    )?;
     let rows = statement
-        .query_map(rusqlite::params_from_iter(ids.iter()), |row| {
+        .query_map([ids.to_string()], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, String>(1)?,

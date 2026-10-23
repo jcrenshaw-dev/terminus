@@ -58,10 +58,10 @@ pub const MAX_CONTEXT_SIDE: usize = recall::MAX_CONTEXT_SIDE;
 ///
 /// This is the budget the terminal path does not need. `terminus show` is
 /// bounded by what a person types; `recall_get` is where a *client-supplied*
-/// list arrives, and `recall::get::records` binds one SQL placeholder per id, so
-/// an unbounded list is an operational failure rather than a bounded answer.
-/// Each id can also cost a whole decompressed session, which is what puts the
-/// number in the tens rather than the hundreds.
+/// list arrives, and each id can cost a whole decompressed session, so an
+/// unbounded list would let one call pull the archive into the client's
+/// context. That cost is what puts the number in the tens rather than the
+/// hundreds.
 pub const MAX_IDS: usize = 25;
 
 /// How many `paths` one `recall_search` call may filter on.
@@ -497,10 +497,10 @@ fn run_context(args: &Map<String, Value>) -> Result<Value, Refused> {
 /// in `recall::get::records` and not here, so the terminal `body` and this one
 /// cannot disagree.
 ///
-/// **The id list is bounded here and nowhere else.** `recall::get::records`
-/// binds one SQL placeholder per id, so a client-supplied list of thousands is
-/// an operational failure rather than an answer; the terminal path is bounded by
-/// what a person types, and this is where a list arrives that nobody typed.
+/// **The id list is bounded here and nowhere else.** Each id can cost a whole
+/// decompressed session, so a client-supplied list of thousands would read
+/// thousands of sessions into one answer; the terminal path is bounded by what
+/// a person types, and this is where a list arrives that nobody typed.
 /// Over-long is truncated and reported rather than refused, so a caller that
 /// asked for too much still gets the first [`MAX_IDS`] of what it wanted and is
 /// told the rest were not read.

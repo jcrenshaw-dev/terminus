@@ -147,14 +147,13 @@ pub fn attach_scrubbed(
 ///
 /// Both address the UNCOMPRESSED session stream, never a block row.
 fn coordinates(conn: &Connection, hits: &[Hit]) -> Result<BTreeMap<i64, (i64, i64)>> {
-    let ids: Vec<i64> = hits.iter().map(|hit| hit.turn_id).collect();
-    let placeholders = std::iter::repeat_n("?", ids.len())
-        .collect::<Vec<_>>()
-        .join(",");
-    let mut statement = conn.prepare(&format!(
-        "SELECT id, stream_offset, byte_len FROM turns WHERE id IN ({placeholders})"
-    ))?;
-    let rows = statement.query_map(rusqlite::params_from_iter(ids.iter()), |row| {
+    // One JSON array, so the id list is one bound parameter (#108).
+    let ids: serde_json::Value = hits.iter().map(|hit| hit.turn_id).collect();
+    let mut statement = conn.prepare(
+        "SELECT id, stream_offset, byte_len FROM turns
+         WHERE id IN (SELECT value FROM json_each(?1))",
+    )?;
+    let rows = statement.query_map([ids.to_string()], |row| {
         Ok((
             row.get::<_, i64>(0)?,
             (row.get::<_, i64>(1)?, row.get::<_, i64>(2)?),
