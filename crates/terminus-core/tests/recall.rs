@@ -1009,7 +1009,8 @@ fn a_time_window_includes_and_excludes_by_timestamp() {
     assert_eq!(one_day, until_day);
 }
 
-/// A time of any other shape is a caller error, not an empty result.
+/// A time of any other shape, or a well-shaped one no calendar or clock has, is
+/// a caller error, not an empty result.
 ///
 /// Every string compares cleanly against every other, so a malformed bound
 /// would return a plausible wrong answer and nothing would say so.
@@ -1025,6 +1026,20 @@ fn a_malformed_time_is_a_caller_error() {
         "2026-08-12T14:00:00Z",
         "2026-08-12 14:00:00.000Z",
         "",
+        // Well shaped, and still no day or time anyone lived through (#24).
+        "2026-02-30",
+        "2025-02-29",
+        "1900-02-29",
+        "2026-13-01",
+        "2026-00-10",
+        "2026-04-31",
+        "2026-08-00",
+        "2026-08-32",
+        "2026-08-12T24:00:00.000Z",
+        "2026-08-12T25:00:00.000Z",
+        "2026-08-12T23:60:00.000Z",
+        "2026-08-12T23:59:60.000Z",
+        "2026-02-30T00:00:00.000Z",
     ] {
         for (field, filters) in [
             (
@@ -1050,6 +1065,59 @@ fn a_malformed_time_is_a_caller_error() {
                 other => panic!("`{raw}` as {field} was not a caller error: {other:?}"),
             }
         }
+    }
+}
+
+/// #24: the real edges of the calendar and the clock still pass as both bounds,
+/// and the refusal of an impossible day names the field and the value.
+///
+/// Leap years are the Gregorian rule, so 2024 and 2000 have a 29 February and
+/// the check is not just refusing every day 29 of every February.
+#[test]
+fn a_real_edge_date_passes_and_an_impossible_one_says_which_bound() {
+    let bench = bench();
+    let conn = bench.conn();
+
+    for raw in [
+        "2024-02-29",
+        "2000-02-29",
+        "2026-12-31",
+        "2026-08-12T00:00:00.000Z",
+        "2026-08-12T23:59:59.999Z",
+    ] {
+        for filters in [
+            Filters {
+                since: Some(raw.into()),
+                ..Filters::default()
+            },
+            Filters {
+                until: Some(raw.into()),
+                ..Filters::default()
+            },
+        ] {
+            if let Err(error) = narrowed(&conn, "cargo", filters.clone()) {
+                panic!("`{raw}` in {filters:?} was refused: {error}");
+            }
+        }
+    }
+
+    for field in ["since", "until"] {
+        let filters = match field {
+            "since" => Filters {
+                since: Some("2026-02-30".into()),
+                ..Filters::default()
+            },
+            _ => Filters {
+                until: Some("2026-02-30".into()),
+                ..Filters::default()
+            },
+        };
+        let message = narrowed(&conn, "cargo", filters)
+            .expect_err("30 February is not a day")
+            .to_string();
+        assert!(message.starts_with(field), "{message}");
+        assert!(message.contains("2026-02-30"), "{message}");
+        assert!(message.contains("not a real date or time"), "{message}");
     }
 }
 

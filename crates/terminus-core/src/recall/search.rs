@@ -629,21 +629,29 @@ impl Filters {
         // when it happened cannot be shown as evidence of when something did.
         if let Some(since) = &self.since {
             sql.push_str(" AND t.ts >= ?\n");
-            params.push(Box::new(bound(FIELD_SINCE, since)?));
+            params.push(Box::new(checked_bound(FIELD_SINCE, since)?));
         }
         if let Some(until) = &self.until {
             sql.push_str(" AND t.ts <= ?\n");
-            params.push(Box::new(bound(FIELD_UNTIL, until)?));
+            params.push(Box::new(checked_bound(FIELD_UNTIL, until)?));
         }
         Ok(())
     }
 }
 
-const FIELD_SINCE: &str = "since";
-const FIELD_UNTIL: &str = "until";
+/// The `field` [`checked_bound`] reads as the lower end of a window.
+pub const FIELD_SINCE: &str = "since";
+/// The `field` [`checked_bound`] reads as the upper end of a window.
+pub const FIELD_UNTIL: &str = "until";
 
-/// One end of a time window, as a string that can be compared against
+/// One end of a time window, checked, as a string that can be compared against
 /// `turns.ts` directly.
+///
+/// This is the one date check in the workspace: [`Filters`] runs every bound
+/// through it, and so do `terminus search`, `terminus sessions`, `terminus
+/// observations regenerate` and the MCP server's `recall_search` when they read
+/// their arguments. `field` is [`FIELD_SINCE`] or [`FIELD_UNTIL`]; it names the
+/// bound in the error and decides how a bare date extends.
 ///
 /// The comparison is lexicographic and there is no date parsing on the
 /// stored side. All 22,412 turns of a 180-file sample carry exactly the shape
@@ -656,24 +664,67 @@ const FIELD_UNTIL: &str = "until";
 /// --until 2026-08-12` return the single turn that happened at exactly
 /// 00:00:00.000 and look like an empty day.
 ///
+/// A value of either shape must also be a real date, and in the full form a
+/// real time of day: month 01 to 12, a day within that month's Gregorian
+/// length, hour 00 to 23, minute and second 00 to 59. The milliseconds may be
+/// any three digits. The shape alone is not enough, because the comparison
+/// never parses: `2026-02-30` is well shaped, sorts between 28 February and 1
+/// March, and would answer a plausible window that no calendar has (#24).
+///
 /// Anything else is a caller error. Comparing it would succeed - every string
 /// orders against every other - and return an answer that looks right.
-fn bound(field: &'static str, raw: &str) -> Result<String> {
-    if is_shaped(raw, "NNNN-NN-NNTNN:NN:NN.NNNZ") {
-        return Ok(raw.to_owned());
-    }
-    if is_shaped(raw, "NNNN-NN-NN") {
-        let tail = if field == FIELD_SINCE {
-            "T00:00:00.000Z"
-        } else {
-            "T23:59:59.999Z"
-        };
-        return Ok(format!("{raw}{tail}"));
-    }
-    Err(crate::error::Error::InvalidTimeFilter {
+pub fn checked_bound(field: &'static str, raw: &str) -> Result<String> {
+    let refused = || crate::error::Error::InvalidTimeFilter {
         field,
         value: raw.to_owned(),
-    })
+    };
+    let full = is_shaped(raw, "NNNN-NN-NNTNN:NN:NN.NNNZ");
+    if !full && !is_shaped(raw, "NNNN-NN-NN") {
+        return Err(refused());
+    }
+    if !is_real_date(raw) || (full && !is_real_time(raw)) {
+        return Err(refused());
+    }
+    if full {
+        return Ok(raw.to_owned());
+    }
+    let tail = if field == FIELD_SINCE {
+        "T00:00:00.000Z"
+    } else {
+        "T23:59:59.999Z"
+    };
+    Ok(format!("{raw}{tail}"))
+}
+
+/// Is the `YYYY-MM-DD` that `shaped` starts with a day on the Gregorian
+/// calendar? `shaped` has already passed [`is_shaped`], so every field is
+/// ASCII digits.
+fn is_real_date(shaped: &str) -> bool {
+    let year = digits(shaped, 0, 4);
+    let month = digits(shaped, 5, 2);
+    let day = digits(shaped, 8, 2);
+    let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
+    let length = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=length).contains(&day)
+}
+
+/// Is the `HH:MM:SS` of a full-form timestamp a time of day? No leap second:
+/// transcripts are stamped by a clock that never writes one.
+fn is_real_time(shaped: &str) -> bool {
+    digits(shaped, 11, 2) <= 23 && digits(shaped, 14, 2) <= 59 && digits(shaped, 17, 2) <= 59
+}
+
+/// The number `len` ASCII digits starting at byte `start` spell.
+fn digits(shaped: &str, start: usize, len: usize) -> u32 {
+    shaped.as_bytes()[start..start + len]
+        .iter()
+        .fold(0, |n, byte| n * 10 + u32::from(byte - b'0'))
 }
 
 /// Does `value` match `shape`, where `N` stands for one ASCII digit and every

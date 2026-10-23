@@ -107,16 +107,21 @@ pub enum Error {
     #[error("cannot read the terminus store at {path}: {detail}")]
     StoreUnreadable { path: PathBuf, detail: String },
 
-    /// A `since` or `until` filter that is neither a whole transcript timestamp
-    /// nor a bare date.
+    /// A `since` or `until` filter that is not a real date or time in one of
+    /// the two forms: a whole transcript timestamp or a bare date.
     ///
-    /// A caller error rather than an empty result, and that is the point: all
-    /// 22,412 sampled turns carry exactly one timestamp shape and the
-    /// comparison is lexicographic with no date parsing on the stored side, so
-    /// a value of any other shape would compare cleanly against every row and
-    /// return a plausible wrong answer instead of failing.
+    /// One variant for both failures, a value of neither form and a well-formed
+    /// one no calendar or clock has, such as `2026-02-30` or hour 25, because
+    /// to the caller they are one mistake: a bound that does not name an
+    /// instant. A caller error rather than an empty result, and that is the
+    /// point: the comparison is lexicographic with no date parsing on the
+    /// stored side, so such a value would compare cleanly against every row
+    /// and return a plausible wrong answer instead of failing.
+    ///
+    /// The message starts with the field, so a front end can put its own
+    /// spelling of the argument in front of it.
     #[error(
-        "{field} value {value:?} is not a time; \
+        "{field} {value:?} is not a real date or time; \
          expected YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS.mmmZ"
     )]
     InvalidTimeFilter { field: &'static str, value: String },
