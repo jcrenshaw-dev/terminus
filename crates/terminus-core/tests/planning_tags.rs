@@ -28,7 +28,10 @@ fn is_word(byte: u8) -> bool {
 
 /// The length of the run of bytes from `at` that `pred` accepts.
 fn run(bytes: &[u8], at: usize, pred: fn(&u8) -> bool) -> usize {
-    bytes[at.min(bytes.len())..].iter().take_while(|b| pred(b)).count()
+    bytes[at.min(bytes.len())..]
+        .iter()
+        .take_while(|b| pred(b))
+        .count()
 }
 
 /// Whether `at` ends a word: the end of the text or a byte that is not part of
@@ -98,6 +101,144 @@ fn tags(text: &str, kind: Kind) -> Vec<String> {
     found
 }
 
+/// One piece of comment text, with its 1-based line.
+#[derive(Debug, PartialEq)]
+struct Piece {
+    line: usize,
+    text: String,
+    kind: Kind,
+}
+
+/// Every line of a markdown file is prose a reader sees.
+fn markdown_pieces(source: &str) -> Vec<Piece> {
+    let lines = source.lines().enumerate();
+    lines
+        .map(|(n, line)| Piece {
+            line: n + 1,
+            text: line.to_string(),
+            kind: Kind::Markdown,
+        })
+        .collect()
+}
+
+/// A TOML comment is a line that starts with `#`. A comment after a value is
+/// not read.
+fn toml_pieces(source: &str) -> Vec<Piece> {
+    let lines = source.lines().enumerate();
+    lines
+        .filter(|(_, line)| line.trim_start().starts_with('#'))
+        .map(|(n, line)| Piece {
+            line: n + 1,
+            text: line.to_string(),
+            kind: Kind::Code,
+        })
+        .collect()
+}
+
+/// Where the Rust scan stands between characters. A string remembers whether
+/// it is the schema's `CREATE_SQL`, whose `--` lines are SQL comments.
+#[derive(Clone, Copy)]
+enum Lex {
+    Code,
+    Str { sql: bool },
+    Raw { hashes: usize, sql: bool },
+}
+
+/// The schema constant whose SQL comments are read as comments.
+const SQL_DECLARATION: &str = "pub const CREATE_SQL";
+
+/// The comment text of a Rust file: every `//` comment, alone on its line or
+/// after code, and the `--` lines inside `CREATE_SQL`. A string, raw string,
+/// char literal or identifier is never read, so a `//` in a URL or a quote in
+/// a char literal does not start a comment, and a tag in a test's data does
+/// not count. Block comments are not read; the tree has none.
+fn rust_pieces(source: &str) -> Vec<Piece> {
+    let mut pieces = Vec::new();
+    let mut state = Lex::Code;
+    for (n, line) in source.lines().enumerate() {
+        if let Lex::Str { sql: true } | Lex::Raw { sql: true, .. } = state {
+            if line.trim_start().starts_with("--") {
+                pieces.push(Piece {
+                    line: n + 1,
+                    text: line.to_string(),
+                    kind: Kind::Code,
+                });
+            }
+        }
+        let declares_sql = line.contains(SQL_DECLARATION);
+        let chars: Vec<char> = line.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            let c = chars[i];
+            match state {
+                Lex::Str { .. } => match c {
+                    '\\' => i += 2,
+                    '"' => {
+                        state = Lex::Code;
+                        i += 1;
+                    }
+                    _ => i += 1,
+                },
+                Lex::Raw { hashes, .. } => {
+                    let closes = c == '"' && (1..=hashes).all(|k| chars.get(i + k) == Some(&'#'));
+                    if closes {
+                        state = Lex::Code;
+                        i += 1 + hashes;
+                    } else {
+                        i += 1;
+                    }
+                }
+                Lex::Code => match c {
+                    '/' if chars.get(i + 1) == Some(&'/') => {
+                        let text: String = chars[i + 2..].iter().collect();
+                        pieces.push(Piece {
+                            line: n + 1,
+                            text,
+                            kind: Kind::Code,
+                        });
+                        break;
+                    }
+                    '"' => {
+                        state = Lex::Str { sql: declares_sql };
+                        i += 1;
+                    }
+                    '\'' => {
+                        // A char literal, escaped or not, or else a lifetime
+                        // or label, which has no closing quote.
+                        if chars.get(i + 1) == Some(&'\\') {
+                            let close = chars[i + 3..].iter().position(|&ch| ch == '\'');
+                            i = close.map_or(chars.len(), |at| i + 3 + at + 1);
+                        } else if chars.get(i + 2) == Some(&'\'') {
+                            i += 3;
+                        } else {
+                            i += 1;
+                        }
+                    }
+                    c if c.is_alphabetic() || c == '_' => {
+                        let start = i;
+                        while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                            i += 1;
+                        }
+                        let word: String = chars[start..i].iter().collect();
+                        if word == "r" || word == "br" {
+                            let hashes = chars[i..].iter().take_while(|&&ch| ch == '#').count();
+                            if chars.get(i + hashes) == Some(&'"') {
+                                state = Lex::Raw {
+                                    hashes,
+                                    sql: declares_sql,
+                                };
+                                i += hashes + 1;
+                            }
+                        }
+                    }
+                    _ => i += 1,
+                },
+            }
+        }
+    }
+    pieces
+}
+
 /// A tag of `prefix` and `digits`, built at run time so this file holds none.
 fn tag(prefix: &str, digits: &str) -> String {
     format!("{prefix}{digits}")
@@ -120,7 +261,10 @@ fn every_family_fires_in_a_code_comment() {
         assert_eq!(tags(&text, Kind::Code), vec![case.clone()], "{text}");
     }
     let pair = format!("({}, {})", tag("RET-", "05"), tag("D-", "06"));
-    assert_eq!(tags(&pair, Kind::Code), vec![tag("RET-", "05"), tag("D-", "06")]);
+    assert_eq!(
+        tags(&pair, Kind::Code),
+        vec![tag("RET-", "05"), tag("D-", "06")]
+    );
 }
 
 #[test]
@@ -138,7 +282,12 @@ fn a_phase_number_fires_in_code_in_any_case_and_not_in_markdown() {
 
 #[test]
 fn the_other_families_fire_in_markdown() {
-    for case in [tag("ING-", "08"), tag("D-", "01"), tag("AC", "4"), tag("PLAN-", "7")] {
+    for case in [
+        tag("ING-", "08"),
+        tag("D-", "01"),
+        tag("AC", "4"),
+        tag("PLAN-", "7"),
+    ] {
         let text = format!("The fixture {case} covers it.");
         assert_eq!(tags(&text, Kind::Markdown), vec![case.clone()], "{text}");
     }
@@ -167,4 +316,91 @@ fn names_that_only_look_like_tags_pass() {
         assert!(tags(&text, Kind::Code).is_empty(), "{text}");
         assert!(tags(&text, Kind::Markdown).is_empty(), "{text}");
     }
+}
+
+/// The line and tags of every piece that carries one.
+fn tagged(pieces: &[Piece]) -> Vec<(usize, Vec<String>)> {
+    let tagged = pieces
+        .iter()
+        .map(|piece| (piece.line, tags(&piece.text, piece.kind)));
+    tagged.filter(|(_, found)| !found.is_empty()).collect()
+}
+
+#[test]
+fn a_rust_comment_is_read_alone_on_its_line_or_after_code() {
+    let (a, b, c) = (tag("SRCH-", "02"), tag("D-", "04"), tag("AC", "3"));
+    let source = format!("/// {a}\nfn f() {{}}\nlet x = 1; // {b}\n//! {c}\n");
+    let found = tagged(&rust_pieces(&source));
+    assert_eq!(found, vec![(1, vec![a]), (3, vec![b]), (4, vec![c])]);
+}
+
+#[test]
+fn a_rust_string_is_not_read() {
+    let (a, b) = (tag("SRCH-", "02"), tag("OBS-", "01"));
+    let source = [
+        format!("let title = \"lands in {a}\";"),
+        format!("assert!(url.contains(\"://\"), \"{a}\"); // {b}"),
+        format!("let quoted = \"a \\\" // {a}\"; // {b}"),
+        format!("let s = \"one\n// {a}\ntwo\";"),
+        format!("let raw = r#\"\"// {a}\"\"#; // {b}"),
+        format!("let raw = br##\"\n// {a} \"# still in\n\"##;"),
+        format!("fn f<'a>(s: &'a str) {{}} // {b}"),
+    ]
+    .join("\n");
+    let found = tagged(&rust_pieces(&source));
+    let lines: Vec<usize> = found.iter().map(|(line, _)| *line).collect();
+    assert_eq!(lines, vec![2, 3, 7, 11]);
+    assert!(found
+        .iter()
+        .all(|(_, tags)| tags == std::slice::from_ref(&b)));
+}
+
+#[test]
+fn a_comment_after_a_quote_char_literal_is_read() {
+    let a = tag("RCL-", "09");
+    let source = [
+        format!("out.push('\"'); // {a}"),
+        format!("if byte == b'\"' {{ return; }} // {a}"),
+        format!("let q = '\\''; // {a}"),
+        format!("let e = '\\u{{22}}'; // {a}"),
+    ]
+    .join("\n");
+    let found = tagged(&rust_pieces(&source));
+    let lines: Vec<usize> = found.iter().map(|(line, _)| *line).collect();
+    assert_eq!(lines, vec![1, 2, 3, 4]);
+}
+
+#[test]
+fn only_the_schema_constant_has_its_sql_comments_read() {
+    let (a, b) = (tag("INJ-", "07"), tag("STOR-", "03"));
+    let source = [
+        format!("{SQL_DECLARATION}: &str = \"\\"),
+        format!("-- {a}"),
+        "CREATE TABLE t (x INTEGER);".to_string(),
+        format!("  -- {a}"),
+        "\";".to_string(),
+        "const QUERY: &str = \"".to_string(),
+        format!("-- {b}"),
+        "SELECT 1\";".to_string(),
+        format!("-- {b}"),
+    ]
+    .join("\n");
+    let found = tagged(&rust_pieces(&source));
+    assert_eq!(found, vec![(2, vec![a.clone()]), (4, vec![a])]);
+}
+
+#[test]
+fn a_toml_comment_line_is_read_and_a_key_line_is_not() {
+    let a = tag("AC", "3");
+    let source = format!("# {a}\nname = \"{a}\"\n  # {a}\n");
+    let found = tagged(&toml_pieces(&source));
+    assert_eq!(found, vec![(1, vec![a.clone()]), (3, vec![a])]);
+}
+
+#[test]
+fn every_markdown_line_is_read() {
+    let a = tag("ING-", "08");
+    let source = format!("# Shapes\n\nThe field {a} names.\n`{a}`\n");
+    let found = tagged(&markdown_pieces(&source));
+    assert_eq!(found, vec![(3, vec![a.clone()]), (4, vec![a])]);
 }
