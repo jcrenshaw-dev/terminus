@@ -821,6 +821,54 @@ fn a_pass_that_skipped_a_shrunk_transcript_is_a_problem() {
     assert_eq!(report.problems(), ["last_run"], "{}", report.whole);
 }
 
+/// Finalized sessions the per-pass bound leaves for the next pass are a note,
+/// not an error (#96).
+///
+/// One more one-record session than a pass observes, every record months old,
+/// so the idle rule finalizes all of them on the first pass and the bound
+/// leaves exactly one waiting.
+#[test]
+fn sessions_left_waiting_to_be_observed_are_not_an_error() {
+    let fixture = fixture();
+    fixture.install();
+
+    let project = fixture.claude_dir.join("projects").join("-data-code-x");
+    std::fs::create_dir_all(&project).unwrap();
+    for n in 0..terminus_core::observe::MAX_PER_PASS + 1 {
+        std::fs::write(
+            project.join(format!("{n:08x}-1111-4111-8111-111111111111.jsonl")),
+            format!(
+                "{{\"type\":\"user\",\"uuid\":\"cccccccc-0000-4000-8000-{n:012x}\",\
+                  \"timestamp\":\"2026-08-12T10:{:02}:{:02}.000Z\",\
+                  \"sessionId\":\"{n:08x}-2222-4222-8222-222222222222\",\
+                  \"cwd\":\"/data/code/x\",\
+                  \"message\":{{\"role\":\"user\",\"content\":[{{\"type\":\"text\",\"text\":\"hi\"}}]}}}}\n",
+                n / 60,
+                n % 60
+            ),
+        )
+        .unwrap();
+    }
+    ingest(&fixture);
+
+    let out = fixture.run(&["status", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let document: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let run = &document["data"]["last_run"];
+    assert_eq!(run["error"], serde_json::Value::Null, "{document}");
+    assert_eq!(run["files_failed"], 0, "{document}");
+    assert!(
+        run["notes"].as_str().is_some_and(
+            |notes| notes.contains("1 more finalized session(s) are waiting to be observed")
+        ),
+        "{document}"
+    );
+
+    let (code, report) = fixture.doctor();
+    assert_eq!(code, Some(0), "{}", report.whole);
+    assert_eq!(report.state("last_run"), "ok", "{}", report.whole);
+}
+
 /// Every name directly inside `dir`, sorted.
 fn entries(dir: &Path) -> Vec<String> {
     let mut found: Vec<String> = std::fs::read_dir(dir)
