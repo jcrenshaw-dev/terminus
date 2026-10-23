@@ -1,10 +1,10 @@
-//! AC4 at the process boundary: `terminus replay` answers, and the store is
-//! byte for byte what it was (FEED-03).
+//! `terminus replay` at the process boundary: it answers, and the store is
+//! byte for byte what it was.
 //!
 //! Spawns rather than library calls. The byte-identity claim is about a
 //! command, not about a function: `terminus-core`'s `tests/feedback.rs` asserts
 //! what a replay COMPUTES, and what is here is that running it leaves nothing
-//! behind - which is a statement about how the binary opens the file (D-15) and
+//! behind - which is a statement about how the binary opens the file and
 //! is unfalsifiable inside a call that was handed an open store.
 
 use std::path::PathBuf;
@@ -15,8 +15,8 @@ use terminus_core::store::DB_FILE_NAME;
 use terminus_core::testkit;
 
 /// The fixture whose `Edit` stores an absolute path, and the session id its own
-/// records carry - a decision is joined to a session by `session_id` alone
-/// (D-04), so a logged decision has to name this one to be labelled at all.
+/// records carry - a decision is joined to a session by `session_id` alone,
+/// so a logged decision has to name this one to be labelled at all.
 const FIXTURE: &str = "session-edits.jsonl";
 const FIXTURE_SESSION: &str = "44444444-4444-4444-8444-444444444444";
 
@@ -162,7 +162,7 @@ fn document(output: &Output) -> serde_json::Value {
         .unwrap_or_else(|e| panic!("stdout is not one JSON document ({e}): {text:?}"))
 }
 
-/// AC4: an override flag, exit 0, a per-label diff, and a store nothing
+/// An override flag, exit 0, a per-label diff, and a store nothing
 /// touched.
 #[test]
 fn replay_reports_a_per_label_diff_and_leaves_the_store_alone() {
@@ -210,7 +210,7 @@ fn replay_reports_a_per_label_diff_and_leaves_the_store_alone() {
     assert_eq!(false_positive["old"], 1, "{value}");
     assert!(value["data"]["changed"].is_array(), "{value}");
 
-    // The claim AC4 is really about.
+    // The claim this file is really about.
     assert_eq!(bench.store_bytes(), before, "replay changed the store");
     let sidecars = bench.sidecars();
     assert_eq!(sidecars.0, 0, "replay left a frame in the WAL");
@@ -251,7 +251,7 @@ fn replay_without_json_prints_the_diff_and_writes_nothing() {
 }
 
 /// A machine that has never ingested: an empty answer with a reason and exit 0,
-/// and no store created by having been asked (RCL-06, D-10).
+/// and no store created by having been asked.
 #[test]
 fn replay_against_no_store_is_a_reason_and_creates_nothing() {
     let bench = bench();
@@ -406,7 +406,7 @@ fn stats_and_replay_call_half_a_decision_log_a_failure() {
     }
 }
 
-/// #40, D-13: a labelled decision made under the compacted pool replays
+/// #40: a labelled decision made under the compacted pool replays
 /// through the compacted window, so `--compacted-ranked` moves it.
 ///
 /// The decision's dropped set is the one turn it was given, which is what the

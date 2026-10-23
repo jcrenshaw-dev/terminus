@@ -3,9 +3,9 @@
 //! These are spawns rather than library calls for the same reason
 //! `crates/terminus/tests/recall_cli.rs` gives: the properties under test are
 //! the stdout bytes, the exit code and how long the process took, and none of
-//! the three exists inside a library call. The wire shape is D-01's - one JSON
+//! the three exists inside a library call. The wire shape is one JSON
 //! object carrying `hookSpecificOutput.hookEventName` and
-//! `hookSpecificOutput.additionalContext` - and a hook that gets it wrong is a
+//! `hookSpecificOutput.additionalContext`, and a hook that gets it wrong is a
 //! red banner on every session start rather than a quiet no-op, so it is
 //! asserted here against the event name that fired.
 //!
@@ -186,7 +186,7 @@ fn empty_stdout(output: &Output, what: &str) {
 }
 
 // ---------------------------------------------------------------------------
-// The wire shape (D-01)
+// The wire shape
 
 /// The seam, end to end: a `SessionStart` in a project the archive knows writes
 /// one object, under its own event name, naming what is indexed for it.
@@ -240,7 +240,7 @@ fn session_start_writes_one_object_naming_what_is_indexed_for_the_project() {
         text.contains(bench.project(FIXTURE).to_str().unwrap()),
         "the brief does not name the project it counted: {text:?}"
     );
-    // INJ-01's other half: the model has to be told the tools exist, and the
+    // The brief's other half: the model has to be told the tools exist, and the
     // names have to be the ones `cmd::mcp::tools` registers.
     for tool in ["recall_search", "recall_context", "recall_get"] {
         assert!(
@@ -264,7 +264,7 @@ fn session_end_and_post_compact_write_nothing_against_a_store_with_history() {
     }
 }
 
-/// D-12's failure mode, made visible: a `cwd` no archived project covers is
+/// An unknown project, made visible: a `cwd` no archived project covers is
 /// `Reason::UnknownProject`, which is silence and exit 0 rather than the whole
 /// archive.
 #[test]
@@ -296,7 +296,7 @@ fn a_machine_with_no_archive_writes_nothing() {
 }
 
 // ---------------------------------------------------------------------------
-// AC6: every way injection can fail is silence, inside the deadline
+// Every way injection can fail is silence, inside the deadline
 
 /// How long a hook may take on a store it cannot read.
 ///

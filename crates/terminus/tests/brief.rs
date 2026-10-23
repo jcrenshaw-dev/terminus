@@ -1,5 +1,5 @@
 //! The resume brief at the process boundary: the bytes Claude Code reads, and
-//! how long it waited for them (INJ-01, INJ-02, AC1, AC2).
+//! how long it waited for them.
 //!
 //! Spawns rather than library calls, for the reason `tests/recall_cli.rs`
 //! gives: the properties under test are the stdout bytes, the exit code and the
@@ -39,10 +39,10 @@ const FIXTURE: &str = "session-recall.jsonl";
 /// The fixture whose `cwd` names `project-gamma`, and whose last `user` record
 /// is a `<task-notification>` envelope rather than a prompt.
 ///
-/// The byte-identity test seeds from this one and not from [`FIXTURE`] (D-15).
+/// The byte-identity test seeds from this one and not from [`FIXTURE`].
 /// `session-recall.jsonl`'s only `user` record is a plain text block, so the
-/// turn the brief quotes is the same one under INJ-07's rule and under the rule
-/// it replaced - a test on it cannot observe this phase's change at all, and
+/// turn the brief quotes is the same whether or not the brief skips `user`
+/// records nobody typed - a test on it cannot observe that rule at all, and
 /// two identical briefs of the wrong turn would satisfy byte identity just as
 /// well as two right ones.
 const MOVED_FIXTURE: &str = "session-envelope.jsonl";
@@ -52,7 +52,7 @@ const MOVED_FIXTURE: &str = "session-envelope.jsonl";
 const TYPED: &str = "wire up the quince exporter";
 
 /// The two it did not: the tool result's output and the envelope's text. Either
-/// one in the brief is the defect INJ-07 exists to close.
+/// one in the brief is a quote of a record nobody typed.
 const NOT_TYPED: [&str; 2] = ["press.toml", "background scan of the modules directory"];
 
 /// Every directory a spawned `terminus` may touch, all of them temporary.
@@ -176,7 +176,7 @@ fn time_of_day(text: &str) -> Option<String> {
         .map(|w| w.iter().collect())
 }
 
-/// AC2. Two `SessionStart` runs against an unchanged store, byte for byte.
+/// Two `SessionStart` runs against an unchanged store, byte for byte.
 ///
 /// The stated rationale is the Anthropic prefix cache, which claude-mem busts
 /// every sixty seconds with minute-granularity timestamps and which nothing
@@ -187,11 +187,11 @@ fn time_of_day(text: &str) -> Option<String> {
 /// Two halves are falsifiable, and both have to be: two empty briefs are
 /// byte-identical, and so are two briefs quoting the wrong turn.
 ///
-/// Dates are rounded to the day (INJ-02), so no `NN:NN` may appear anywhere in
+/// Dates are rounded to the day, so no `NN:NN` may appear anywhere in
 /// the output - not in the rendered date, not carried in from a quoted turn.
 /// And the store is seeded from [`MOVED_FIXTURE`], whose last `user` record is
 /// a harness envelope, so the bytes have to carry the prompt somebody typed and
-/// neither of the two records nobody did (INJ-07).
+/// neither of the two records nobody did.
 #[test]
 fn two_session_starts_against_an_unchanged_store_are_byte_identical() {
     let bench = bench();
@@ -237,13 +237,13 @@ fn two_session_starts_against_an_unchanged_store_are_byte_identical() {
 }
 
 // ---------------------------------------------------------------------------
-// AC1: the brief inside its wall budget, over a hundred runs
+// The brief inside its wall budget, over a hundred runs
 
-/// AC1. A hundred `SessionStart` spawns against a store with history: one
+/// A hundred `SessionStart` spawns against a store with history: one
 /// object each, inside the configured budget, at p99 under the wall budget.
 ///
 /// The 10 ms is the same number `tests/hook.rs` asserts for the four events
-/// that write nothing, and D-11 says it now has to absorb a read-only store
+/// that write nothing, and here it has to absorb a read-only store
 /// open, the two counts, the last-session lookup and one blob decompression on
 /// top of the 0.65-0.76 ms that file measured in a debug build. That headroom
 /// is the whole reason the budget did not have to move.
@@ -254,7 +254,7 @@ fn two_session_starts_against_an_unchanged_store_are_byte_identical() {
 ///
 /// This one stays on [`FIXTURE`] while the byte-identity test above moved to
 /// [`MOVED_FIXTURE`]: the numbers printed here have been measured against
-/// `session-recall.jsonl` since phase 5, and re-pointing them at a different
+/// `session-recall.jsonl` from the start, and re-pointing them at a different
 /// session would silently make every earlier reading incomparable.
 #[test]
 fn a_hundred_session_starts_stay_inside_the_budget_and_the_wall_clock() {
@@ -329,7 +329,7 @@ fn a_hundred_session_starts_stay_inside_the_budget_and_the_wall_clock() {
 }
 
 // ---------------------------------------------------------------------------
-// AC1 and AC4: the brief's quote under the redaction knob (PRIV-03)
+// The brief's quote under the redaction knob
 
 impl Bench {
     /// `hook`, with extra environment variables set on the spawn.
@@ -374,10 +374,10 @@ const COOKIE_SENTINEL: &str = "sid-VBEGRESS-qcrumb-1f9";
 /// leak.
 const SENTINEL_MARK: &str = "VBEGRESS";
 
-/// PRIV-03's knob, written the only way anything can turn it on.
+/// `[privacy] redact_recall`, written the only way anything can turn it on.
 ///
 /// A file in the config directory the spawn points at, and no environment
-/// variable (D-07): the hook loads `Config` in-process, so a variable it could
+/// variable: the hook loads `Config` in-process, so a variable it could
 /// inherit would be a way to turn this off from outside the config file.
 const KNOB_ON: &str = "[privacy]\nredact_recall = true\n";
 
@@ -420,7 +420,7 @@ fn additional_context(output: &Output, label: &str) -> String {
         .to_owned()
 }
 
-/// AC1's fourth output, asserted where Claude Code reads it: the brief's quoted
+/// The knob on the brief, where Claude Code reads it: the brief's quoted
 /// prompt carries the planted `Cookie` value with no `terminus.toml`, and the
 /// marker instead once the knob is on.
 ///
@@ -489,9 +489,9 @@ fn the_knob_on_brief_quotes_a_multi_byte_turn() {
     }
 }
 
-/// AC4's hook half: no environment variable reaches past the knob.
+/// On the hook path, no environment variable reaches past the knob.
 ///
-/// D-07 chose a per-invocation CLI flag over an environment variable precisely
+/// `--raw` is a per-invocation CLI flag, not an environment variable, precisely
 /// because the hook loads `Config` in-process and would inherit one. The
 /// variables spelled here are the three a reader of `--raw` would reach for:
 /// bare, `TERMINUS_`-prefixed, and the config key itself.

@@ -1,9 +1,9 @@
-//! AC1 end to end: three prompt shapes through the real hook, and the rows they
-//! leave behind after an ingest (FEED-01).
+//! Three prompt shapes through the real hook, end to end, and the rows they
+//! leave behind after an ingest.
 //!
 //! Spawns rather than library calls. What is under test is the seam the product
 //! actually runs - a hook process that writes a file on a thread it abandons,
-//! and a separate ingest process that moves that file into SQLite (D-01) - and
+//! and a separate ingest process that moves that file into SQLite - and
 //! neither half of that exists inside a library call. `terminus-core`'s
 //! `tests/feedback.rs` asserts what a record CONTAINS; what is here is that a
 //! real hook leaves one and a real pass drains it, while stdout stays the
@@ -28,7 +28,7 @@ use terminus_core::testkit;
 const FIXTURE: &str = "session-edits.jsonl";
 const RELATIVE: &str = "crates/gizmo/lantern.rs";
 
-/// The three prompts AC1 names, in the order they are fed.
+/// The three prompts, one of each decision shape, in the order they are fed.
 ///
 /// One injects; one names an identifier-shaped word the archive carries only in
 /// prose, so the search answers and the threshold refuses what it found; and one
@@ -103,9 +103,9 @@ impl Bench {
 
     /// Archive one session of prose in the same project.
     ///
-    /// Prose stores no entity whatever it names (RCL-02), which is what makes a
+    /// Prose stores no entity whatever it names, which is what makes a
     /// prompt asking about [`PROSE_WORD`] a search that finds a hit and a
-    /// threshold that refuses it - the non-fire AC1 asks for, rather than a
+    /// threshold that refuses it - the non-fire this file needs, rather than a
     /// prompt that simply matched nothing.
     fn archive_prose(&self) {
         let cwd = testkit::fixture_project(FIXTURE, &self.root);
@@ -173,7 +173,7 @@ impl Bench {
     /// Run `terminus ingest` until the store holds `want` decisions.
     ///
     /// A loop rather than one call, because every hook spawns a detached ingest
-    /// of its own (ING-02): one of those may hold the lock when this runs, and a
+    /// of its own: one of those may hold the lock when this runs, and a
     /// pass that lost the lock race exits 0 having drained nothing. Waiting for
     /// the count is what makes the assertion about the drain rather than about
     /// which process got there first.
@@ -197,7 +197,7 @@ impl Bench {
         }
     }
 
-    /// The one row this prompt left, as the columns AC1 names.
+    /// The one row this prompt left, as the columns the test reads.
     fn row(&self, prompt: &str) -> Row {
         self.conn()
             .query_row(
@@ -247,7 +247,7 @@ fn len(value: &Value) -> usize {
         .len()
 }
 
-/// AC1: three prompts, three rows, and stdout stayed the protocol on all three.
+/// Three prompts, three rows, and stdout stayed the protocol on all three.
 #[test]
 fn three_prompt_shapes_each_leave_one_decision_row() {
     let bench = bench();
@@ -307,7 +307,7 @@ fn three_prompt_shapes_each_leave_one_decision_row() {
     assert!(matched["value"].as_str().unwrap().ends_with(RELATIVE));
     assert_eq!(len(&row.suppressed), 0, "{}", row.suppressed);
     // The values in force, logged per decision because they are compile-time
-    // constants (D-08).
+    // constants.
     assert_eq!(row.thresholds["max_turns"], 3, "{}", row.thresholds);
     assert_eq!(row.thresholds["entity_rank"], 3, "{}", row.thresholds);
     assert_eq!(row.thresholds["co_occurring"], 2, "{}", row.thresholds);
