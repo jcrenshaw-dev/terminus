@@ -1,5 +1,5 @@
 //! `terminus data move <path>`: put the whole data directory somewhere else and
-//! record where it went (STOR-07, D-06).
+//! record where it went.
 //!
 //! **The whole directory, never just the database.** The data directory holds
 //! the `LOCK` file, the per-session injection-state directory
@@ -13,22 +13,22 @@
 //! filesystems fails, and relocating onto another disk is the whole point of
 //! the command.
 //!
-//! **Human-only, no `--json` (D-17).** It shows what it is about to do and asks
+//! **Human-only, no `--json`.** It shows what it is about to do and asks
 //! once, and a single JSON document on stdout cannot be both of those things -
 //! the reason `main.rs` already gives for `install` and `uninstall`. `--yes` is
 //! the way to skip the question, exactly as it is for `uninstall --purge`.
 //!
 //! **It touches no settings file.** The hook entries are written as
 //! `args: ["hook", <event>]` and the MCP registration as `args: ["mcp"]`, so
-//! neither names a store path and there is nothing there to rewrite (D-14).
-//! Rewriting it would break INST-05's "hooks are written once and never
-//! rewritten".
+//! neither names a store path and there is nothing there to rewrite.
+//! Rewriting it would break the rule that hook entries are written once and
+//! never rewritten.
 //!
-//! **It warns about network filesystems and asks anyway (D-16).** No `std` API
+//! **It warns about network filesystems and asks anyway.** No `std` API
 //! detects a network mount on Linux or macOS, and adding one would be a
 //! platform-specific dependency on the hook-path binary. The
 //! command asks regardless of destination, so an unconditional warning costs
-//! nothing and is the mitigation this phase ships.
+//! nothing and is the whole mitigation.
 
 use std::path::{Path, PathBuf};
 
@@ -40,7 +40,7 @@ use super::Failure;
 /// The one verb `data` takes.
 const VERB: &str = "move";
 
-/// The hazard nobody can detect for the user, said every time (D-16).
+/// The hazard nobody can detect for the user, said every time.
 const NETWORK_WARNING: &str =
     "  sqlite is not safe on a network filesystem (nfs, smb, sshfs, or a synced folder\n  \
      that a background agent rewrites). terminus cannot detect one, so if that path is\n  \
@@ -83,7 +83,7 @@ pub fn parse(parser: &mut lexopt::Parser) -> Result<Options, Failure> {
                 )))
             }
             Short('y') | Long("yes") => yes = true,
-            // Including `--json`, deliberately (D-17).
+            // Including `--json`, deliberately.
             other => return Err(Failure::Misuse(crate::unexpected(other))),
         }
     }
@@ -144,7 +144,7 @@ pub fn run(options: Options) -> Result<(), Failure> {
         }
     };
 
-    // The second check (D-11), as late as it can run: after the answer and the
+    // The second check, as late as it can run: after the answer and the
     // lock, right before the copy. The question can wait as long as the user
     // likes, and `copy_tree` writes into whatever directory is at the path, so
     // a directory swapped or opened up while it waited would otherwise receive
@@ -203,7 +203,7 @@ pub fn run(options: Options) -> Result<(), Failure> {
     // locked.
     //
     // Owner-only from the creating open, like the one `ingest::lock` makes at
-    // the source (PRIV-04, D-10): the lock file is short, but a `data move`
+    // the source: the lock file is short, but a `data move`
     // that left one file in the new directory readable by the world would make
     // the destination's mode a lie on the very first listing.
     let lock_file = destination.join(lock::LOCK_FILE_NAME);
@@ -277,7 +277,7 @@ enum Found {
     Directory { device: u64, inode: u64 },
 }
 
-/// The destination rule (D-07): a path that does not exist, or an empty
+/// The destination rule: a path that does not exist, or an empty
 /// directory this account owns that nobody else can reach.
 ///
 /// An existing destination passes only when it is not a symlink, is a
@@ -289,11 +289,11 @@ enum Found {
 ///
 /// Only the last part is checked for a symlink, so a symlinked parent such as
 /// macOS's `/var/folders` is fine, and the parent's owner and mode are not
-/// checked (D-09). A wide directory is refused rather than narrowed, because
-/// terminus narrows what it creates and nothing it merely found (D-10). `uid`
+/// checked. A wide directory is refused rather than narrowed, because
+/// terminus narrows what it creates and nothing it merely found. `uid`
 /// is a closure because learning it costs a probe file, and a destination that
 /// does not exist has no owner to compare. What it returns is what the second
-/// check after the question compares against (D-11).
+/// check after the question compares against.
 fn refuse_unchecked_destination(
     destination: &Path,
     uid: impl FnOnce() -> Result<u32, Failure>,
@@ -351,7 +351,7 @@ fn refuse_unchecked_destination(
     }
 }
 
-/// This process's uid, read off a file it has just created (D-13).
+/// This process's uid, read off a file it has just created.
 ///
 /// A new file's owner is the creating process's effective uid on Linux and
 /// macOS, so this needs `std` alone and no `libc`. The probe goes in the
@@ -405,7 +405,7 @@ fn own_uid(pointer: &Path) -> Result<u32, Failure> {
 /// default for a thing that rewrites where the archive lives is no - so a
 /// `data move --yes` that went through it unchanged would print the question,
 /// decline it and leave. Everything else about the question is install's,
-/// including the refusal when there is no answer to read (INST-08, D-20).
+/// including the refusal when there is no answer to read.
 fn answered(source: &Path, yes: bool) -> Result<bool, Failure> {
     const QUESTION: &str = "  move it?";
 
@@ -448,7 +448,7 @@ fn write_pointer(pointer: &Path, destination: &Path) -> Result<(), Failure> {
 }
 
 /// A relative destination resolved against the working directory, with
-/// trailing slashes and `.` parts dropped (D-08).
+/// trailing slashes and `.` parts dropped.
 ///
 /// The pointer file holds one ABSOLUTE path and the resolver refuses anything
 /// else, because a relative pointer would resolve against whatever directory a
@@ -510,11 +510,11 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
     let failed =
         |path: &Path, e: std::io::Error| format!("{} could not be copied: {e}", path.display());
 
-    // Every directory 0700 and every file 0600, written rather than reproduced
-    // (D-10). A plain byte-for-byte copy carries the SOURCE's mode across with
-    // it, which makes this the one command that can undo the whole phase: a
-    // store the user moved off a build that predates this, or restored out of
-    // a tar, would arrive as wide as it was at the old location.
+    // Every directory 0700 and every file 0600, written rather than reproduced.
+    // A plain byte-for-byte copy carries the SOURCE's mode across with it,
+    // which would make this the one command that can undo owner-only storage:
+    // a store restored out of a tar, or opened up by hand, would arrive as
+    // wide as it was at the old location.
     // What the destination gets is the mode this build writes, from the
     // creating syscall, whatever the source happens to be.
     let entries = std::fs::read_dir(from).map_err(|e| failed(from, e))?;

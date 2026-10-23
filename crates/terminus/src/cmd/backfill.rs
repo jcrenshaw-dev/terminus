@@ -1,5 +1,5 @@
 //! `terminus backfill`: archive the history already on disk, without the user
-//! waiting for it (ING-11, AC8).
+//! waiting for it.
 //!
 //! # The estimate comes first, and it is read-only
 //!
@@ -10,12 +10,12 @@
 //! exists, from a tree walk, one `metadata` call per file and one query for the
 //! watermarks.
 //!
-//! Never a query per file. AC8 puts the whole estimate inside 100 ms over 2,248
-//! transcripts, and 2,248 round trips to SQLite would not fit; the watermarks
-//! come back as one table read and are matched in memory.
+//! Never a query per file. The whole estimate has a 100 ms budget over 2,248
+//! transcripts, and 2,248 round trips to SQLite would not fit in it; the
+//! watermarks come back as one table read and are matched in memory.
 //!
-//! The store is opened through [`crate::cmd::read`] and never `Store::open`
-//! (D-12, phase 3 D-10). A machine that has never ingested must be able to ask
+//! The store is opened through [`crate::cmd::read`] and never `Store::open`.
+//! A machine that has never ingested must be able to ask
 //! "how long will this take" and still have no store afterwards - the answer
 //! there is the whole tree, which is exactly what a missing watermark table
 //! yields.
@@ -29,13 +29,13 @@
 //! # Then the shell comes back
 //!
 //! The work runs in a process detached through the same double fork the hooks
-//! use ([`crate::cmd::spawn`], D-03), so `terminus backfill` returns in
+//! use ([`crate::cmd::spawn`]), so `terminus backfill` returns in
 //! milliseconds with a gigabyte still to archive. There is no log file by
 //! design: the `runs` row the pass writes is the record, and `terminus status`
 //! is where it is read.
 //!
-//! Resumability needs nothing here (D-22). It is the per-file watermarks and
-//! the per-file transactions phase 2 already ships, which is why a killed
+//! Resumability needs nothing here. It is the per-file watermarks and
+//! the per-file transactions of every ingest pass, which is why a killed
 //! backfill converges on the same store as an uninterrupted one without this
 //! module holding any state of its own.
 
@@ -47,7 +47,7 @@ use terminus_core::{discover, Config};
 use super::read::{self, Opened};
 use super::Failure;
 
-/// How many threads the backfill parses and compresses on (D-11).
+/// How many threads the backfill parses and compresses on.
 ///
 /// Fixed here, in one place: the pipeline is started with it, the estimate names
 /// it, and [`MEASURED_MS`] was measured at it, so the number a user is shown and
@@ -67,16 +67,16 @@ pub const WORKERS: usize = 4;
 /// later measurement replaces two numbers that can be read straight off a `runs`
 /// row.
 ///
-/// **It is not D-23's single-threaded rate divided by the worker count, and
+/// **It is not the single-threaded rate divided by the worker count, and
 /// that difference is measured rather than assumed.** The same corpus on the
 /// same machine took 53,007 ms through the sequential `pass::run`, so four
-/// workers bought 8%, not 4x. D-11 predicts exactly this and says why: SQLite
+/// workers bought 8%, not 4x. That was expected, and this is why: SQLite
 /// has one writer, and on real transcripts the writer's own work - the
 /// transaction, the derived rows, the FTS index - dominates the parse and the
 /// compression that were moved off it. Dividing by the worker count would print
 /// "about 10s" over a corpus that takes fifty, which is the one thing an
-/// estimate must not do. D-23 asks for a measured rate; this is the measured
-/// rate of the thing that actually runs.
+/// estimate must not do. The rate has to be measured, and this is the
+/// measured rate of the thing that actually runs.
 const MEASURED_BYTES: u64 = 1_413_907_546;
 const MEASURED_MS: u64 = 49_089;
 
@@ -136,8 +136,7 @@ pub fn estimate(data_dir: &Path, config: &Config) -> Result<Estimate, Failure> {
 
 /// Every stored watermark, as one query.
 ///
-/// Keyed on the session key, the transcript's path below its project folder
-/// (D-01).
+/// Keyed on the session key, the transcript's path below its project folder.
 /// [`estimate`] turns each discovered path into that key with the same function
 /// ingest uses, so the join is a string lookup.
 fn watermarks(data_dir: &Path, config: Config) -> Result<HashMap<String, u64>, Failure> {
@@ -166,7 +165,7 @@ fn watermarks(data_dir: &Path, config: Config) -> Result<HashMap<String, u64>, F
 /// The estimate as the lines a user reads.
 ///
 /// All of it on stdout, problems included, and that is deliberate: `backfill`
-/// is a human-only command like `install` and `uninstall` (D-24) with no
+/// is a human-only command like `install` and `uninstall` with no
 /// `--json` document to keep clean, and `install` prints this block inside its
 /// own summary. A directory that could not be listed belongs beside the count
 /// it silently reduced, not on a different stream.
@@ -207,7 +206,7 @@ fn bytes(count: u64) -> String {
                 return format!("{count} {unit}");
             }
             // One decimal place: the estimate is not precise enough for two,
-            // and "1.1 GB" is the number D-23 is quoted in.
+            // and "1.1 GB" is how the measured corpus is quoted.
             let tenths = count * 10 / scale;
             return format!("{}.{} {unit}", tenths / 10, tenths % 10);
         }
@@ -268,10 +267,9 @@ pub fn run(args: Args) -> Result<(), Failure> {
     start(&data_dir, &estimate).map(drop)
 }
 
-/// Hand the work to a process that outlives this one, and return (AC8,
-/// ING-11).
+/// Hand the work to a process that outlives this one, and return.
 ///
-/// Through the same double fork the hooks use (D-03), so a backfill started
+/// Through the same double fork the hooks use, so a backfill started
 /// from a shell that is then closed, or from a hook Claude Code later kills,
 /// keeps going. Nothing is waited for: the point of the command is that the
 /// shell comes back.
@@ -279,7 +277,7 @@ pub fn run(args: Args) -> Result<(), Failure> {
 /// `false` means there was nothing to hand over. A tree with no transcripts in
 /// it is archived by doing nothing, and a pass over it would create a store and
 /// a WAL as the side effect of an install on a machine that has never run
-/// Claude Code - the exact state AC6 asks `doctor` to leave alone and
+/// Claude Code - the exact state `doctor` must leave alone and
 /// [`crate::cmd::read`] refuses to bring into being. The estimate is already
 /// the count of what is there, so this costs no second walk.
 pub fn start(data_dir: &Path, estimate: &Estimate) -> Result<bool, Failure> {
@@ -319,12 +317,12 @@ pub fn start_from(
 /// stdout.
 ///
 /// The pass takes the ingest lock before it opens the store, so a hook firing
-/// during a backfill loses the race and exits 0 immediately with empty stdout
-/// (D-18) - nothing here is needed for that, and nothing here may be added that
+/// during a backfill loses the race and exits 0 immediately with empty
+/// stdout - nothing here is needed for that, and nothing here may be added that
 /// would weaken it. Nothing else about the invocation differs from the
 /// sequential pass either: same lock, same recovery, same per-file
 /// transactions, same single `runs` row, which is why a killed backfill resumes
-/// exactly as phase 2's crash harness proves a killed pass does (D-22).
+/// exactly as the crash harness proves a killed pass does.
 fn work(data_dir: &Path) -> Result<(), Failure> {
     use terminus_core::ingest::backfill;
     use terminus_core::ingest::pass::{self, PassOutcome};
@@ -421,7 +419,7 @@ mod tests {
             std::time::Duration::from_millis(MEASURED_MS)
         );
 
-        /// D-23's single-threaded measurement, kept here and nowhere else: it
+        /// The single-threaded measurement, kept here and nowhere else: it
         /// is the number this estimate is deliberately not derived from.
         const SINGLE_THREADED: (u64, u64) = (1_181_116_006, 36_582);
         let divided = SINGLE_THREADED.1 * MEASURED_BYTES / SINGLE_THREADED.0 / WORKERS as u64;

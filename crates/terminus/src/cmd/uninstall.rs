@@ -1,5 +1,4 @@
-//! `terminus uninstall`: take out what install put in, and nothing else
-//! (INST-07).
+//! `terminus uninstall`: take out what install put in, and nothing else.
 //!
 //! Install adds four hook entries to `settings.json`, a version file in the
 //! versions folder, and a link to it at the stable path. Uninstall removes the
@@ -37,7 +36,7 @@
 //! lock first so it never pulls the store out from under a running pass. It
 //! never deletes the versions folder.
 //!
-//! Human-only, no `--json` (D-24).
+//! Human-only, no `--json`.
 
 use std::cell::Cell;
 use std::path::Path;
@@ -65,7 +64,7 @@ pub fn parse(parser: &mut lexopt::Parser) -> Result<Options, Failure> {
         match arg {
             Short('y') | Long("yes") => options.yes = true,
             Long("purge") => options.purge = true,
-            // Including `--json`, deliberately (D-24).
+            // Including `--json`, deliberately.
             other => return Err(Failure::Misuse(crate::unexpected(other))),
         }
     }
@@ -180,7 +179,7 @@ fn clean(path: &Path, stable: &Path) -> bool {
     restore(path, backup_path.as_deref(), backup)
 }
 
-/// Put install's backup back when nothing else has changed since (AC7).
+/// Put install's backup back when nothing else has changed since.
 ///
 /// The comparison is of *values*: both sides are re-rendered and the strings
 /// compared, so a file that differs from the backup only in the formatting this
@@ -193,7 +192,7 @@ fn restore(path: &Path, backup_path: Option<&Path>, backup: Option<Document>) ->
         return true;
     };
     // Fresh, because the removal above just wrote it - and because Claude Code
-    // may have written it since (D-06).
+    // may have written it since.
     let current = match Document::read(path) {
         Ok(current) => current,
         Err(failure) => {
@@ -305,13 +304,12 @@ fn empty(value: &Json) -> bool {
     }
 }
 
-/// Remove the MCP registration with `claude mcp remove`, when there is one
-/// (D-13).
+/// Remove the MCP registration with `claude mcp remove`, when there is one.
 ///
 /// Always `--scope user`: without it the remove fails when a local entry of the
 /// same name exists too. With no entry, no `claude` runs. An old
 /// `.claude.json.terminus-backup` is reported, even when the file does not
-/// parse, and never restored or deleted (D-15).
+/// parse, and never restored or deleted.
 fn unregister(path: &Path) -> bool {
     const REMOVE: [&str; 5] = ["mcp", "remove", "--scope", "user", targets::MCP_SERVER_KEY];
 
@@ -359,7 +357,7 @@ fn unregister(path: &Path) -> bool {
     ok
 }
 
-/// Remove the link at the stable path, and only if it is terminus's (D-07).
+/// Remove the link at the stable path, and only if it is terminus's.
 ///
 /// `remove_file` takes the link and not the file it names. A marked plain file
 /// an older install left there goes the same way.
@@ -494,7 +492,7 @@ fn purge(data_dir: &Path, yes: bool) -> Result<(), Failure> {
 /// leave, which is not what anyone typing it asked for.
 ///
 /// The rest is [`install::confirm`]: the same reading of y/n, and a refusal
-/// rather than an assumed answer when there is nothing to read (INST-08, D-20).
+/// rather than an assumed answer when there is nothing to read.
 fn answered(data_dir: &Path, yes: bool) -> Result<bool, Failure> {
     const QUESTION: &str = "  delete it?";
 

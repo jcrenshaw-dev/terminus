@@ -1,6 +1,6 @@
 //! The build that hook entries and the MCP registration point at.
 //!
-//! # One path, forever (D-08, INST-02)
+//! # One path, forever
 //!
 //! `~/.local/bin/terminus`. Nothing here touches `PATH`: a settings entry names
 //! the absolute path, so the binary does not need to be reachable by name, and
@@ -8,7 +8,7 @@
 //! business making.
 //!
 //! The path never moving is what lets [`super::targets`] write the four hook
-//! entries once and never rewrite them (INST-05). The settings files never
+//! entries once and never rewrite them. The settings files never
 //! learn which version is behind it, because there is nothing there to learn.
 //!
 //! # A link to a stored version
@@ -28,7 +28,7 @@
 //! and it sits outside the data directory, because `uninstall --purge` deletes
 //! that and the data directory can move.
 //!
-//! # The marker, and why version cannot do its job (D-07)
+//! # The marker, and why version cannot do its job
 //!
 //! As of 2026-08-13 `/home/john/.local/bin/verbatim`, the stable path before
 //! the rename to terminus, was a 12,076,464-byte *different program* - "capture

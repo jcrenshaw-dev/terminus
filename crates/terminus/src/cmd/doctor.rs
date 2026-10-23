@@ -1,5 +1,5 @@
 //! `terminus doctor`: what is wired up, what is not, and the exact command that
-//! fixes each thing that is not (INST-06).
+//! fixes each thing that is not.
 //!
 //! # It never writes and it never repairs
 //!
@@ -7,7 +7,7 @@
 //! is also the only way the report can be trusted: a doctor that created what it
 //! was asked about would report the state it had just produced. The two places
 //! that rule bites are the store, which is opened through
-//! [`crate::cmd::read`]'s read-only path rather than `Store::open` (D-12), and
+//! [`crate::cmd::read`]'s read-only path rather than `Store::open`, and
 //! the data directory, whose writability is read out of its permissions rather
 //! than probed with a file.
 //!
@@ -45,7 +45,7 @@ use super::json::Document as Envelope;
 use super::read::{self, Opened};
 use super::{hook, Failure};
 
-/// The oldest Claude Code terminus has seen carry exec-form hook `args` (D-16).
+/// The oldest Claude Code terminus has seen carry exec-form hook `args`.
 ///
 /// Measured on 2.1.227, 2.1.229 and 2.1.231; the release that introduced `args`
 /// is not established, so this is a floor terminus has checked rather than a
@@ -162,8 +162,7 @@ pub fn run(json: bool) -> Result<(), Failure> {
     Err(Failure::Silent)
 }
 
-/// One `{command, ok, reason, data}` document, `data` keyed by check name
-/// (D-24, RCL-06).
+/// One `{command, ok, reason, data}` document, `data` keyed by check name.
 ///
 /// `ok` is the exit code's answer, as the envelope requires: a caller that
 /// parses the document and a caller that checks the code never disagree.
@@ -208,7 +207,7 @@ struct Doctor {
     /// This build and not the stable path: the commonest problem doctor reports
     /// is that there is nothing at the stable path, and a fix command naming a
     /// file that does not exist is not a fix. `terminus` unqualified would
-    /// depend on a PATH this install deliberately never edits (D-08).
+    /// depend on a PATH this install deliberately never edits.
     exe: String,
 }
 
@@ -244,7 +243,7 @@ impl Doctor {
                 // guessing one would be reporting on a file nothing points at.
                 // Every check still reports, as `unknown`: one run's document
                 // carries the same keys as any other's, so a caller reads a
-                // state rather than a missing key (D-24).
+                // state rather than a missing key.
                 let why = detail(failure);
                 self.push(Check::new(
                     "binary",
@@ -265,7 +264,7 @@ impl Doctor {
         self.claude_code();
     }
 
-    /// Is this build at the path every settings entry names (D-07, D-08)?
+    /// Is this build at the path every settings entry names?
     fn binary(&mut self, stable: &Path) {
         let check = match binary::occupant(stable) {
             Err(failure) => Check::new(
@@ -291,7 +290,7 @@ impl Doctor {
             // The marker and not the version, because version cannot tell them
             // apart: the incumbent measured at the old `verbatim` path on
             // 2026-08-13 was a different program whose `--version` printed
-            // `verbatim 0.1.0`, the same as this build's then (D-07).
+            // `verbatim 0.1.0`, the same as this build's then.
             Ok(binary::Occupant::Foreign) => Check::new(
                 "binary",
                 State::Problem,
@@ -339,7 +338,7 @@ impl Doctor {
         }
     }
 
-    /// One check per event (D-01, INST-05).
+    /// One check per event.
     ///
     /// Four checks rather than one, because the four events fail
     /// independently: an entry hand-edited for `SessionStart` says nothing
@@ -441,7 +440,7 @@ impl Doctor {
         };
 
         // Exec form and this event, which is the whole of the shape terminus
-        // writes (D-01). An entry with the right command and no `args` runs
+        // writes. An entry with the right command and no `args` runs
         // through a shell on Windows and starts no ingest anywhere.
         let exec_form = entry.get("type").and_then(Json::as_str).as_deref() == Some("command");
         let args = args_of(entry);
@@ -476,12 +475,12 @@ impl Doctor {
         }
     }
 
-    /// The registration recall is reached through, in `.claude.json` (D-05).
+    /// The registration recall is reached through, in `.claude.json`.
     ///
     /// A problem's fix is `install` when `claude` is on `PATH`, because install
     /// places the entry through it. Without `claude`, install could not finish
     /// either, so the fix is the `claude mcp` command itself, with the remove in
-    /// front when an entry is there (phase 3 D-16).
+    /// front when an entry is there.
     fn mcp_server(&mut self, stable: &Path) {
         let path = match targets::claude_json_path() {
             Ok(path) => path,
@@ -580,7 +579,7 @@ impl Doctor {
     }
 
     /// Is the Claude Code on this machine one terminus has seen run exec-form
-    /// hooks (D-16)?
+    /// hooks?
     fn claude_code(&mut self) {
         let name = "claude";
         let Some(program) = on_path(name) else {
@@ -659,7 +658,7 @@ impl Doctor {
     // Terminus's own state: the roots it walks, the directory it writes into,
     // the store it keeps, and the last pass that ran.
     //
-    // All of it through the read path (D-12). `Store::open` would
+    // All of it through the read path. `Store::open` would
     // `create_dir_all`, initialize a database, bring columns forward and set
     // `journal_mode=wal` - so a doctor built on it would report a store its own
     // check had just created, on a machine that has never ingested anything.
@@ -701,7 +700,7 @@ impl Doctor {
             Some(config) => self.store(&data_dir, config),
             None => {
                 // Opening the store without the config would count sessions an
-                // exclusion says a read may not see (ING-08), which is a wrong
+                // exclusion says a read may not see, which is a wrong
                 // number rather than a missing one.
                 self.unknown("store", "terminus's config could not be read");
                 self.unknown("last_run", "terminus's config could not be read");
@@ -740,7 +739,7 @@ impl Doctor {
         self.push(check);
     }
 
-    /// The directory the store lives in, without creating it (AC6).
+    /// The directory the store lives in, without creating it.
     ///
     /// A directory that is not there is what a machine looks like before its
     /// first ingest, so it is a state and not a failure. Writability is read out
@@ -767,7 +766,7 @@ impl Doctor {
                 format!("{} is not a directory", dir.display()),
             ),
             // The mode's write bits, which is what `std` offers without a
-            // `libc` dependency (D-04). A directory writable by somebody else
+            // `libc` dependency. A directory writable by somebody else
             // and not by this user reads as writable here; the ingest's own
             // error is the authority, and this catches the ordinary case of a
             // tree made read-only.
@@ -822,7 +821,7 @@ impl Doctor {
                     counts.sessions, counts.turns, counts.watermarks
                 );
                 if reader.store().predates_this_build() {
-                    // Reported, never repaired (D-18). The next ingest rebuilds
+                    // Reported, never repaired. The next ingest rebuilds
                     // the derived tables on its own, so this is a state with a
                     // shortcut rather than a problem.
                     Check::new(
@@ -926,7 +925,7 @@ impl Doctor {
 
     // -----------------------------------------------------------------------
     // The two Claude Code settings terminus has an opinion about and never
-    // changes (INST-06).
+    // changes.
     //
     // Reported, and only reported. `cleanupPeriodDays` is how long Claude Code
     // keeps its own transcripts, which is terminus's second recovery path for a
@@ -1175,7 +1174,7 @@ fn args_of(entry: &Json) -> Vec<String> {
 fn version_of(program: &Path) -> Option<String> {
     let mut child = Command::new(program)
         .arg("--version")
-        // Every `claude` terminus starts gets it (D-04). Inert for terminus's own.
+        // Every `claude` terminus starts gets it. Inert for terminus's own.
         .env(claude::NONESSENTIAL_TRAFFIC, "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

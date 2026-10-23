@@ -1,7 +1,7 @@
 //! The file install writes, the file it only reads, and the exact entries that
 //! belong in each.
 //!
-//! # One file written, one read (D-05)
+//! # One file written, one read
 //!
 //! Hook entries go in `settings.json` under `.hooks`, and install writes that
 //! file itself. The MCP entry lives in `.claude.json` under `.mcpServers`.
@@ -16,7 +16,7 @@
 //! `claude mcp` ([`super::claude`]), so Claude Code stays that file's only
 //! writer. The read is what decides whether anything runs at all: an entry
 //! already in the shape [`mcp_entry_is_current`] accepts means no `claude`
-//! process starts (phase 3 D-01).
+//! process starts.
 //!
 //! Where those files are is Claude Code's own rule, read out of the 2.1.231
 //! bundle: `$CLAUDE_CONFIG_DIR/settings.json` falling back to
@@ -25,7 +25,7 @@
 //! it says which transcript trees to walk, not where Claude Code keeps its
 //! settings.
 //!
-//! # Exec form, always (D-01, ING-10)
+//! # Exec form, always
 //!
 //! `{"type":"command","command":"<stable path>","args":["hook","<event>"]}`.
 //! The 2.1.231 schema documents `args` as "Argument list for exec form. When
@@ -44,7 +44,7 @@
 //! array, append one group with `matcher: ""`, and leave every group already
 //! there exactly where it was.
 //!
-//! # Idempotency and upgrade are the same rule (INST-05)
+//! # Idempotency and upgrade are the same rule
 //!
 //! Two questions, and they are not the same one. **Whose** an entry is: it is
 //! terminus's when its `command` is the stable path, and anything else is
@@ -62,13 +62,13 @@
 //! wrong shape is repaired in place, keeping its position and any key beside it
 //! the user added, such as a `timeout`.
 //!
-//! The MCP entry follows the same rule under `.mcpServers.terminus` (phase 3
-//! D-02). Any user-level entry under that key is terminus's to replace, and one
+//! The MCP entry follows the same rule under `.mcpServers.terminus`. Any
+//! user-level entry under that key is terminus's to replace, and one
 //! naming a binary path that has moved is corrected rather than left to rot.
 //! [`mcp_entry`] keeps every key the user put beside the three terminus owns,
 //! such as `env`, in the JSON handed to `claude mcp add-json`.
 //!
-//! # A subprocess, never a shell (phase 3 D-03)
+//! # A subprocess, never a shell
 //!
 //! Install runs no shell. It runs `claude` as a subprocess by the absolute
 //! path found on `PATH`, so `.claude.json` is changed only by the program
@@ -90,7 +90,7 @@ pub fn settings_path() -> Result<PathBuf, Failure> {
     Ok(claude_config_dir()?.join("settings.json"))
 }
 
-/// Claude Code's `.claude.json`, where `.mcpServers` lives (D-19).
+/// Claude Code's `.claude.json`, where `.mcpServers` lives.
 pub fn claude_json_path() -> Result<PathBuf, Failure> {
     match non_empty_var(CLAUDE_CONFIG_DIR_ENV) {
         Some(dir) => Ok(PathBuf::from(dir).join(".claude.json")),
@@ -142,7 +142,7 @@ pub fn add_hooks(root: &mut Json, stable: &Path) -> Result<(), Failure> {
     Ok(())
 }
 
-/// The entry terminus writes for one event, in exec form (D-01).
+/// The entry terminus writes for one event, in exec form.
 fn hook_entry(stable: &str, event: &str) -> Result<Json, Failure> {
     let mut entry = Json::object();
     entry.entry("type", Json::string("command"))?;
@@ -173,7 +173,7 @@ fn holds_ours(entries: &Json, stable: &str) -> bool {
 ///
 /// In place, so an entry keeps its position and any key beside it - a `timeout`
 /// the user added stays. Assigning a value it already holds is a no-op all the
-/// way to the bytes, which is what leaves an upgrade rewriting nothing (AC3).
+/// way to the bytes, which is what leaves an upgrade rewriting nothing.
 fn repair_entries(entries: &mut Json, stable: &str, event: &str) -> Result<(), Failure> {
     for group in entries.items_mut() {
         let Some(inner) = group.get_mut("hooks") else {
@@ -191,7 +191,7 @@ fn repair_entries(entries: &mut Json, stable: &str, event: &str) -> Result<(), F
 }
 
 /// Is the entry found at `.mcpServers.terminus` already the one install would
-/// place (D-01)?
+/// place?
 ///
 /// `type` is `"stdio"`, `command` decodes to the stable path and `args` is
 /// exactly `["mcp"]`. Any other key is ignored. Doctor's `mcp_server` check
@@ -204,8 +204,7 @@ pub fn mcp_entry_is_current(found: &Json, stable: &Path) -> bool {
         && args[0].as_str().as_deref() == Some("mcp")
 }
 
-/// The entry install places, given what was found at `.mcpServers.terminus`
-/// (D-02).
+/// The entry install places, given what was found at `.mcpServers.terminus`.
 ///
 /// A found object keeps every key it has, with the three terminus owns set in
 /// place. Anything else under the key holds nothing to keep, and the entry is
@@ -239,7 +238,7 @@ pub fn add_command(entry: &Json) -> String {
 /// built from the entry found under `.mcpServers.terminus`, or from none.
 ///
 /// With an entry there it starts with the remove, because `add-json` refuses
-/// a name that already exists (D-06).
+/// a name that already exists.
 pub fn finishing_command(found: Option<&Json>, stable: &Path) -> String {
     let add = add_command(&mcp_entry(found, stable));
     match found {
@@ -334,8 +333,8 @@ mod tests {
         assert_eq!(args[1].as_str().unwrap(), "UserPromptSubmit");
     }
 
-    /// Applying the edit twice is applying it once: this is INST-05 in one
-    /// assertion, because an upgrade is exactly a second application.
+    /// Applying the edit twice is applying it once: idempotency and upgrade in
+    /// one assertion, because an upgrade is exactly a second application.
     #[test]
     fn a_second_application_changes_nothing() {
         let mut root = parsed("{}");
@@ -417,7 +416,8 @@ mod tests {
         );
     }
 
-    /// D-01: the three owned keys decide, and a key beside them does not.
+    /// The three owned keys decide whether an entry is current, and a key
+    /// beside them does not.
     #[test]
     fn a_current_entry_is_the_three_owned_keys_whatever_is_beside_them() {
         let current = parsed(
@@ -436,7 +436,7 @@ mod tests {
         }
     }
 
-    /// D-02: the entry placed over a found object keeps what the user put
+    /// The entry placed over a found object keeps what the user put
     /// there, and sets the three owned keys.
     #[test]
     fn the_entry_placed_over_a_found_one_keeps_its_other_keys() {

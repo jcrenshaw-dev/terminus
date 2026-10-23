@@ -1,13 +1,13 @@
 //! Running `claude` to place or remove the MCP entry.
 //!
-//! Claude Code is the only writer of `.claude.json` (phase 3 D-03), so install
+//! Claude Code is the only writer of `.claude.json`, so install
 //! and uninstall ask it to change that file rather than editing it themselves.
 //! The call follows doctor's `version_of`: `claude` found by scanning `PATH`
 //! here and run by absolute path, no shell, stdin at null, and a deadline. Only
 //! the exit status and the first line of stderr are read. Stdout is display
 //! text with no stable format, so it goes to null.
 //!
-//! Every process gets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (D-04).
+//! Every process gets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`.
 //! Without it `claude mcp add-json` and `claude mcp remove` connect to
 //! `api.anthropic.com`, and wiring terminus up must open no connection. The
 //! rest of the environment is inherited, so a `CLAUDE_CONFIG_DIR` reaches
@@ -20,11 +20,11 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-/// How long one `claude` command may run (D-07). Measured runs took 197 to
+/// How long one `claude` command may run. Measured runs took 197 to
 /// 252 ms; Baley allows the same 30 s.
 pub const DEADLINE: Duration = Duration::from_secs(30);
 
-/// Set on every `claude` process terminus starts (D-04).
+/// Set on every `claude` process terminus starts.
 pub const NONESSENTIAL_TRAFFIC: &str = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC";
 
 /// How much stderr is kept. Only its first line is ever reported.

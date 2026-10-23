@@ -109,8 +109,8 @@ pub(super) fn temporary<T>(
     )))
 }
 
-/// Install takes no arguments. Anything given is misuse, `--json` (D-24) and
-/// `--yes` (D-08) included.
+/// Install takes no arguments. Anything given is misuse, `--json` and `--yes`
+/// included.
 pub fn parse(parser: &mut lexopt::Parser) -> Result<(), Failure> {
     match parser.next().map_err(|e| Failure::Misuse(e.to_string()))? {
         Some(other) => Err(Failure::Misuse(crate::unexpected(other))),
@@ -131,7 +131,7 @@ pub fn run() -> Result<(), Failure> {
     let settings = Document::read(&targets::settings_path()?)?;
     // Only where it is. What is in it is read after the writes above it, and a
     // file that cannot be read leaves the registration incomplete rather than
-    // refusing the install (phase 3 D-05).
+    // refusing the install.
     let claude_json = targets::claude_json_path()?;
 
     let add_hooks = |root: &mut Json| targets::add_hooks(root, &stable);
@@ -171,7 +171,7 @@ pub fn run() -> Result<(), Failure> {
     );
     if wrote_hooks && settings.reformats() {
         // The file was not in the two-space form this renderer writes, so the
-        // write re-rendered all of it (D-12).
+        // write re-rendered all of it.
         outln!(
             "                    rewritten in full in two-space form, keys and values unchanged"
         );
@@ -241,7 +241,7 @@ pub fn run() -> Result<(), Failure> {
         Ok(_) => Ok(()),
         // Silent: the summary above already says what is missing and the
         // command that finishes it. An incomplete install never exits 0,
-        // because a script reads the status (D-05).
+        // because a script reads the status.
         Err(_) => Err(Failure::Silent),
     }
 }
@@ -270,14 +270,14 @@ impl Registered {
     }
 }
 
-/// A registration install could not complete (D-05): why, and the command
+/// A registration install could not complete: why, and the command
 /// that finishes it.
 struct Incomplete {
     cause: String,
     command: String,
 }
 
-/// Place the MCP entry through `claude mcp` (phase 3 D-01, D-06).
+/// Place the MCP entry through `claude mcp`.
 ///
 /// `.claude.json` is read and never written. An entry already current runs
 /// nothing, and `claude mcp get` is never run: it health-checks the server and
@@ -322,7 +322,7 @@ fn register(path: &Path, stable: &Path) -> Result<Registered, Incomplete> {
     Ok(registered)
 }
 
-/// Start archiving the history that is already on disk, and return (ING-11).
+/// Start archiving the history that is already on disk, and return.
 ///
 /// The design brief's step 6, and deliberately the last thing install does: it
 /// gates nothing above it, and it returns nothing. Both halves of that matter.
@@ -331,7 +331,7 @@ fn register(path: &Path, stable: &Path) -> Result<Registered, Incomplete> {
 /// time this runs the binary is placed and both settings files are written, and
 /// the next hook that fires would archive the same tree anyway, so a backfill
 /// that will not start is one reported line rather than a non-zero exit. The
-/// exception is a store in an archive format this build refuses (STOR-10): no
+/// exception is a store in an archive format this build refuses: no
 /// hook will archive anything into it, so the refusal is printed with its
 /// clean-install steps and this returns `true`, which `run` turns into a
 /// non-zero exit. Returning a plain flag rather than an error keeps every other
@@ -396,7 +396,7 @@ fn reason(failure: Failure) -> String {
     }
 }
 
-/// The advisories install gives and the settings it never changes (INST-04).
+/// The advisories install gives and the settings it never changes.
 fn advise(settings: &Document) -> Result<(), Failure> {
     // Re-read: the file may be the one install just wrote, and it may have been
     // rewritten by Claude Code in between either way.
@@ -498,7 +498,7 @@ pub(super) fn confirm(question: &str, default: bool, yes: bool) -> Result<bool, 
     })
 }
 
-/// The stable path holds a program that is not a terminus build (D-07).
+/// The stable path holds a program that is not a terminus build.
 ///
 /// Not hypothetical: as of 2026-08-13 `/home/john/.local/bin/verbatim`, the
 /// stable path before the rename, was a 12 MB different program whose

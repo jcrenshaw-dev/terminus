@@ -2,8 +2,9 @@
 //! write it back looking like the file it was.
 //!
 //! Install's write to `settings.json` and its read of `.claude.json` go
-//! through here, and so do `uninstall` and `doctor`. AC4's "every other key byte-identical" and AC7's "restores it to
-//! its pre-install bytes" are properties of this module and of nothing else.
+//! through here, and so do `uninstall` and `doctor`. Every other key staying
+//! byte-identical through an edit, and uninstall restoring a file to its
+//! pre-install bytes, are properties of this module and of nothing else.
 //!
 //! # Why not `serde_json::Value`
 //!
@@ -31,7 +32,7 @@
 //!
 //! # Writing
 //!
-//! Read again immediately before writing (D-06). Claude Code rewrote
+//! Read again immediately before writing. Claude Code rewrote
 //! `.claude.json` five times inside six minutes on 2026-08-13, so the copy
 //! install read a moment ago to decide what to write is not the copy it may
 //! write over. The edit is re-applied to whatever is on disk at that instant, then a
@@ -47,7 +48,7 @@
 //! JSON is an operational failure that writes nothing - never a file to
 //! overwrite, because whatever it is, it is not ours to lose.
 //!
-//! # A file it did not format is rewritten in full (phase 3 D-12)
+//! # A file it did not format is rewritten in full
 //!
 //! [`Document::apply`] writes the whole document back, re-rendered. For the two
 //! real files that is a byte-for-byte round trip, because both are what
@@ -63,7 +64,7 @@
 //! What that does not cover: install still cannot make a small edit to a file
 //! it did not format, and a byte-preserving splice is the change that would. A
 //! file that changes between the read and the write is re-read and re-applied
-//! at that instant (D-06), and the no-op check is rendered against rendered, so
+//! at that instant, and the no-op check is rendered against rendered, so
 //! an install with nothing to add writes nothing and reformats nothing.
 
 use std::io::Write as _;
@@ -170,7 +171,7 @@ impl Json {
     ///
     /// The members after it keep their order, which is what lets a file that
     /// loses terminus's key come back byte-identical to the one that never had
-    /// it (AC7).
+    /// it.
     pub fn remove(&mut self, key: &str) -> Option<Json> {
         match self {
             Json::Object(members) => {
@@ -183,10 +184,10 @@ impl Json {
 
     /// This object's keys, in the order they will be written.
     ///
-    /// Key order is the property AC4 turns on, and asserting it through a
+    /// Key order is the property an edit must keep, and asserting it through a
     /// rendering would be asserting the renderer instead. `uninstall` reads it
     /// too: an entry of terminus's is terminus's whatever event key it sits
-    /// under (D-13), so the removal walks the events the file has rather than
+    /// under, so the removal walks the events the file has rather than
     /// the four this build would write.
     pub fn keys(&self) -> Vec<&str> {
         match self {
@@ -453,7 +454,7 @@ impl Document {
     ///
     /// An existing backup is returned untouched rather than refreshed: a second
     /// install must not back up the file it wrote itself, or the backup stops
-    /// being the pre-install bytes uninstall restores (AC7). `None` means there
+    /// being the pre-install bytes uninstall restores. `None` means there
     /// was no file to copy, which is an ordinary first install.
     ///
     /// That rule makes the backup's integrity load-bearing, because there is no
@@ -488,7 +489,7 @@ impl Document {
     ///
     /// `uninstall` needs the name without making a backup: install's copy is
     /// what it compares against to decide whether this file is otherwise
-    /// unchanged, and what it puts back when it is (AC7). Beside the *resolved*
+    /// unchanged, and what it puts back when it is. Beside the *resolved*
     /// file, for the reason the module header gives - `~/.claude.json` is two
     /// symlinks from the file it names.
     pub fn backup_path(&self) -> Result<PathBuf, Failure> {
@@ -508,7 +509,7 @@ impl Document {
     /// Put `contents` at this document's path, atomically, whatever is there.
     ///
     /// The one write that is not an edit of the value: `uninstall` restores
-    /// install's backup *as bytes*, because AC7 asks for the pre-install file
+    /// install's backup *as bytes*, because it gives back the pre-install file
     /// formatting and key order included, and rendering the backup's value
     /// would give back a file this renderer formatted rather than the one the
     /// user had. Same temporary-and-rename, same resolved path, same
@@ -520,8 +521,8 @@ impl Document {
     /// Re-read, re-apply `edit`, and write only if that changed something.
     ///
     /// Returns whether anything was written. The read is deliberately not the
-    /// one [`Document::read`] did: D-06's whole point is that the file may have
-    /// moved under us since install read it.
+    /// one [`Document::read`] did: the file may have moved under us since
+    /// install read it.
     ///
     /// What lands is the whole document, re-rendered - not a splice into the
     /// original bytes, so a file this renderer did not format is rewritten in
@@ -620,7 +621,7 @@ pub(crate) fn render(value: &Json, trailing_newline: bool) -> String {
 /// without reading the file.
 ///
 /// The name depends only on where the file is, so `uninstall` can report an old
-/// `~/.claude.json` backup even when the live file does not parse (D-15).
+/// `~/.claude.json` backup even when the live file does not parse.
 /// Resolving a path that is already resolved gives it back unchanged, so
 /// [`Document::backup_path`] can hand this its own resolved path.
 pub fn backup_path_for(path: &Path) -> Result<PathBuf, Failure> {
@@ -731,8 +732,8 @@ fn copy_through(source: &Path, file: &mut std::fs::File, temporary: &Path) -> Re
 ///
 /// `hard_link` is the one operation here that is both atomic and refuses to
 /// clobber. `rename` would overwrite a backup an earlier install made - the
-/// pre-install bytes AC7 restores - and an `exists()` test before it is a race
-/// two concurrent installs both win.
+/// pre-install bytes uninstall restores - and an `exists()` test before it is
+/// a race two concurrent installs both win.
 ///
 /// A filesystem without hard links (FAT, some network mounts) falls back to the
 /// rename behind an `exists()` check: still atomic, with the refusal to clobber
@@ -1109,7 +1110,7 @@ mod tests {
         assert_eq!(parse(&compact).unwrap(), *document.value());
     }
 
-    /// AC4 in one test: adding a key changes that key and nothing else, and
+    /// Adding a key changes that key and nothing else, and
     /// every other key keeps its value *and its position*.
     #[test]
     fn adding_a_key_leaves_every_other_key_where_it_was() {
@@ -1175,7 +1176,7 @@ mod tests {
     }
 
     /// A second install must not overwrite the backup the first one made: that
-    /// backup is the pre-install bytes, and it is what AC7 restores.
+    /// backup is the pre-install bytes, and it is what uninstall restores.
     #[test]
     fn a_second_backup_leaves_the_first_one_alone() {
         let (_dir, path) = seeded(FIXTURE);

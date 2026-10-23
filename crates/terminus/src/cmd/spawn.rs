@@ -5,7 +5,7 @@
 //! process it started must outlive the hook, including the way Claude Code
 //! kills a hook it has given up on.
 //!
-//! # Two kills, not one (D-03)
+//! # Two kills, not one
 //!
 //! Claude Code 2.1.231 terminates a timed-out hook twice over. It calls
 //! `process.kill(-pid, SIGKILL)` on the hook's process **group**, and then it
@@ -24,7 +24,7 @@
 //! in [`std::process`] because that is all this crate is allowed to spell it
 //! in.
 //!
-//! # `std` alone (D-04)
+//! # `std` alone
 //!
 //! No `libc`, no `nix`.
 //! [`std::os::unix::process::CommandExt::process_group`] is the whole
