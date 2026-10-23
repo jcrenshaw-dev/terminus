@@ -36,7 +36,7 @@ Plan shape: multiple plans, same phase (an estimated nine to eleven tasks across
 - [ ] AC3: `terminus search --since 2026-02-30 x`, `terminus sessions --until 2026-13-01`, `terminus observations regenerate --since 2026-02-30` and `terminus search --until 2026-08-12T25:00:00.000Z x` each exit 2 with a message naming the flag as typed, including on a data directory with no store. MCP `recall_search` with `since: "2026-02-30"` returns `isError` with a message naming `since`
 - [ ] AC4: `git grep -n 'fn time_bound' crates/` prints nothing, and the `InvalidTimeFilter` arms in `cmd/search.rs` and `cmd/mcp/tools.rs` are gone. A core test that calls `search::run` with a bad date from a directory no project covers gets `InvalidTimeFilter`, not an unknown-project answer
 - [ ] AC5: `git grep -nE 'repeat_n\("\?"' crates/` prints nothing and `git grep -n MAX_PATHS crates/ docs/` prints nothing. A core test that sends 32,767 paths through `search::run` gets hits with no error, and the MCP test that sends 40,000 paths gets hits with no error and no cap notice
-- [ ] AC6: With one project excluded in config, a session with no project still appears in `terminus search` results and in the session-start brief
+- [ ] AC6: With one project excluded in config, a session with no project still appears in `terminus search` results, and with a worktree excluded, the repository session with no pre-worktree key is still quoted and counted in the session-start brief
 - [ ] AC7: `cargo test --workspace --all-features` passes
 
 ## Flagged assumptions
