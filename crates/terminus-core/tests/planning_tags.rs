@@ -264,6 +264,23 @@ const NAMED: [&str; 5] = [
     "tests/fixtures/README.md",
 ];
 
+/// The file that declares `CREATE_SQL`, and a floor under the SQL comment lines
+/// read from it. The constant is found by its declaration's exact text, so a
+/// rename or a reformat would leave its comments unread with every file floor
+/// still met; the schema holds well over this many.
+const SCHEMA: (&str, usize) = ("crates/terminus-core/src/store/schema.rs", 100);
+
+/// How many SQL comment lines the Rust scan reads from `source`. Such a piece
+/// is its whole source line, where a `//` piece is only the text after `//`.
+fn sql_lines(source: &str) -> usize {
+    let lines: Vec<&str> = source.lines().collect();
+    let pieces = rust_pieces(source);
+    let sql = pieces
+        .iter()
+        .filter(|piece| piece.text == lines[piece.line - 1]);
+    sql.count()
+}
+
 fn files_with(dir: &Path, extension: &str, out: &mut Vec<PathBuf>) {
     let entries = std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display()));
     for entry in entries {
@@ -305,6 +322,14 @@ fn no_comment_or_doc_line_cites_a_planning_tag() {
         );
         files.extend(found);
     }
+    let (schema, floor) = SCHEMA;
+    let source =
+        std::fs::read_to_string(root.join(schema)).unwrap_or_else(|e| panic!("read {schema}: {e}"));
+    let read = sql_lines(&source);
+    assert!(
+        read >= floor,
+        "only {read} SQL comment lines read from {schema}; is `{SQL_DECLARATION}` still declared there?"
+    );
     let mut findings = Vec::new();
     for path in &files {
         let shown = path
@@ -473,6 +498,7 @@ fn only_the_schema_constant_has_its_sql_comments_read() {
     .join("\n");
     let found = tagged(&rust_pieces(&source));
     assert_eq!(found, vec![(2, vec![a.clone()]), (4, vec![a])]);
+    assert_eq!(sql_lines(&format!("{source}\nlet x = 1; // -- {b}")), 2);
 }
 
 #[test]
