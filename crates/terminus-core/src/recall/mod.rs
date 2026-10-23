@@ -18,6 +18,7 @@ pub mod get;
 pub mod query;
 pub mod scope;
 pub mod search;
+mod unindexable;
 
 pub use context::{ContextTurn, Window, MAX_CONTEXT_SIDE};
 pub use excerpt::{Reads, EXCERPT_CHARS};

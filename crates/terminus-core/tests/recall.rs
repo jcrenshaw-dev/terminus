@@ -449,6 +449,43 @@ fn the_token_count_is_bounded() {
     assert!(!short.truncated());
 }
 
+/// The pointed Hebrew word for peace: shin, qamats, shin dot, lamed, vav,
+/// holam, final mem. Three of its seven characters are ones `unicode61` makes
+/// no token from.
+const POINTED_SHALOM: &str = "\u{5E9}\u{5B8}\u{5C1}\u{5DC}\u{5D5}\u{5B9}\u{5DD}";
+
+/// #23: a word the tokenizer makes no token from is dropped, and the rest of
+/// the query is kept.
+#[test]
+fn a_word_the_tokenizer_makes_no_token_from_is_dropped() {
+    assert_eq!(Query::parse("foo \u{345}").tokens(), ["foo"]);
+
+    let nothing = Query::parse("\u{345} \u{24B6} \u{24D0}");
+    assert!(nothing.is_empty(), "{:?}", nothing.tokens());
+    assert!(!nothing.truncated());
+    assert_eq!(nothing.match_expression(), None);
+}
+
+/// #23: a word with one character the tokenizer makes a token from is kept
+/// whole and as typed, because fts5 splits it inside the quoted phrase.
+#[test]
+fn a_word_with_one_indexable_character_is_kept_whole() {
+    assert_eq!(Query::parse("foo\u{345}bar").tokens(), ["foo\u{345}bar"]);
+    assert_eq!(Query::parse(POINTED_SHALOM).tokens(), [POINTED_SHALOM]);
+}
+
+/// #23: a dropped word takes no slot under the cap and never marks the query
+/// truncated.
+#[test]
+fn a_dropped_word_takes_no_slot_under_the_cap() {
+    let raw: String = (0..MAX_QUERY_TOKENS)
+        .map(|n| format!("word{n} \u{345} \u{24B6} "))
+        .collect();
+    let query = Query::parse(&raw);
+    assert_eq!(query.tokens().len(), MAX_QUERY_TOKENS);
+    assert!(!query.truncated());
+}
+
 /// A config with no roots and the given exclusions: the read path never opens a
 /// transcript, so the roots are not what it is about.
 fn config(exclusions: &[&str]) -> Config {
