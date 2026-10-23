@@ -218,6 +218,80 @@ fn status_counts_the_file_a_single_file_ingest_committed() {
     );
 }
 
+/// `terminus ingest <path>` leaves one `runs` row on every run that holds the
+/// lock, not only on one that committed (#31): a file archived, the same file
+/// already up to date, and the same file cut short under its archive. The
+/// failed run exits non-zero, its row names the file under `error`, and
+/// `status` prints it there.
+#[test]
+fn a_single_file_ingest_writes_one_row_whether_it_commits_is_up_to_date_or_fails() {
+    let bench = bench();
+    let path = bench.place(&format!("{}.jsonl", uuid(1)), "session-basic.jsonl");
+    let arg = path.to_str().unwrap();
+    let rows = || -> i64 {
+        bench
+            .conn()
+            .query_row("SELECT count(*) FROM runs", [], |r| r.get(0))
+            .unwrap()
+    };
+    let newest = || -> (i64, i64, i64, Option<String>) {
+        bench
+            .conn()
+            .query_row(
+                "SELECT files_seen, files_committed, files_failed, error
+                 FROM runs ORDER BY id DESC LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap()
+    };
+
+    // Committed. There is no store before this run, so its row is the first.
+    assert!(!bench.data_dir.exists());
+    let out = bench.run(&["ingest", arg]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(rows(), 1, "a committed named file wrote no row");
+    let (seen, committed, failed, _) = newest();
+    assert_eq!((seen, committed, failed), (1, 1, 0));
+
+    // Up to date: nothing new to read, and still a row.
+    let out = bench.run(&["ingest", arg]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(rows(), 2, "an up-to-date named file wrote no row");
+    let (seen, committed, failed, error) = newest();
+    assert_eq!((seen, committed, failed), (1, 0, 0));
+    assert_eq!(error, None);
+
+    // Failed: the file is now shorter than what the archive already holds.
+    std::fs::write(&path, b"{}\n").unwrap();
+    let out = bench.run(&["ingest", arg]);
+    assert_ne!(
+        out.status.code(),
+        Some(0),
+        "a damaged named file exited 0: {}",
+        stderr(&out)
+    );
+    assert_eq!(rows(), 3, "a failed named file wrote no row");
+    let (seen, committed, failed, error) = newest();
+    assert_eq!((seen, committed, failed), (1, 0, 1));
+    let error = error.expect("the failed run's row has no error");
+    assert!(
+        error.contains(arg),
+        "the row does not name the file: {error}"
+    );
+
+    let out = bench.run(&["status"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let text = stdout(&out);
+    let (_, under_error) = text
+        .split_once("  error\n")
+        .unwrap_or_else(|| panic!("status printed no error block: {text}"));
+    assert!(
+        under_error.contains(arg),
+        "status does not name the file under error: {text}"
+    );
+}
+
 /// Reporting a failed file. A tree with one damaged transcript: the pass still
 /// ingests the rest, and `status` names that file and its error.
 #[test]
