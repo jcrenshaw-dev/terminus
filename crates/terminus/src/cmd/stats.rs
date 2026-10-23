@@ -1,15 +1,15 @@
-//! `terminus stats`: whether injection helps (FEED-04).
+//! `terminus stats`: whether injection helps.
 //!
-//! A CLI data command and never an MCP tool (D-14). Every tool description sits
+//! A CLI data command and never an MCP tool. Every tool description sits
 //! in every session's context forever, and the model does not need to know how
 //! its own recall is scoring - the three recall tools are the whole surface
 //! `DESIGN-BRIEF.md:187` allows.
 //!
 //! It reads through the shared read path, so a machine that has never ingested
 //! gets an empty answer with a reason and exit 0 rather than a store created as
-//! the side effect of a question (D-15).
+//! the side effect of a question.
 //!
-//! The numbers are characters, never tokens (D-12), and the output says so.
+//! The numbers are characters, never tokens, and the output says so.
 
 use terminus_core::feedback::stats::{self, Stats};
 

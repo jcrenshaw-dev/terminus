@@ -1,4 +1,4 @@
-//! `terminus show`: print what a turn actually said (RCL-09, RCL-08).
+//! `terminus show`: print what a turn actually said.
 //!
 //! This is the terminal's `recall_get` plus `recall_context`. A search hands
 //! back an excerpt - a projection, windowed around the match - and this hands
@@ -12,10 +12,10 @@
 //! conversion here would make this - the one command whose whole job is
 //! fidelity - the one place a byte could change. The `--json` mode has no such
 //! option, since a JSON string is text by definition, and it says so where it
-//! converts. With PRIV-03's knob set, what those bytes carry is the archived
+//! converts. With `redact_recall` set, what those bytes carry is the archived
 //! line with each credential replaced by its marker: the store is untouched and
 //! the filter is a projection on the way out, so `--raw` is the way back to the
-//! record's own bytes for one invocation (D-07). A flag and never an
+//! record's own bytes for one invocation. A flag and never an
 //! environment variable - the hook and the MCP server load their own `Config`
 //! in-process and would inherit a variable, which is exactly the unfiltering
 //! the knob exists to prevent.
@@ -27,7 +27,7 @@
 //! already spells every C0 control as `\u00XX`, and escaping the DEL and C1 it
 //! can still carry would end this as the way back to the record's own bytes.
 //!
-//! **The window stops at the session (D-06)** and says which end it stopped at,
+//! **The window stops at the session** and says which end it stopped at,
 //! rather than just returning a shorter list. A caller that cannot tell "there
 //! is nothing earlier" from "you asked for five and got two" cannot decide
 //! whether to look in the session this one continues from - which is returned,
@@ -165,7 +165,7 @@ fn render_window(out: &mut impl Write, window: &Window) -> std::io::Result<()> {
     if window.at_session_end {
         writeln!(out, "  --- end of session ---")?;
     }
-    // Returned and NOT followed (D-06). A caller that wants the turns before
+    // Returned and NOT followed. A caller that wants the turns before
     // this file's first one resolves this itself and runs a second `show`.
     if let Some(previous) = &window.continues_from {
         writeln!(
@@ -241,9 +241,9 @@ fn window_value(window: &Window) -> serde_json::Value {
             "text": turn.text,
             "is_anchor": turn.is_anchor,
         })).collect::<Vec<_>>(),
-        // Said out loud rather than left to be inferred from a short list
-        // (D-06): "there is nothing earlier" and "you asked for five and got
-        // two" are different answers.
+        // Said out loud rather than left to be inferred from a short list:
+        // "there is nothing earlier" and "you asked for five and got two" are
+        // different answers.
         "at_session_start": window.at_session_start,
         "at_session_end": window.at_session_end,
         "continues_from": window.continues_from,
@@ -277,7 +277,7 @@ pub struct Args {
     ///
     /// Governs the body and the window in both renderings. `--raw --json` emits
     /// the same keys with unfiltered values, because the flag changes a value
-    /// and never a key (D-08).
+    /// and never a key.
     pub raw: bool,
 }
 
@@ -299,7 +299,7 @@ pub fn parse(parser: &mut lexopt::Parser) -> Result<Args, Failure> {
             Long(super::JSON_FLAG) => json = true,
             // This command's own arm, matching `search`'s: the flag reaches
             // exactly the two commands that print a projection, and no other
-            // command grows a way to be asked for one (D-07).
+            // command grows a way to be asked for one.
             Long("raw") => raw = true,
             Value(word) => {
                 let raw = word.to_string_lossy().into_owned();

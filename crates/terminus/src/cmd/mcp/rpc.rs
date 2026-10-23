@@ -1,4 +1,4 @@
-//! JSON-RPC 2.0, hand-written over `serde_json` (D-11).
+//! JSON-RPC 2.0, hand-written over `serde_json`.
 //!
 //! No SDK and no async runtime. A runtime is barred outright - cold start is
 //! the product and the hook path must not pay for one - and the
@@ -45,7 +45,7 @@ pub mod code {
     ///
     /// A *bad argument* to a tool this server does have is NOT this. That is a
     /// request the server understood and could not satisfy, which comes back as
-    /// a tool result carrying a reason (RCL-10).
+    /// a tool result carrying a reason.
     pub const INVALID_PARAMS: i64 = -32602;
     /// A request whose `_meta` names a protocol revision other than
     /// `2026-07-28`. Its `data` lists what is supported and echoes what was

@@ -1,5 +1,5 @@
 //! `terminus export <dir>`: the archive in a portable form, and a manifest that
-//! says what that is (PRIV-04).
+//! says what that is.
 //!
 //! **The portable form is the transcript.** One `.jsonl` file per session,
 //! holding that session's uncompressed stream exactly as the archive stores it.
@@ -9,7 +9,7 @@
 //! derived tables, the decision log and the observations along with it.
 //!
 //! **Nothing is redacted on the way out, and that is why the notice exists.**
-//! Redaction is keyed on destination, never on operation (PRIV-01), and a
+//! Redaction is keyed on destination, never on operation, and a
 //! directory the user named is not egress - the bytes are already on this
 //! machine and the user asked for them here. What that leaves is a directory of
 //! plaintext transcripts somewhere a user may not have thought about, so
@@ -22,7 +22,7 @@
 //! this command did not write is not a thing it may do at all.
 //!
 //! Sessions come from `config::visible::sessions`. Export is a read path and
-//! ING-08 binds every read path alike: a project the user excluded is not
+//! exclusion binds every read path alike: a project the user excluded is not
 //! written out to a directory they may hand to someone else.
 
 use std::collections::BTreeSet;
@@ -46,7 +46,7 @@ const MANIFEST: &str = "manifest.json";
 
 /// What this export is, said in the manifest and on the terminal both.
 ///
-/// PRIV-04's "states what it contains" half. It is prose rather than a flag
+/// The export states in words what it contains. It is prose rather than a flag
 /// because the reader who needs it is a person looking at a directory they just
 /// created, and "unredacted: true" is not a sentence anyone reads as a warning.
 const NOTICE: &str = "\
@@ -157,7 +157,7 @@ fn write_export(reader: &Reader, destination: &Path) -> Result<Written, Failure>
     let conn = reader.store().conn();
     let sessions = visible::sessions(conn, reader.config()).map_err(op)?;
 
-    // Owner-only, and the leaf alone (D-04, D-11). An export is a directory of
+    // Owner-only, and the leaf alone. An export is a directory of
     // plaintext transcripts, so it is terminus's own output even though the
     // user named the path - the mode rides the `mkdir` rather than a `chmod`
     // after it, and there is no instant at which the directory about to hold
@@ -192,8 +192,8 @@ fn write_export(reader: &Reader, destination: &Path) -> Result<Written, Failure>
         let (evicted, session_id, session_first, session_last) = row;
 
         // An evicted session has no block rows, on purpose, so there is no
-        // stream to read out of it (RET-02, phase 7 D-09). Its file is written empty
-        // rather than skipped: the manifest names it either way, and a missing
+        // stream to read out of it. Its file is written empty rather than
+        // skipped: the manifest names it either way, and a missing
         // file would read as an export that lost something.
         let stream = match evicted != 0 {
             true => Vec::new(),
@@ -270,7 +270,7 @@ fn write_export(reader: &Reader, destination: &Path) -> Result<Written, Failure>
 /// empty or absent, so a name that is already taken by the time this runs is
 /// something else writing into the directory mid-export, and truncating that
 /// file would be the one thing this command says it never does. The mode is
-/// carried by the open itself (D-01), so the file holding a whole session's
+/// carried by the open itself, so the file holding a whole session's
 /// unredacted transcript is never on disk at the umask's width, not even for
 /// the moment between the create and a chmod.
 fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {

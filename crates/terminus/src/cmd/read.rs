@@ -4,15 +4,16 @@
 //! tools.
 //!
 //! Each of them opening a store its own way is that many chances to drift on
-//! the two behaviours D-10 and D-18 fix, and neither of them is visible in a
-//! test that only checks the command answered.
+//! the two behaviours below - a read never creates a store, and never repairs
+//! one - and neither of them is visible in a test that only checks the command
+//! answered.
 //!
-//! **Read-only, always (D-10).** [`terminus_core::Store::open_read_only`] and
+//! **Read-only, always.** [`terminus_core::Store::open_read_only`] and
 //! never `Store::open`: opening a store is a read, and `Store::open` would
 //! `create_dir_all`, initialize a fresh database, run the additive column
 //! bring-forward and set two pragmas. `terminus search` against a machine that
 //! has never ingested must not leave a store behind as the side effect of a
-//! question, and PLAN-4's server advertises `readOnlyHint` over this same path.
+//! question, and the MCP server advertises `readOnlyHint` over this same path.
 //!
 //! **A missing store is an answer, not a failure.** A machine that has installed
 //! terminus and not yet run an ingest is the ordinary starting state, so it gets
@@ -23,7 +24,7 @@
 //! that is operational (exit 1), because a script told "no results" about an
 //! unreadable database would carry on.
 //!
-//! **A store older than this build says so and is not repaired (D-18).**
+//! **A store older than this build says so and is not repaired.**
 //! `reindex::open_up_to_date` stays the only caller that rebuilds. A read that
 //! silently rewrote four tables would not be a read, and a user who upgraded the
 //! binary and searched before the next hook fired must not read a degraded
@@ -53,7 +54,7 @@ pub enum Opened {
 ///
 /// The two travel together because they are only meaningful together: the store
 /// holds the sessions and the config says which of them a read path may see
-/// (`config::visible`, ING-08), and a caller that had one without the other
+/// (`config::visible`), and a caller that had one without the other
 /// could ask a question exclusion never got to answer.
 pub struct Reader {
     store: Store,
@@ -73,9 +74,10 @@ impl Reader {
 /// What a read command prints when the store predates this build.
 ///
 /// One line, on stderr, and then the query runs anyway against the old-shape
-/// index. Saying it is the whole of D-18: the results really are degraded, and
-/// the difference between a user who knows that and a user who does not is the
-/// difference between waiting for the next ingest and filing a search bug.
+/// index. Saying so is all a read does about it: the results really are
+/// degraded, and the difference between a user who knows that and a user who
+/// does not is the difference between waiting for the next ingest and filing a
+/// search bug.
 const STALE: &str = "this store's derived tables predate this build, so results may be \
                      incomplete; the next `terminus ingest` rebuilds them";
 
@@ -137,7 +139,7 @@ pub enum DecisionLog {
 /// without knowing whether `--json` was asked for, so the envelope the contract
 /// promises is never written at all.
 ///
-/// Nothing is repaired, because a read never migrates (D-18). The next
+/// Nothing is repaired, because a read never migrates. The next
 /// write-mode `terminus ingest` would create a missing table through
 /// `bring_forward`'s missing-table arm and leave any surviving rows orphaned,
 /// which is why a damaged log is a failure a person has to look at rather than
@@ -184,7 +186,7 @@ pub fn damaged(tables: &[&str]) -> String {
 /// The project a read command works in: the one named, or the one the process
 /// is standing in.
 ///
-/// D-12: the default is a longest-prefix match of the working directory against
+/// The default is a longest-prefix match of the working directory against
 /// the project keys `session_meta` already holds, resolved inside
 /// [`terminus_core::recall::scope`]. The literal `*` means every project, and
 /// exclusion stays in force under it.
@@ -197,10 +199,10 @@ pub fn scope(named: Option<&str>) -> Result<Scope, Failure> {
 
 /// Say why a result is empty, on the stream the mode wants, and exit 0.
 ///
-/// An empty result is a successful answer to a question with no matches
-/// (RCL-06), so this never fails. The reason goes into the document in JSON mode
-/// and onto stderr otherwise - never onto stdout, which stays either a document
-/// or the hits themselves.
+/// An empty result is a successful answer to a question with no matches, so
+/// this never fails. The reason goes into the document in JSON mode and onto
+/// stderr otherwise - never onto stdout, which stays either a document or the
+/// hits themselves.
 pub fn empty(document: Document, reason: &str, json: bool) -> Result<(), Failure> {
     if json {
         document.because(reason).emit();

@@ -1,14 +1,14 @@
-//! `terminus sessions`: every session a read path may see (RCL-05).
+//! `terminus sessions`: every session a read path may see.
 //!
-//! **Through `config::visible::sessions`, not through PLAN-2's projection.**
-//! D-21 keeps the hot query paths on a project-only projection because the
+//! **Through `config::visible::sessions`, not through `visible::projects`.**
+//! The hot query paths stay on that project-only projection because the
 //! per-session `count(*)` costs ~7 ms on a real store and search cannot spend
 //! that before it starts. This is a listing: the counts ARE what it is for, it
 //! runs when a person asks for it, and going through the module every read path
 //! is required to use is what makes the exclusion gate one gate rather than two
 //! that can disagree.
 //!
-//! Exclusion is applied retroactively, which is the whole of ING-08's read half:
+//! Exclusion is applied retroactively, which is all a read path does about it:
 //! no flag is written at ingest, the predicate is re-applied on every read, and
 //! the case that matters is precisely the session archived *before* its project
 //! was excluded.
@@ -137,7 +137,7 @@ struct Detail {
     branch: Option<String>,
     first_turn_at: Option<String>,
     last_turn_at: Option<String>,
-    /// D-07: a sidecar is a session whose `parent_session_key` is non-null.
+    /// A sidecar is a session whose `parent_session_key` is non-null.
     sidecar: bool,
     evicted: bool,
 }
@@ -201,7 +201,7 @@ fn document(sessions: &[serde_json::Value]) -> Document {
     Document::new(COMMAND).field("sessions", sessions.to_vec())
 }
 
-/// A transcript timestamp at day resolution (D-23: one shape, UTC only).
+/// A transcript timestamp at day resolution (one shape, UTC only).
 fn day(ts: Option<&str>) -> &str {
     match ts {
         // `get` and not `&ts[..10]`: `len` counts bytes, the slice needs a char
@@ -279,7 +279,7 @@ mod tests {
 
     /// A stored timestamp is any JSON string the transcript carried, so the
     /// day cut has to be total over arbitrary bytes rather than over the one
-    /// shape D-23 measured.
+    /// measured shape.
     #[test]
     fn the_day_cut_survives_a_timestamp_that_is_not_the_measured_shape() {
         // The shape 22,412 of 22,412 sampled turns actually carry.

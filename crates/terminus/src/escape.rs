@@ -8,14 +8,14 @@
 //! the `show` record body are untouched; this is a rendering, the way redaction
 //! is.
 //!
-//! **The set is `char::is_control` minus tab and newline (D-08).** That is U+0000
+//! **The set is `char::is_control` minus tab and newline.** That is U+0000
 //! to U+001F and U+007F to U+009F, 63 code points. Tab and newline lay text out
 //! and drive nothing. CR stays in the set: an observation command is only
 //! clipped, so a heredoc keeps its raw line breaks, and a CR in one would let
 //! the command overprint its own line. Format characters such as U+200B and
 //! U+202E are not controls and pass.
 //!
-//! **An escaped character prints as its JSON spelling, `\u001b` (D-09).** It is
+//! **An escaped character prints as its JSON spelling, `\u001b`.** It is
 //! ASCII, it is what serde_json writes for C0, and it is what the archived line
 //! already holds, so `show --after` spells a character the same way in the body
 //! and in the window. `escape_debug` also escapes quotes, backslash, tab and

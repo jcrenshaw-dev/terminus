@@ -1,4 +1,4 @@
-//! The three tools, and nothing else ever (RCL-07 .. RCL-09).
+//! The three tools, and nothing else ever.
 //!
 //! **Three, by decision.** Every tool description sits in every session's
 //! context forever, so `stats`, `usage`, `verify`,
@@ -22,7 +22,7 @@
 //! compactly, because a tool result sits in the model's context and indentation
 //! is tokens spent on whitespace.
 //!
-//! **Every failure the server understood is a result, never a throw (RCL-10).**
+//! **Every failure the server understood is a result, never a throw.**
 //! A missing argument, an argument of the wrong JSON type, an unparseable date,
 //! an unknown turn id, a store that does not exist yet: all of them come back as
 //! this tool's own empty document carrying a `reason`. A JSON-RPC error is
@@ -61,8 +61,8 @@ pub const MAX_CONTEXT_SIDE: usize = recall::MAX_CONTEXT_SIDE;
 /// bounded by what a person types; `recall_get` is where a *client-supplied*
 /// list arrives, and `recall::get::records` binds one SQL placeholder per id, so
 /// an unbounded list is an operational failure rather than a bounded answer.
-/// Each id can also cost a whole decompressed session (D-20), which is what puts
-/// the number in the tens rather than the hundreds.
+/// Each id can also cost a whole decompressed session, which is what puts the
+/// number in the tens rather than the hundreds.
 pub const MAX_IDS: usize = 25;
 
 /// How many `paths` one `recall_search` call may filter on.
@@ -316,7 +316,7 @@ fn nothing(name: &str, reason: &str) -> Value {
 }
 
 // ---------------------------------------------------------------------------
-// recall_search (RCL-07)
+// recall_search
 // ---------------------------------------------------------------------------
 
 fn run_search(args: &Map<String, Value>) -> Result<Value, Refused> {
@@ -343,8 +343,8 @@ fn run_search(args: &Map<String, Value>) -> Result<Value, Refused> {
     if asked == 0 {
         return Err(Refused::caller("limit 0 asks for no results"));
     }
-    // Lowered, never raised: RCL-10's budget is the server's, and a caller's own
-    // limit may only narrow it.
+    // Lowered, never raised: `MAX_HITS` is the server's budget, and a caller's
+    // own limit may only narrow it.
     let limit = asked.min(MAX_HITS);
 
     let query = Query::parse(&raw);
@@ -360,7 +360,7 @@ fn run_search(args: &Map<String, Value>) -> Result<Value, Refused> {
         Ok(response) => response,
         // A malformed bound is the caller's, not the archive's. Every string
         // orders against every other, so the alternative is a plausible wrong
-        // answer nothing reports (D-23).
+        // answer nothing reports.
         Err(Error::InvalidTimeFilter { field, value }) => {
             return Err(Refused::caller(format!(
                 "{field} {value:?} is not a time; expected YYYY-MM-DD or \
@@ -400,7 +400,7 @@ fn run_search(args: &Map<String, Value>) -> Result<Value, Refused> {
                 "project": hit.project,
                 "record_type": hit.record_type,
                 "ts": hit.ts,
-                // D-07: a subagent turn is in the result and ranked below a
+                // A subagent turn is in the result and ranked below a
                 // top-level turn of equal score, and said out loud so a reader
                 // knows it is looking at work it never watched.
                 "sidechain": hit.sidechain,
@@ -415,16 +415,16 @@ fn run_search(args: &Map<String, Value>) -> Result<Value, Refused> {
 }
 
 // ---------------------------------------------------------------------------
-// recall_context (RCL-08)
+// recall_context
 // ---------------------------------------------------------------------------
 
 /// The conversation around one turn, in the order it happened.
 ///
-/// **`turn_seq` order, never timestamp (D-22).** 31 of 62 sampled real
+/// **`turn_seq` order, never timestamp.** 31 of 62 sampled real
 /// transcripts carry a record whose timestamp goes backwards, so a timestamp
 /// sort would show a reply before the prompt it answers in half of all sessions.
 ///
-/// **The window stops at the session (D-06)** and says which end it stopped at.
+/// **The window stops at the session** and says which end it stopped at.
 /// It does not follow `continues_from` and it does not follow
 /// `parent_session_key`: continuation is a fan-out with zero, one or many
 /// successors, so a lineage walk here could return turns from a conversation
@@ -490,7 +490,7 @@ fn run_context(args: &Map<String, Value>) -> Result<Value, Refused> {
 }
 
 // ---------------------------------------------------------------------------
-// recall_get (RCL-09)
+// recall_get
 // ---------------------------------------------------------------------------
 
 /// The whole verbatim record behind each id.
@@ -498,11 +498,11 @@ fn run_context(args: &Map<String, Value>) -> Result<Value, Refused> {
 /// **This is the one path that hands the truth back.** A search returns an
 /// excerpt and a context window returns projections; this returns the record's
 /// own archived bytes, and each session's blob is decompressed once per request
-/// however many of its turns were asked for (D-20).
+/// however many of its turns were asked for.
 ///
 /// **Unless `[privacy] redact_recall` is set**, and then `body` is that line
 /// with the egress filter run over it, because an MCP result is the model's
-/// context and phase 4 makes that its own egress boundary. The archive is
+/// context and so an egress boundary of its own. The archive is
 /// untouched either way - the filter is applied to the copy this answer carries,
 /// in `recall::get::records` and not here, so the terminal `body` and this one
 /// cannot disagree.
@@ -519,7 +519,7 @@ fn run_context(args: &Map<String, Value>) -> Result<Value, Refused> {
 /// that names one id 30 times names one record, and counting it as over the cap
 /// dropped real ids that came after the repeats.
 ///
-/// **An evicted body is a flag, not an error (D-08).** It is read off
+/// **An evicted body is a flag, not an error.** It is read off
 /// `session_meta.is_evicted` and never off a failed blob read: a blob that will
 /// not decompress is archive damage for `terminus verify` to report, and letting
 /// it look like an eviction would report silent data loss as retention working.
@@ -605,7 +605,7 @@ fn run_get(args: &Map<String, Value>) -> Result<Value, Refused> {
 // The store, the scope, and the arguments
 // ---------------------------------------------------------------------------
 
-/// Open the store for one call, read-only (D-10).
+/// Open the store for one call, read-only.
 ///
 /// The same entry point `search`, `show` and `sessions` use, so there is one
 /// implementation of "a read never creates a store" rather than two - and a
@@ -631,7 +631,7 @@ fn reader() -> Result<Box<Reader>, Refused> {
 }
 
 /// The project a call works in: the one named, or the one this process is
-/// standing in (D-12).
+/// standing in.
 ///
 /// Claude Code spawns the server with the session's own working directory, so
 /// the default scope is the project the user is in - resolved by a longest-prefix
@@ -793,7 +793,7 @@ fn optional_count(args: &Map<String, Value>, name: &str) -> Result<Option<usize>
 /// One end of a time window, validated before it can reach a comparison.
 ///
 /// Through the CLI's own rule, so `--since` typed at a terminal and `since`
-/// passed by a model mean the same thing (D-23) - including that a bare
+/// passed by a model mean the same thing - including that a bare
 /// `YYYY-MM-DD` extends to the first instant of its day for `since` and the last
 /// for `until`.
 fn optional_time(args: &Map<String, Value>, name: &'static str) -> Result<Option<String>, Refused> {
@@ -814,8 +814,8 @@ mod tests {
     use super::*;
 
     /// Exactly three, each named, each `readOnlyHint`, each with an object
-    /// schema - the shape AC7 asserts at the process boundary, checked here
-    /// where a failure names the field rather than the spawn.
+    /// schema - the shape `tests/mcp.rs` asserts at the process boundary,
+    /// checked here where a failure names the field rather than the spawn.
     #[test]
     fn there_are_exactly_three_read_only_tools() {
         let tools = descriptors();

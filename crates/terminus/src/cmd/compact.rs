@@ -1,12 +1,12 @@
-//! `terminus compact`: reclaim the space retention already freed (RET-04).
+//! `terminus compact`: reclaim the space retention already freed.
 //!
 //! **It deletes nothing and has no opinion about what should be kept.** Deleting
-//! a session is retention's job and retention's only, inside the ingest pass
-//! (D-10); this command reclaims the pages a delete left behind. That split is
+//! a session is retention's job and retention's only, inside the ingest pass;
+//! this command reclaims the pages a delete left behind. That split is
 //! why `compact` takes no age, no project and no policy: there is nothing here
 //! to configure, because there is no choice here to make.
 //!
-//! **`VACUUM` and then `PRAGMA wal_checkpoint(TRUNCATE)`, always both (D-08).**
+//! **`VACUUM` and then `PRAGMA wal_checkpoint(TRUNCATE)`, always both.**
 //! `VACUUM` rebuilds the database file without its free pages - and on a WAL
 //! store it writes the whole rebuilt file THROUGH the WAL, so the pages it just
 //! reclaimed reappear in `terminus.db-wal`. Measured 2026-08-22 on a synthetic

@@ -1,19 +1,20 @@
-//! `terminus search`: find a past turn from the terminal (RCL-05).
+//! `terminus search`: find a past turn from the terminal.
 //!
 //! The command parses and validates; [`terminus_core::recall`] decides what
 //! relevance is. That split is the whole reason this file is short: `terminus
-//! search` and PLAN-4's `recall_search` are two front ends over one query layer,
+//! search` and `recall_search` are two front ends over one query layer,
 //! and a filter interpreted here rather than there would be a second definition
 //! of what a search means.
 //!
-//! **The user's string never reaches SQLite (D-09).** `Query::parse` splits it
+//! **The user's string never reaches SQLite.** `Query::parse` splits it
 //! on the separators the index tokenizes on and rebuilds a quoted, conjoined
 //! FTS5 expression. Measured on sqlite 3.53.4, `MATCH 'src/worker/S.ts'` fails
 //! with `fts5: syntax error near "/"` - so the most natural command in the
-//! product is exactly the one a raw `MATCH` would refuse, and RCL-06 forbids a
-//! non-zero exit for a query that simply found nothing.
+//! product is exactly the one a raw `MATCH` would refuse, and the contract every
+//! data command keeps forbids a non-zero exit for a query that simply found
+//! nothing.
 //!
-//! **`--raw` is the owner's way back to their own archive (PRIV-03, D-07).**
+//! **`--raw` is the owner's way back to their own archive.**
 //! With `[privacy] redact_recall` set, the excerpt this prints is filtered like
 //! every other projection that reaches a model; `--raw` spends
 //! [`terminus_core::Config::without_recall_redaction`] for this one invocation
@@ -79,7 +80,7 @@ pub fn run(args: Args) -> Result<(), Failure> {
         Ok(response) => response,
         // A malformed `--since` is a mistake in the command line, not an empty
         // result: every string compares cleanly against every other, so the
-        // alternative is a plausible wrong answer that nothing reports (D-23).
+        // alternative is a plausible wrong answer that nothing reports.
         Err(Error::InvalidTimeFilter { field, value }) => {
             return Err(Failure::Misuse(format!(
                 "--{field} {value:?} is not a time; expected YYYY-MM-DD or \
@@ -105,7 +106,7 @@ pub fn run(args: Args) -> Result<(), Failure> {
                     "entity_score": hit.entity_score,
                     // The pairs behind `entity_score`, so a caller can see WHICH
                     // stored values it came from rather than only how much they
-                    // weighed (D-05).
+                    // weighed.
                     "matched_on": hit
                         .matched_on
                         .iter()
@@ -162,8 +163,8 @@ fn document(query: &str, hits: &[serde_json::Value], truncated: bool) -> Documen
 
 /// A transcript timestamp at day resolution.
 ///
-/// All 22,412 turns of a 180-file sample carry exactly `NNNN-NN-NNTNN:NN:NN.NNNZ`
-/// (D-23), so the day is the first ten characters and there is no date parsing
+/// All 22,412 turns of a 180-file sample carry exactly `NNNN-NN-NNTNN:NN:NN.NNNZ`,
+/// so the day is the first ten characters and there is no date parsing
 /// on the read path. A turn with no timestamp says so rather than showing a
 /// blank column that reads as an alignment bug.
 fn day(ts: Option<&str>) -> &str {
@@ -206,7 +207,7 @@ pub struct Args {
     ///
     /// Governs the projection in both renderings. `--raw --json` emits the same
     /// keys with unfiltered values, because the flag changes a value and never
-    /// a key (D-08).
+    /// a key.
     pub raw: bool,
 }
 
@@ -252,7 +253,7 @@ pub fn parse(parser: &mut lexopt::Parser) -> Result<Args, Failure> {
             // Spelled out here rather than shared through `cmd::mod`: a
             // parser two commands reach through is how `verify --json` came
             // to look supported before it was, and this one belongs to
-            // exactly the commands that print a projection (D-07).
+            // exactly the commands that print a projection.
             Long("raw") => raw = true,
             // Every remaining word is part of the query, which is what lets
             // `terminus search cannot find module` work without quoting.
@@ -283,7 +284,7 @@ mod tests {
 
     /// A stored timestamp is any JSON string the transcript carried, so the
     /// day cut has to be total over arbitrary bytes rather than over the one
-    /// shape D-23 measured.
+    /// measured shape.
     #[test]
     fn the_day_cut_survives_a_timestamp_that_is_not_the_measured_shape() {
         // The shape 22,412 of 22,412 sampled turns actually carry.

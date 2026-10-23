@@ -1,4 +1,4 @@
-//! `terminus status`: what the store holds and what the last run did (ING-09).
+//! `terminus status`: what the store holds and what the last run did.
 //!
 //! Every number comes out of the store. There is no log file, by design, so
 //! `runs` is where a pass's failures live and this is what surfaces them.
@@ -14,9 +14,9 @@
 //!
 //! The session, turn and watermark numbers come from `config::visible`, not
 //! from `count(*)`: an excluded project must be invisible on read as well as
-//! never read on ingest (ING-08, D-23), including for sessions archived before
-//! the exclusion was configured. This is the phase's only read command, so it
-//! is also the proof that the boundary phase 3's search will reuse is real.
+//! never read on ingest, including for sessions archived before the exclusion
+//! was configured. `search`, `show` and `sessions` read through the same
+//! boundary.
 
 use std::fmt::Display;
 use std::path::Path;

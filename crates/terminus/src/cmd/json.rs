@@ -1,4 +1,4 @@
-//! The one document every `--json` data command writes to stdout (RCL-06).
+//! The one document every `--json` data command writes to stdout.
 //!
 //! **One envelope, seven commands.** `search`, `show`, `sessions`, `status`,
 //! `verify`, `reindex` and `doctor` all emit `{command, ok, reason, data}`, so a caller
@@ -15,7 +15,7 @@
 //! terminal or a script checking `ok`, and a second vocabulary of reason codes
 //! would be a contract to keep stable for nobody.
 //!
-//! **Never hand-formatted (D-25).** Every value is built as a `serde_json`
+//! **Never hand-formatted.** Every value is built as a `serde_json`
 //! value and serialized by `serde_json`. An excerpt is arbitrary text cut out of
 //! a transcript - it carries quotes, backslashes, and control bytes - and a
 //! `format!`-assembled document breaks on exactly the turns most worth reading,
@@ -140,8 +140,8 @@ impl Document {
 mod tests {
     use super::*;
 
-    /// D-25's whole point: a value carrying the characters JSON has to escape
-    /// survives the round trip byte for byte.
+    /// The point of never hand-formatting: a value carrying the characters JSON
+    /// has to escape survives the round trip byte for byte.
     ///
     /// A transcript excerpt is arbitrary text - a shell command with quoted
     /// arguments, a Windows path, a terminal control byte out of a tool result -

@@ -4,8 +4,8 @@
 //! fuzz targets in `fuzz/` can reach the parsers that read outside input, through
 //! the [`fuzz`] module, which only `cargo fuzz` builds contain.
 //!
-//! Exit codes (phase 1 subset of the CLI contract): 0 success, 1 operational
-//! failure, 2 misuse. Data goes to stdout, errors go to stderr.
+//! Exit codes: 0 success, 1 operational failure, 2 misuse. Data goes to stdout,
+//! errors go to stderr.
 
 // Stdout goes through `outln!` and `out!`, which survive a closed pipe.
 #![cfg_attr(not(test), deny(clippy::print_stdout))]
@@ -52,7 +52,7 @@ const USAGE: &str = "usage: terminus [--version] <command>\n\
 pub fn main() -> ExitCode {
     // Before the parser, and before anything else: this process may be the
     // reparenting hand-off `cmd::spawn` uses to put the ingest outside every
-    // set Claude Code kills a hook through (D-03). If it is, it has already
+    // set Claude Code kills a hook through. If it is, it has already
     // started the process that does the work and has nothing else to do.
     //
     // The test is `cmd::spawn::HANDOFF` as the first argument, so the only way
@@ -127,7 +127,7 @@ fn parse(parser: &mut lexopt::Parser) -> Result<Invocation, Failure> {
 fn command(name: &str, parser: &mut lexopt::Parser) -> Result<Command, Failure> {
     Ok(match name {
         "ingest" => then(cmd::ingest::parse(parser)?, cmd::ingest::run),
-        // The whole history, once, without the shell waiting for it (ING-11).
+        // The whole history, once, without the shell waiting for it.
         // It prints an estimate first and does the work in a detached process,
         // which is why it is a command of its own rather than a flag on
         // `ingest`: the two return at different times and mean different things.
@@ -139,66 +139,66 @@ fn command(name: &str, parser: &mut lexopt::Parser) -> Result<Command, Failure> 
         "search" => then(cmd::search::parse(parser)?, cmd::search::run),
         "show" => then(cmd::show::parse(parser)?, cmd::show::run),
         "sessions" => then(cmd::sessions::parse(parser)?, cmd::sessions::run),
-        // D-24: the three commands phase 1 and 2 shipped take `--json` and
-        // nothing else. `cmd::json_flag` is what replaced `no_more_arguments`
-        // here - the rule that a subcommand rejects every argument it was not
-        // written for still holds, and `--json` is now one it was.
+        // These three commands take `--json` and nothing else. `cmd::json_flag`
+        // is what replaced `no_more_arguments` here - the rule that a subcommand
+        // rejects every argument it was not written for still holds, and
+        // `--json` is now one it was.
         "verify" => then(cmd::json_flag(parser)?, cmd::verify::run),
         "reindex" => then(cmd::json_flag(parser)?, cmd::reindex::run),
         "status" => then(cmd::json_flag(parser)?, cmd::status::run),
-        // RET-04. Reclaims what retention already freed and deletes nothing
-        // itself: `VACUUM` then `PRAGMA wal_checkpoint(TRUNCATE)` (D-08), under
-        // the ingest lock, because a plain `VACUUM` fails outright while a pass
-        // holds a write transaction.
+        // Reclaims what retention already freed and deletes nothing itself:
+        // `VACUUM` then `PRAGMA wal_checkpoint(TRUNCATE)`, under the ingest lock,
+        // because a plain `VACUUM` fails outright while a pass holds a write
+        // transaction.
         "compact" => then(cmd::json_flag(parser)?, cmd::compact::run),
-        // RET-05. Two tables that each reconcile to their own total (D-09):
+        // Two tables that each reconcile to their own total:
         // archived blob bytes by project and by month, and the database file's
         // pages by table. Never one number for both - the file is 2.4x the
         // archive, and the difference is the derived tables.
         "usage" => then(cmd::json_flag(parser)?, cmd::usage::run),
-        // PRIV-04. The transcripts as they arrived, one file per session, plus
+        // The transcripts as they arrived, one file per session, plus
         // a manifest that states in words that they are unredacted and what is
         // not in them. Redaction is keyed on destination and a directory the
-        // user named is not egress (PRIV-01), so the statement is the answer.
+        // user named is not egress, so the statement is the answer.
         "export" => then(cmd::export::parse(parser)?, cmd::export::run),
-        // FEED-04. A CLI data command and never an MCP tool (D-14): every
+        // A CLI data command and never an MCP tool: every
         // tool description sits in every session's context forever.
         "stats" => then(cmd::json_flag(parser)?, cmd::stats::run),
-        // OBS-01. The facts come off the parser, never off a model: this reads
+        // The facts come off the parser, never off a model: this reads
         // back a row the ingest pass wrote and opens no network connection on
         // any path.
         "observations" => then(cmd::observations::parse(parser)?, cmd::observations::run),
-        // FEED-03. Read-only by construction (D-15) and the one command whose
-        // flags move the injection thresholds - for this report and nothing
-        // else: the live path compiles them in (D-08).
+        // Read-only by construction and the one command whose flags move the
+        // injection thresholds - for this report and nothing else: the live
+        // path compiles them in.
         "replay" => then(cmd::replay::parse(parser)?, cmd::replay::run),
-        // RET-03. A report and never an action: retention acts inside the
-        // ingest pass and nowhere else (D-04, D-10), so this shares that one
+        // A report and never an action: retention acts inside the ingest pass
+        // and nowhere else, so this shares that one
         // evaluation function and applies nothing it names.
         "retention" => then(cmd::retention::parse(parser)?, cmd::retention::run),
-        // D-26: the MCP server is this binary, not a second artifact to place
+        // The MCP server is this binary, not a second artifact to place
         // and keep in version lockstep. It takes no arguments - a client spawns
         // it, nobody types it - and it writes JSON-RPC on stdout rather than
         // anything the `--json` contract above describes.
         "mcp" => then(cmd::mcp::parse(parser)?, cmd::mcp::run),
-        // Read-only by construction (INST-06, D-12): it opens the store
+        // Read-only by construction: it opens the store
         // through the read path, never `Store::open`, and creates no file and
         // no directory on any path it takes.
         "doctor" => then(cmd::json_flag(parser)?, cmd::doctor::run),
-        // Human-only and deliberately not a `--json` data command (D-24): it
+        // Human-only and deliberately not a `--json` data command: it
         // prints a receipt for a person to read.
         "install" => then(cmd::install::parse(parser)?, |()| cmd::install::run()),
-        // Human-only and not a `--json` data command (D-24): it asks under
+        // Human-only and not a `--json` data command: it asks under
         // `--purge`. The only command in this binary that deletes anything: it
         // removes what install added, leaves the archive alone and prints its
         // path, and destroys it only under `--purge`, after showing the size
-        // and asking (INST-07, D-13).
+        // and asking.
         "uninstall" => then(cmd::uninstall::parse(parser)?, cmd::uninstall::run),
-        // STOR-07. Human-only for the third time and the same reason: it prints
+        // Human-only for the third time and the same reason: it prints
         // what is about to move, warns about the one hazard nothing can detect
-        // for the user (D-16) and asks once. The two-word form follows
+        // for the user and asks once. The two-word form follows
         // `observations regenerate`, and the location it records is read by
-        // `store::data_dir` and by nothing in settings.json (D-14).
+        // `store::data_dir` and by nothing in settings.json.
         "data" => then(cmd::data::parse(parser)?, cmd::data::run),
         other => return Err(Failure::Misuse(format!("unknown command '{other}'"))),
     })

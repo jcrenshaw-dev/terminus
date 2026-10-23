@@ -1,15 +1,14 @@
-//! `terminus observations`: what happened in every session that has closed
-//! (OBS-01).
+//! `terminus observations`: what happened in every session that has closed.
 //!
 //! **A read command, in the shape of `stats`.** It opens through
 //! [`super::read::open`], so a machine that has never ingested gets an empty
 //! answer with a reason and exit 0 rather than a store created as the side
-//! effect of a question (D-15). Nothing here calls a model or opens a network
+//! effect of a question. Nothing here calls a model or opens a network
 //! connection: the row was written by the ingest pass off the parser, and this
 //! command reads it back.
 //!
 //! **Listed through `config::visible`, never straight off the table.**
-//! Exclusion is retroactive (ING-08) and the observations table is keyed on a
+//! Exclusion is retroactive and the observations table is keyed on a
 //! session, so a read path that selected from `observations` alone would list a
 //! session whose project was excluded after it was archived - which is exactly
 //! the half claude-mem gets wrong. The visible listing is the outer loop here
@@ -109,7 +108,7 @@ fn list(args: List) -> Result<(), Failure> {
 }
 
 /// `terminus observations regenerate`: recompute the mechanical half of the
-/// selected rows and nothing else (OBS-07).
+/// selected rows and nothing else.
 ///
 /// **A writer, so it opens for writing and takes the ingest lock.** Not
 /// `cmd::read::open`: this rewrites a column. The lock is the same one
@@ -118,7 +117,7 @@ fn list(args: List) -> Result<(), Failure> {
 /// hook-spawned pass would either lose the SQLite write lock to it and die on
 /// the busy timeout, or rewrite a row the pass is inserting.
 ///
-/// **The only rebuild path for this table (D-02).** `reindex` never touches
+/// **The only rebuild path for this table.** `reindex` never touches
 /// `observations` and the pass inserts without overwriting, so a stored fact set
 /// is replaced here or nowhere.
 fn regenerate(args: Regenerate) -> Result<(), Failure> {
@@ -151,7 +150,7 @@ fn regenerate(args: Regenerate) -> Result<(), Failure> {
 
         // `Store::open` and not the read path: this is the write-mode open,
         // which creates a table the store lacks through `bring_forward`'s
-        // missing-table arm (D-01).
+        // missing-table arm.
         let store = Store::open(&data_dir)?;
         observe::regenerate(
             store.conn(),
@@ -351,10 +350,10 @@ pub struct Regenerate {
     pub json: bool,
 }
 
-/// The second word this command routes itself (D-18).
+/// The second word this command routes itself.
 const VERB: &str = "regenerate";
 
-/// The workspace's first two-word subcommand (D-18).
+/// The workspace's first two-word subcommand.
 ///
 /// `main.rs`'s `dispatch` matches a flat set of single-word names, so
 /// `observations` has to consume its own second word: a bare `observations` is

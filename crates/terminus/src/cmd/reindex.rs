@@ -1,4 +1,4 @@
-//! `terminus reindex`: rebuild every derived table from the archive (STOR-04).
+//! `terminus reindex`: rebuild every derived table from the archive.
 
 use serde_json::json;
 use terminus_core::ingest::{lock, Attempt};
@@ -12,22 +12,23 @@ pub fn run(json: bool) -> Result<(), Failure> {
 
     // The lock, and it belongs here rather than inside `reindex::reindex`.
     // This command drops and recreates all four derived tables, which is the
-    // most destructive thing phase 1 can do, and it was running unguarded: the
-    // invariant `ingest` rests on - that the LOCK guard makes it the only
-    // writer, so nothing changes the store between its read and its write - was
-    // simply false whenever a reindex ran beside it. Without the lock the two
+    // most destructive thing a store write does, and unguarded it would break
+    // the invariant `ingest` rests on - that the LOCK guard makes it the only
+    // writer, so nothing changes the store between its read and its write -
+    // whenever a reindex ran beside it. Without the lock the two
     // race in both directions: a reindex could drop the tables under a
     // hook-spawned ingest, or lose the SQLite write lock to one and die on the
-    // busy timeout with a raw "database is locked", which is the wait D-15
-    // exists to avoid.
+    // busy timeout with a raw "database is locked", which is the failure the
+    // lock exists to prevent.
     //
     // Here and not in the library because `ingest::run` already holds this lock
     // when it calls `open_up_to_date`; acquiring again underneath it would
     // report contention against itself.
     let _guard = match lock::try_acquire(&data_dir)? {
         Attempt::Held => {
-            // Non-zero, unlike a contended `ingest`. AC6's exit-0 is for the
-            // hook path, where a skipped pass is caught by the next one. A
+            // Non-zero, unlike a contended `ingest`, which exits 0 because it
+            // runs on the hook path, where a skipped pass is caught by the next
+            // one. A
             // reindex is asked for explicitly, so silently not doing it would
             // be the wrong answer.
             let held = format!(

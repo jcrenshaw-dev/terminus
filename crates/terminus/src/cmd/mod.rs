@@ -9,7 +9,7 @@
 //! scoping, the same exclusion - because two definitions of what a read may see
 //! is exactly the drift this module exists to prevent.
 //!
-//! # The contract every data command keeps (RCL-06)
+//! # The contract every data command keeps
 //!
 //! **Exit codes.** 0 on success **including an empty result set** - a query that
 //! matched nothing is a successful answer to a question with no matches - 1 on
@@ -23,7 +23,7 @@
 //!
 //! **`--json`.** Every data command accepts it and writes exactly one document
 //! on stdout and nothing else: `{command, ok, reason, data}`, built and
-//! serialized by `serde_json` and never assembled with `format!` (D-25). `ok` is
+//! serialized by `serde_json` and never assembled with `format!`. `ok` is
 //! the exit code's answer, and a caller that parses the document and a caller
 //! that checks the code never disagree - `verify --json` on a damaged store
 //! writes its failures AND exits 1.
@@ -96,10 +96,9 @@ pub fn data_dir() -> Result<PathBuf, Failure> {
 /// Three files and not one. SQLite in WAL mode holds recently written pages in
 /// `-wal` until something checkpoints them, so the database file alone can be
 /// half the truth - and a bare `VACUUM` on a WAL store moves the pages it frees
-/// INTO the WAL, which makes `terminus.db` shrink while the store on disk grows
-/// (D-08). `cmd::status` reports this same sum as `size_bytes`, so this is the
-/// number the product itself calls the store's size and the one `compact` has to
-/// move.
+/// INTO the WAL, which makes `terminus.db` shrink while the store on disk grows.
+/// `cmd::status` reports this same sum as `size_bytes`, so this is the number
+/// the product itself calls the store's size and the one `compact` has to move.
 ///
 /// A file that is not there counts zero rather than failing: `-wal` and `-shm`
 /// exist only for the life of a connection, so their absence is the ordinary
@@ -184,7 +183,7 @@ pub fn value(parser: &mut lexopt::Parser, flag: &str) -> Result<String, Failure>
 /// One end of a time window, as a string that compares against a stored
 /// timestamp directly.
 ///
-/// D-23: all 22,412 turns of a 180-file sample carry exactly
+/// All 22,412 turns of a 180-file sample carry exactly
 /// `NNNN-NN-NNTNN:NN:NN.NNNZ` - one format, UTC only - so the comparison is
 /// lexicographic and there is no date parsing on the stored side. A bare
 /// `YYYY-MM-DD` extends to the first instant of that day for `since` and the
