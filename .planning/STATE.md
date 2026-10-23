@@ -1,6 +1,6 @@
 # State
 
-Phase: 2 of 8 (Planning tags)
-Status: phase complete
-Next: /cad-context 3
+Phase: 3 of 8 (Hook tests on macOS Intel)
+Status: context gathered
+Next: /cad-plan 3
 Updated: 2026-10-23
