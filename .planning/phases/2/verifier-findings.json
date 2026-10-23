@@ -1,0 +1,116 @@
+{
+  "status": "gaps",
+  "score": "8/9",
+  "truths": [
+    {
+      "n": 1,
+      "truth": "#106's exact pattern over crates/ tests/ fuzz/ Cargo.toml docs/ matches only the four session_title lines (ROADMAP criterion 1, AC1)",
+      "status": "VERIFIED",
+      "uat_item": 2,
+      "evidence": "git grep -nE with #106's exact pattern -- crates tests fuzz Cargo.toml docs, run at HEAD (e2ea721 touches only .planning, so these roots are 281ee53's), prints exactly 4 lines: crates/terminus/tests/owner_only.rs:444 and crates/terminus/tests/prompt.rs:151 (both \"session_title\" string values), tests/fixtures/hooks/session-start.json:1 and tests/fixtures/hooks/user-prompt-submit.json:1 (\"session_title\":\"phase 4: hooks and install\"). A grep -rnE over the working tree, untracked files included and target/ left out, prints the same 4. Over the whole repo excluding .planning, also 4. None is a comment; all are hook payload data that nothing reads (D-07)."
+    },
+    {
+      "n": 2,
+      "truth": "The planning references #106 misses are gone: capital Phase N, PLAN-N, ROADMAP criterion, hardin (AC2)",
+      "status": "VERIFIED",
+      "uat_item": 3,
+      "evidence": "Over crates tests fuzz Cargo.toml docs: the AC2 git grep for capital Phase N, PLAN-N and 'ROADMAP criterion' prints nothing, and git grep -ni hardin prints nothing (also nothing repo-wide outside .planning). Wider sweeps also come back clean. A case-insensitive phase-plus-number grep, with an optional hyphen, finds only git branch names in test data (phase-2-egress, phase-3, phase-5, phase-7 in goldens/recall-projections.txt, observe.rs, observations.rs, inject_brief.rs, docs/json-shapes.md:365) plus the 4 titles. 'phases N' prints nothing. One-to-six capitals, a hyphen and 1-3 digits, minus UTF-, SHA- and ISO-, prints nothing. Loose D-NN and ACN print nothing."
+    },
+    {
+      "n": 3,
+      "truth": "No comment cites a numbered item from the removed planning files that the phase's greps did not name (plan task numbers)",
+      "status": "FAILED",
+      "uat_item": null,
+      "evidence": "git grep -nE 'Tasks? [0-9]' -- crates tests fuzz Cargo.toml docs prints 5 comment lines: crates/terminus/tests/install.rs:410 '// Task 1: the binary at the stable path', :799 '// Task 3: the four hook entries', :953 '// Task 4: the MCP registration', :1291 '// Task 6: the advisories, and the settings install never changes', and crates/terminus/tests/uninstall.rs:747 '// Task 5's work still ran: the purge refusal is about the archive alone.' Nothing in crates/terminus/src uses the word task (git grep -ni task -- crates/terminus/src is empty), so these number the tasks of a removed plan and point a reader at nothing. All 5 are at 1c55fec and the phase left them alone, though it reworded the banner between them (install.rs:1122, formerly 'Install asks nothing (phase 3 D-08, D-12)'). PLAN-1..7 and CONTEXT never name this family. Probe: appending \"// Task 5's work still ran\" to crates/terminus-core/src/config.rs left the guard passing (exit 0)."
+    },
+    {
+      "n": 4,
+      "truth": "The full test suite passes and runs the guard by name (AC3; criterion 2's 'passes on the tree')",
+      "status": "VERIFIED",
+      "uat_item": 4,
+      "evidence": "This verification's one full-suite run, cargo test --workspace --all-features --no-fail-fast (log at scratchpad full-suite.log), exited 0 with 68 'test result: ok' lines: 1013 passed, 0 failed, 0 ignored. The log shows 'Running tests/planning_tags.rs (.../debug/deps/planning_tags-0b31612ad64c377a)' and then 11 tests ok, including no_comment_or_doc_line_cites_a_planning_tag. This run the load-sensitive hook.rs p99 tests passed too."
+    },
+    {
+      "n": 5,
+      "truth": "The guard fails on each added tag with a file:line message, and allows 'phase 2' in markdown and UTF-16 in a Rust comment (AC4; criterion 2's 'fails when a source comment cites a planning tag')",
+      "status": "VERIFIED",
+      "uat_item": 5,
+      "evidence": "The built guard binary was run after each of these edits, one at a time. Each edit was restored byte- and mtime-exact before the next (cmp plus stat), and git status was identical before and after. P1: '// see SRCH-02' appended to crates/terminus-core/src/lib.rs gives exit 101, 'crates/terminus-core/src/lib.rs:53: SRCH-02'. P2: '// (D-04)' appended to crates/terminus/tests/cli.rs gives 'crates/terminus/tests/cli.rs:1548: D-04'. P3: '-- INJ-07' as a new line 62 inside CREATE_SQL gives 'crates/terminus-core/src/store/schema.rs:62: INJ-07'. P4: '# AC3' appended to fuzz/Cargo.toml gives 'fuzz/Cargo.toml:117: AC3'. P5: ING-08 on docs/json-shapes.md:3 gives 'docs/json-shapes.md:3: ING-08'. N1: 'phase 2' on docs/json-shapes.md:3 gives exit 0. N2: '// UTF-16 here' in lib.rs gives exit 0. Extra: '// lands in Phase 3' fails ('config.rs:1321: Phase 3'), and a trailing 'fn _probe() {} // RET-05' fails. The 10 matcher and extractor self-tests pass (planning_tags.rs:358-518). Known limits, all from D-14 and D-15 and none holding a tag today: block comments (the tree has none), a TOML comment after a value (none in the 4 manifests), a '--' after SQL text on a CREATE_SQL line (none), string literals such as assert! messages, markdown outside docs/ and tests/fixtures/README.md, and the Task N family (truth 3)."
+    },
+    {
+      "n": 6,
+      "truth": "Outside the guard file, the phase's diff changes only comment lines, assert!/panic! message text and markdown prose (ROADMAP criterion 3 as D-06 reads it, AC5)",
+      "status": "VERIFIED",
+      "uat_item": 6,
+      "evidence": "Line check: git diff -U0 1c55fec 281ee53 over *.rs, excluding planning_tags.rs, has 46 changed lines that do not start with // or --. They are 23 -/+ pairs, each the message string of an assert!, assert_eq! or panic! at a site D-06 names: capture.rs, config.rs x3, derive.rs, discover.rs, fixtures.rs x2, ingest.rs x4, parse.rs, reindex.rs, store_open.rs, cli.rs x2, corpus.rs x2, crash.rs x3, mcp.rs. Token check: a comment-stripping lexer (scratchpad strip.py) drops //, block comments and the -- lines inside schema.rs strings, then compares the token stream of all 143 changed .rs files at 1c55fec and 281ee53. It finds exactly 23 differing tokens, each one of those message string literals, and no code token changed. All 121 changed -- lines are in schema.rs, at HEAD lines 66-376, inside CREATE_SQL (61-381). No CREATE_SQL line ends in a backslash, so no comment can swallow SQL. The TOML diff (Cargo.toml, crates/terminus/Cargo.toml) changes only # lines. Outside .planning, the only other files changed are docs/json-shapes.md and tests/fixtures/README.md: no test reads either, and the README's fixture filenames are identical before and after. e2ea721 touches only .planning. Side effect: the two message-only edits at crates/terminus-core/tests/reindex.rs:117 and crates/terminus/tests/cli.rs:472 leave rustfmt drift in two files that were clean, and cargo fmt --all -- --check now names 7 files. CI does not gate on rustfmt, and SUMMARY records the trade-off."
+    },
+    {
+      "n": 7,
+      "truth": "The guard fails rather than passes when it reads nothing: CREATE_SQL's declaration not found, or a root below its file floor",
+      "status": "VERIFIED",
+      "uat_item": 7,
+      "evidence": "Same restore-exact probe method as truth 5. F1: renaming 'pub const CREATE_SQL' to 'pub const SCHEMA_SQL' in schema.rs gives exit 101 at planning_tags.rs:329: 'only 0 SQL comment lines read from crates/terminus-core/src/store/schema.rs; is `pub const CREATE_SQL` still declared there?'. F2: moving the opening quote to the next line gives the same message. F3: moving fuzz/src/lib.rs aside gives exit 101 at planning_tags.rs:318: 'only 0 .rs files under fuzz/src'. The floors (planning_tags.rs:248-256, 271) sit below the current counts (53/36/35/27/13/1 .rs files, 15 docs .md, 157 CREATE_SQL comment lines). The declaration is matched with line.contains, so a rename that keeps the prefix (such as CREATE_SQL_V2) still counts as found, which is correct because its comments are still read."
+    },
+    {
+      "n": 8,
+      "truth": "A fresh store built from the reworded CREATE_SQL opens clean, stores the new comment text with no tag, and answers a recall query with real data",
+      "status": "VERIFIED",
+      "uat_item": 1,
+      "evidence": "The store was built from scratch in scratchpad/smoke, with TERMINUS_DATA_DIR, TERMINUS_CONFIG_DIR, CLAUDE_CONFIG_DIR and HOME all pointed there. target/debug/terminus ingest of tests/fixtures/session-recall.jsonl ({{ROOT}} filled in) exited 0. terminus verify printed '1 session(s) checked, 0 failed'. terminus search SearchManager, run from project-alpha, printed '1 hit(s)' with the archived turn 'where did SearchManager get its retry budget'. A read-only sqlite3 dump of sqlite_master.sql gave 204 lines, 69 of them -- comments. #106's pattern, capital Phase N, PLAN-N and the generic capitals-hyphen-two-digits shape match nothing in it, and 0 of its comment lines are old-only text from 1c55fec's CREATE_SQL."
+    },
+    {
+      "n": 9,
+      "truth": "The guard is wired: auto-discovered, not feature-gated, and run by CI's test command with no skip",
+      "status": "VERIFIED",
+      "uat_item": null,
+      "evidence": "crates/terminus-core/Cargo.toml declares 23 [[test]] entries, all with required-features testkit, none named planning_tags, and no autotests = false. cargo test -p terminus-core --test planning_tags -- --list, with no features, lists all 11 tests. .github/workflows/test.yml:194 runs cargo test --workspace --all-features --locked ... -- \"${skips[@]}\", and its skip list (test.yml:182-192) names only hook and backfill timing tests. The guard reaches the repo root via CARGO_MANIFEST_DIR/../.. (planning_tags.rs:313)."
+    }
+  ],
+  "passes": [
+    {
+      "k": 1,
+      "name": "Fresh store from the reworded schema",
+      "evidence": "Fresh scratch store (all four dir env vars in scratchpad): ingest of session-recall.jsonl exits 0, verify reports 1 checked and 0 failed, and search SearchManager returns 1 hit with the archived turn. The read-only sqlite_master.sql dump has 69 comment lines, no tag in any family, and no old-only 1c55fec comment text."
+    },
+    {
+      "k": 2,
+      "name": "#106's pattern finds only the four session_title lines",
+      "evidence": "git grep -nE with #106's exact pattern -- crates tests fuzz Cargo.toml docs prints exactly owner_only.rs:444, prompt.rs:151, hooks/session-start.json:1 and hooks/user-prompt-submit.json:1, all session_title values. A worktree grep -r, untracked files included, prints the same 4."
+    },
+    {
+      "k": 3,
+      "name": "The tags #106 misses are gone",
+      "evidence": "The capital Phase N / PLAN-N / ROADMAP criterion grep and git grep -ni hardin print nothing over the five roots. Wider sweeps (generic capitals-hyphen-digits, phases N, loose D/AC) print nothing either."
+    },
+    {
+      "k": 4,
+      "name": "Full test suite passes and runs the guard",
+      "evidence": "cargo test --workspace --all-features --no-fail-fast exited 0: 1013 passed, 0 failed, 0 ignored. The log shows 'Running tests/planning_tags.rs' and 11 tests ok, including no_comment_or_doc_line_cites_a_planning_tag."
+    },
+    {
+      "k": 5,
+      "name": "Guard fails on each added tag and allows real names",
+      "evidence": "One probe at a time, each restored exactly. SRCH-02 in core lib.rs gives lib.rs:53, D-04 in terminus tests/cli.rs gives cli.rs:1548, '-- INJ-07' in CREATE_SQL gives schema.rs:62, '# AC3' in fuzz/Cargo.toml gives :117, and ING-08 in docs/json-shapes.md gives :3. Each exits 101 naming file:line:tag. 'phase 2' in json-shapes.md and '// UTF-16' in a Rust comment both exit 0."
+    },
+    {
+      "k": 6,
+      "name": "Only comments, assertion messages and doc prose changed",
+      "evidence": "46 non-comment .rs lines form 23 message-only pairs at the D-06 sites. A comment-stripped token comparison of all 143 changed .rs files finds exactly 23 differing tokens, all assert/panic message strings. All 121 changed -- lines sit inside CREATE_SQL. The TOML diff is # lines only. The only other changed files are docs/json-shapes.md and tests/fixtures/README.md."
+    },
+    {
+      "k": 7,
+      "name": "Guard fails when it reads nothing",
+      "evidence": "Renaming the declaration to SCHEMA_SQL, or moving its opening quote to the next line, fails with 'only 0 SQL comment lines read from crates/terminus-core/src/store/schema.rs'. Moving fuzz/src/lib.rs aside fails with 'only 0 .rs files under fuzz/src'."
+    }
+  ],
+  "gaps": [
+    {
+      "name": "Plan task numbers from the removed planning files remain in test comments",
+      "reason": "behavior wrong - the cleanup missed a family of planning references: plan task numbers. They sit outside #106's pattern and the AC2 greps, but inside the goal ('no comment cites a tag from the removed planning files'), and the guard has no family for them, so more can still be added",
+      "evidence": "crates/terminus/tests/install.rs:410 '// Task 1: the binary at the stable path', :799 '// Task 3: the four hook entries', :953 '// Task 4: the MCP registration', :1291 '// Task 6: the advisories, and the settings install never changes'; crates/terminus/tests/uninstall.rs:747 '// Task 5's work still ran: the purge refusal is about the archive alone.' Nothing in crates/terminus/src uses the word task, so these number a removed plan's tasks. All 5 predate the phase (1c55fec) and the phase left them unchanged. A probe adding \"// Task 5's work still ran\" to crates/terminus-core/src/config.rs left planning_tags passing. Related untagged pointers to removed plans, also unchanged: crates/terminus-core/tests/backfill.rs:32 'The worker count the plan's `Verify` names', crates/terminus-core/tests/egress.rs:18 'the two shapes the plan names', crates/terminus/src/cmd/mcp/tools.rs:92 'the one the acceptance criterion names'.",
+      "severity": "minor",
+      "missing": "Reword the five lines: each install.rs banner keeps only its topic name (e.g. '// The binary at the stable path'), and uninstall.rs:747 says what still ran, i.e. that uninstall still removed the binary at the stable path while refusing the purge. Optionally make the three 'the plan names' / 'the acceptance criterion names' comments state their rule directly. Decide whether the guard should also refuse 'Task N' in code comments; the tree would hold no legitimate use once these five are cut."
+    }
+  ],
+  "human_checks": []
+}
