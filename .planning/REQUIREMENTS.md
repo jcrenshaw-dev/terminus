@@ -39,7 +39,7 @@ Committed scope for mule. Each maps to exactly one roadmap phase and names the i
 
 ### Owner-only files and signing
 
-- **OWN-01**: Every file and directory Terminus creates, `data move`'s pointer and config directory included, is owner-only from the moment it exists, through one set of `owner_only` helpers (#73)
+- **OWN-01**: Every file and directory Terminus creates, `data move`'s pointer and config directory included, is owner-only from the moment it exists, through one set of `owner_only` helpers; the installed binary and the folders that hold it keep the modes `install.sh` gives them (#73)
 - **OWN-02**: Signing a release runs no code read out of `install.sh`, and CI fails when the signer's copies of the shared checks differ from `install.sh` (#99)
 
 ### Output
