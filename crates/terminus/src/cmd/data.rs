@@ -176,7 +176,7 @@ pub fn run(options: Options) -> Result<(), Failure> {
     // no directory at the top, so this is the only place an absent
     // destination is created.
     if found == Found::Nothing {
-        create_destination(&destination).map_err(|e| {
+        terminus_core::owner_only::create_dir_new(&destination).map_err(|e| {
             if e.kind() == std::io::ErrorKind::AlreadyExists {
                 changed("it was not there and now is".to_owned())
             } else {
@@ -271,7 +271,8 @@ fn refuse_impossible_destinations(
 /// What the destination rule found, for the second check to compare against.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Found {
-    /// Nothing at the path; [`create_destination`] will create it 0700.
+    /// Nothing at the path; [`run`] will create it 0700 with one exclusive
+    /// `mkdir`.
     Nothing,
     /// An empty owner-only directory, named by what a rename cannot carry.
     Directory { device: u64, inode: u64 },
@@ -285,7 +286,7 @@ enum Found {
 /// and is empty. Anything else refuses, including an error other than
 /// `NotFound` from the first look and a directory that cannot be listed, which
 /// is never read as empty. A missing path is accepted and
-/// [`create_destination`] creates it 0700.
+/// [`run`] creates it 0700.
 ///
 /// Only the last part is checked for a symlink, so a symlinked parent such as
 /// macOS's `/var/folders` is fine, and the parent's owner and mode are not
@@ -376,27 +377,23 @@ fn own_uid(pointer: &Path) -> Result<u32, Failure> {
 
     std::fs::create_dir_all(dir).map_err(|e| failed(dir, e))?;
     let pid = std::process::id();
-    for n in 0..100 {
-        let probe = dir.join(format!(".uid-probe-{pid}-{n}"));
-        match terminus_core::owner_only::options()
-            .write(true)
-            .create_new(true)
-            .open(&probe)
-        {
-            Ok(file) => {
-                let owner = file.metadata().map(|m| m.uid());
-                let _ = std::fs::remove_file(&probe);
-                return owner.map_err(|e| failed(&probe, e));
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(failed(&probe, e)),
+    match terminus_core::owner_only::create_temporary(dir, 100, |n| {
+        format!(".uid-probe-{pid}-{n}")
+    }) {
+        Ok((probe, file)) => {
+            let owner = file.metadata().map(|m| m.uid());
+            let _ = std::fs::remove_file(&probe);
+            owner.map_err(|e| failed(&probe, e))
         }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(Failure::Operational(format!(
+                "every probe name under {} for pid {pid} is taken, so this account's uid could \
+                 not be learned; nothing was moved",
+                dir.display()
+            )))
+        }
+        Err(e) => Err(failed(dir, e)),
     }
-    Err(Failure::Operational(format!(
-        "every probe name under {} for pid {pid} is taken, so this account's uid could not be \
-         learned; nothing was moved",
-        dir.display()
-    )))
 }
 
 /// The question, with `--yes` meaning "do it" rather than "take the default".
@@ -478,35 +475,16 @@ fn absolute(path: &Path) -> Result<PathBuf, Failure> {
     Ok(joined.components().collect())
 }
 
-/// The destination, created 0700 by this process or not at all.
-///
-/// The parents are made at the process default, the way
-/// `owner_only::create_dir_all` makes them, but the leaf is one exclusive
-/// `mkdir`: anything already at the path, a directory or a symlink, fails it
-/// with `AlreadyExists` instead of being taken as the destination.
-fn create_destination(destination: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::DirBuilderExt;
-
-    if let Some(parent) = destination.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::DirBuilder::new()
-        .mode(terminus_core::owner_only::DIR_MODE)
-        .create(destination)
-}
-
 /// Everything under `from`, copied into `to`, directories included.
 ///
 /// `to` is already there: [`run`] found it as an empty owner-only directory or
-/// made it with [`create_destination`], and nothing here makes a directory at
+/// made it with one exclusive `mkdir`, and nothing here makes a directory at
 /// the top that could stand in for either. Each directory below it is one
-/// exclusive `mkdir`, for the reason [`copy_file`] uses `create_new`.
+/// exclusive `mkdir` too: a taken name is something else writing mid-move.
 ///
 /// The `LOCK` file is skipped at the top level: this process is holding it, and
 /// [`run`] creates an empty one at the destination instead.
 fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
-    use std::os::unix::fs::DirBuilderExt;
-
     let failed =
         |path: &Path, e: std::io::Error| format!("{} could not be copied: {e}", path.display());
 
@@ -528,9 +506,7 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
         let destination = to.join(&name);
         let kind = entry.file_type().map_err(|e| failed(&source, e))?;
         if kind.is_dir() {
-            std::fs::DirBuilder::new()
-                .mode(terminus_core::owner_only::DIR_MODE)
-                .create(&destination)
+            terminus_core::owner_only::create_dir_new(&destination)
                 .map_err(|e| failed(&source, e))?;
             copy_tree(&source, &destination)?;
         } else {
@@ -542,17 +518,14 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
 
 /// One file copied into a destination this process creates at 0600.
 ///
-/// `create_new`, because [`refuse_unchecked_destination`] has established
-/// that the destination was absent, or an empty owner-only directory this
-/// account owns: a name already taken here means something else is writing
-/// into the directory mid-move, and truncating it would destroy a file this
-/// command never wrote.
+/// Exclusive, because [`refuse_unchecked_destination`] has established that the
+/// destination was absent, or an empty owner-only directory this account owns:
+/// a name already taken here means something else is writing into the
+/// directory mid-move, and truncating it would destroy a file this command
+/// never wrote.
 fn copy_file(source: &Path, destination: &Path) -> std::io::Result<()> {
     let mut reader = std::fs::File::open(source)?;
-    let mut writer = terminus_core::owner_only::options()
-        .write(true)
-        .create_new(true)
-        .open(destination)?;
+    let mut writer = terminus_core::owner_only::create_new(destination)?;
     std::io::copy(&mut reader, &mut writer)?;
     Ok(())
 }
@@ -667,32 +640,6 @@ mod tests {
         let file = dir.path().join("file");
         std::fs::write(&file, "").unwrap();
         assert!(refusal(&file.join("store"), owner).contains("could not be checked"));
-    }
-
-    #[test]
-    fn a_destination_is_created_owner_only_with_its_parents() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("parent").join("store");
-        create_destination(&path).unwrap();
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o700, "the destination was created at {mode:o}");
-    }
-
-    #[test]
-    fn a_directory_already_at_the_destination_is_not_taken() {
-        let (_dir, path, _owner) = owner_only_dir();
-        let e = create_destination(&path).unwrap_err();
-        assert_eq!(e.kind(), std::io::ErrorKind::AlreadyExists);
-    }
-
-    #[test]
-    fn a_symlink_already_at_the_destination_is_not_taken() {
-        let (dir, target, _owner) = owner_only_dir();
-        let link = dir.path().join("link");
-        std::os::unix::fs::symlink(&target, &link).unwrap();
-        let e = create_destination(&link).unwrap_err();
-        assert_eq!(e.kind(), std::io::ErrorKind::AlreadyExists);
     }
 
     #[test]
