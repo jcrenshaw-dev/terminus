@@ -14,7 +14,7 @@
 //! path is measured in fractions of a millisecond and does not pay for a crate
 //! to set two integers.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Owner-only for a directory: `rwx` for the owner, nothing for anyone else.
 pub const DIR_MODE: u32 = 0o700;
@@ -72,6 +72,88 @@ pub fn options() -> std::fs::OpenOptions {
         options.mode(FILE_MODE);
     }
     options
+}
+
+/// A new file at `path`, created exclusively and [`FILE_MODE`] from the open.
+///
+/// The mode rides the creating syscall, for the reason the module header gives.
+/// `create_new` is `O_EXCL`, so anything already at the path, a symlink
+/// included, fails with [`std::io::ErrorKind::AlreadyExists`] and is never
+/// followed and truncated. A taken name is for the caller to answer with
+/// another name, never to reuse.
+pub fn create_new(path: &Path) -> std::io::Result<std::fs::File> {
+    options().write(true).create_new(true).open(path)
+}
+
+/// [`create_new`] at the first free name in `dir`, and the path it landed at.
+///
+/// `name` gives the file name for each attempt number, counting from 0, and the
+/// caller sets the limit, so each site keeps the names it has always made. A
+/// taken name moves on to the next one: whatever is at it is not ours, so it is
+/// never opened, and a stale symlink there is stepped over rather than followed
+/// (`O_EXCL`, as [`create_new`]). Any other error returns at once. When every
+/// name was taken the error is [`std::io::ErrorKind::AlreadyExists`], so a
+/// caller can tell exhaustion from every other failure.
+pub fn create_temporary(
+    dir: &Path,
+    attempts: u32,
+    name: impl Fn(u32) -> String,
+) -> std::io::Result<(PathBuf, std::fs::File)> {
+    first_free(dir, attempts, name, create_new)
+}
+
+/// [`create_temporary`] for a symlink to `target`.
+///
+/// `symlink` also fails on a name that is taken, so each attempt is as
+/// exclusive as a [`create_new`], and the same rule steps over what is there.
+pub fn create_temporary_symlink(
+    dir: &Path,
+    attempts: u32,
+    name: impl Fn(u32) -> String,
+    target: &Path,
+) -> std::io::Result<PathBuf> {
+    first_free(dir, attempts, name, |path| {
+        std::os::unix::fs::symlink(target, path)
+    })
+    .map(|(path, ())| path)
+}
+
+fn first_free<T>(
+    dir: &Path,
+    attempts: u32,
+    name: impl Fn(u32) -> String,
+    create: impl Fn(&Path) -> std::io::Result<T>,
+) -> std::io::Result<(PathBuf, T)> {
+    for attempt in 0..attempts {
+        let path = dir.join(name(attempt));
+        match create(&path) {
+            Ok(made) => return Ok((path, made)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        format!("all {attempts} names in {} are taken", dir.display()),
+    ))
+}
+
+/// A new directory at `path`, [`DIR_MODE`] from the `mkdir`.
+///
+/// The parents are made at the process default, as [`create_dir_all`] makes
+/// them. The leaf is one exclusive `mkdir`: anything already at it, a directory
+/// or a symlink to one, is [`std::io::ErrorKind::AlreadyExists`] and is never
+/// taken as the new directory.
+pub fn create_dir_new(path: &Path) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut builder = std::fs::DirBuilder::new();
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(DIR_MODE);
+    }
+    builder.create(path)
 }
 
 #[cfg(test)]
@@ -163,5 +245,120 @@ mod tests {
             .unwrap();
 
         assert_eq!(mode(&path), 0o600);
+    }
+
+    /// The single create lands 0600, and refuses what is already there without
+    /// following it.
+    #[test]
+    fn a_single_create_is_owner_only_and_refuses_anything_taken() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("new");
+
+        create_new(&path).unwrap();
+        assert_eq!(mode(&path), 0o600);
+        assert_eq!(
+            create_new(&path).unwrap_err().kind(),
+            std::io::ErrorKind::AlreadyExists
+        );
+
+        let victim = root.path().join("victim");
+        std::fs::write(&victim, b"keep me").unwrap();
+        let link = root.path().join("link");
+        std::os::unix::fs::symlink(&victim, &link).unwrap();
+        assert_eq!(
+            create_new(&link).unwrap_err().kind(),
+            std::io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep me");
+    }
+
+    fn numbered(n: u32) -> String {
+        format!("temp-{n}")
+    }
+
+    /// A file and then a stale link at the first two names: the third is the
+    /// one made, and the link's target is untouched.
+    #[test]
+    fn the_retry_steps_over_a_file_and_a_stale_symlink() {
+        let root = tempfile::tempdir().unwrap();
+        let victim = root.path().join("victim");
+        std::fs::write(&victim, b"keep me").unwrap();
+        std::fs::write(root.path().join("temp-0"), b"taken").unwrap();
+        std::os::unix::fs::symlink(&victim, root.path().join("temp-1")).unwrap();
+
+        let (path, _file) = create_temporary(root.path(), 64, numbered).unwrap();
+
+        assert_eq!(path, root.path().join("temp-2"));
+        assert_eq!(mode(&path), 0o600);
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep me");
+    }
+
+    #[test]
+    fn the_retry_reports_exhaustion_as_already_exists() {
+        let root = tempfile::tempdir().unwrap();
+        for n in 0..3 {
+            std::fs::write(root.path().join(numbered(n)), b"taken").unwrap();
+        }
+
+        let error = create_temporary(root.path(), 3, numbered).unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+    }
+
+    #[test]
+    fn the_retry_in_a_missing_directory_is_not_found_at_once() {
+        let root = tempfile::tempdir().unwrap();
+        let attempts = std::cell::Cell::new(0);
+
+        let error = create_temporary(&root.path().join("absent"), 64, |n| {
+            attempts.set(attempts.get() + 1);
+            numbered(n)
+        })
+        .unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        assert_eq!(attempts.get(), 1);
+    }
+
+    #[test]
+    fn the_symlink_form_links_at_the_first_free_name() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("target");
+        std::fs::write(root.path().join("temp-0"), b"taken").unwrap();
+
+        let path = create_temporary_symlink(root.path(), 64, numbered, &target).unwrap();
+
+        assert_eq!(path, root.path().join("temp-1"));
+        assert_eq!(std::fs::read_link(&path).unwrap(), target);
+        assert_eq!(std::fs::read(root.path().join("temp-0")).unwrap(), b"taken");
+    }
+
+    #[test]
+    fn a_new_directory_is_owner_only_under_parents_at_the_default() {
+        let root = tempfile::tempdir().unwrap();
+        let leaf = root.path().join("a/leaf");
+
+        create_dir_new(&leaf).unwrap();
+
+        assert_eq!(mode(&leaf), 0o700);
+        assert_eq!(mode(&root.path().join("a")), 0o755);
+    }
+
+    #[test]
+    fn a_new_directory_refuses_a_directory_and_a_link_to_one() {
+        let root = tempfile::tempdir().unwrap();
+        let existing = root.path().join("existing");
+        std::fs::create_dir(&existing).unwrap();
+        let link = root.path().join("link");
+        std::os::unix::fs::symlink(&existing, &link).unwrap();
+
+        for path in [&existing, &link] {
+            assert_eq!(
+                create_dir_new(path).unwrap_err().kind(),
+                std::io::ErrorKind::AlreadyExists,
+                "{}",
+                path.display()
+            );
+        }
     }
 }
