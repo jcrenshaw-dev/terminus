@@ -38,75 +38,66 @@ const CLAUDE_DEFAULT_CLEANUP_DAYS: i64 = 30;
 /// prints the same line.
 const KEEP_CLEANUP_DAYS: i64 = 3650;
 
-/// A new file in `dir`, created exclusively, and the path it landed at.
+/// A new owner-only file in `dir`, and the path it landed at.
 ///
 /// Every atomic write install makes - the settings files, the backups, the
-/// stored version - goes through a temporary file in the destination directory
-/// and a rename. This is the one place those temporary files are created, and
-/// `create_new` is the reason: it is `O_EXCL`, so it fails on anything already
-/// at that name rather than opening it.
+/// stored version - goes through a temporary in the destination directory and a
+/// rename, and this is the one place those temporaries are made. The create is
+/// `owner_only::create_temporary`, which says why it is exclusive and why it is
+/// 0600 from the open. What install adds is the names, `{prefix}{pid}` and then
+/// `{prefix}{pid}-{n}`, kept because the stale-name test plants exactly
+/// `.terminus-install-<pid>` and `.settings.json.terminus-<pid>`, and 64
+/// attempts, enough to step over a stale name or two. Past that, something is
+/// wrong with the directory rather than with the name.
 ///
-/// `File::create` would not. It follows symlinks and truncates what it finds, so
-/// a stale `.settings.json.terminus-<pid>` symlink left behind by a crashed run,
-/// or a pid that has come round again, is enough to truncate an unrelated file
-/// through it, and the rename that follows moves the *link* into place rather
-/// than the file. Neither is atomic and neither is recoverable.
-///
-/// A collision is answered with a different name, never with a reuse: whatever
-/// is at the first one, it is not ours.
-///
-/// The file is 0600 from the open, through `owner_only`. What goes into it is
-/// the whole of `settings.json`, which can hold an `env` block of credentials,
-/// and a mode set after the write would leave those bytes on disk at the
-/// umask's mode until then. A caller that needs another final mode sets it
-/// before the rename, the way `binary::copy_into` sets 0755.
+/// A caller that needs another final mode sets it before the rename, as
+/// `binary::copy_into` sets 0755.
 pub(super) fn create_temporary(
     dir: &Path,
     prefix: &str,
 ) -> Result<(std::path::PathBuf, std::fs::File), Failure> {
-    temporary(dir, prefix, |path| {
-        terminus_core::owner_only::options()
-            .write(true)
-            .create_new(true)
-            .open(path)
-    })
+    terminus_core::owner_only::create_temporary(dir, ATTEMPTS, temporary_name(prefix))
+        .map_err(|e| unmade(dir, prefix, &e))
 }
 
-/// [`create_temporary`] for anything `create` makes at a name that must not
-/// exist yet. The link install puts over the stable path is made this way,
-/// because `symlink` also fails on a name that is taken.
-pub(super) fn temporary<T>(
+/// [`create_temporary`] for a symlink to `target`, which is how the link install
+/// puts over the stable path is made. The names and the attempts are the same.
+pub(super) fn create_temporary_symlink(
     dir: &Path,
     prefix: &str,
-    create: impl Fn(&Path) -> std::io::Result<T>,
-) -> Result<(std::path::PathBuf, T), Failure> {
-    /// Enough to step over a stale name or two. Past it, something is wrong
-    /// with the directory rather than with the name, and guessing again is not
-    /// going to find out what.
-    const ATTEMPTS: u32 = 64;
+    target: &Path,
+) -> Result<std::path::PathBuf, Failure> {
+    terminus_core::owner_only::create_temporary_symlink(
+        dir,
+        ATTEMPTS,
+        temporary_name(prefix),
+        target,
+    )
+    .map_err(|e| unmade(dir, prefix, &e))
+}
 
+const ATTEMPTS: u32 = 64;
+
+/// `{prefix}{pid}` for the first attempt and `{prefix}{pid}-{n}` after it.
+fn temporary_name(prefix: &str) -> impl Fn(u32) -> String + '_ {
     let pid = std::process::id();
-    for attempt in 0..ATTEMPTS {
-        let path = match attempt {
-            0 => dir.join(format!("{prefix}{pid}")),
-            n => dir.join(format!("{prefix}{pid}-{n}")),
-        };
-        match create(&path) {
-            Ok(made) => return Ok((path, made)),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => {
-                return Err(Failure::Operational(format!(
-                    "{} could not be created: {e}",
-                    path.display()
-                )))
-            }
-        }
+    move |attempt| match attempt {
+        0 => format!("{prefix}{pid}"),
+        n => format!("{prefix}{pid}-{n}"),
     }
-    Err(Failure::Operational(format!(
-        "{} already holds {ATTEMPTS} files named '{prefix}{pid}...'; terminus will not write \
-         over any of them. remove them and run install again",
-        dir.display()
-    )))
+}
+
+/// What a failed temporary create says: every name taken, or something else.
+fn unmade(dir: &Path, prefix: &str, error: &std::io::Error) -> Failure {
+    if error.kind() == std::io::ErrorKind::AlreadyExists {
+        return Failure::Operational(format!(
+            "{} already holds {ATTEMPTS} files named '{prefix}{}...'; terminus will not write \
+             over any of them. remove them and run install again",
+            dir.display(),
+            std::process::id()
+        ));
+    }
+    Failure::Operational(format!("{} could not be created: {error}", dir.display()))
 }
 
 /// Install takes no arguments. Anything given is misuse, `--json` and `--yes`

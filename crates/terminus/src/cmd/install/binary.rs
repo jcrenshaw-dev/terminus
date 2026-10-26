@@ -268,8 +268,6 @@ fn store(source: &Path, dest: &Path) -> Result<(), Failure> {
         return Ok(());
     }
 
-    // Exclusively, and not with `File::create`: a stale `.terminus-install-<pid>`
-    // symlink would otherwise be followed and whatever it points at truncated.
     let (temporary, file) = super::create_temporary(dir, TEMPORARY)?;
     let outcome = copy_into(source, file, &temporary).and_then(|()| {
         std::fs::rename(&temporary, dest).map_err(|e| {
@@ -292,9 +290,7 @@ fn store(source: &Path, dest: &Path) -> Result<(), Failure> {
 fn link(stable: &Path, target: &Path) -> Result<(), Failure> {
     let dir = parent(stable)?;
     create_dir(dir)?;
-    let (temporary, ()) = super::temporary(dir, TEMPORARY, |path| {
-        std::os::unix::fs::symlink(target, path)
-    })?;
+    let temporary = super::create_temporary_symlink(dir, TEMPORARY, target)?;
     let outcome = match occupant(stable) {
         Ok(Occupant::Foreign) => Err(super::occupied(stable)),
         Ok(Occupant::Vacant | Occupant::Ours) => std::fs::rename(&temporary, stable).map_err(|e| {
