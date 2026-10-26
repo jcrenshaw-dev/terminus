@@ -38,7 +38,7 @@ The owner runs [`scripts/sign-release.sh`](../scripts/sign-release.sh) on his ow
 
 1. Refuses a tag that does not start with `v`.
 2. Reads the public key from `install.sh`'s one `release_key=` line, and keeps no copy of its own.
-3. Reads `install.sh`'s `valid_version` function, keeps no copy of it either, and refuses a tag whose version it rejects, so the signer refuses exactly the versions the installer refuses.
+3. Checks the tag with its own copy of `install.sh`'s `valid_version`. A test CI runs holds the signer's copies of `valid_version`, `digest` and the manifest check to `install.sh`'s text, so it refuses exactly what the installer refuses and runs none of `install.sh`.
 4. Refuses a release that is not a draft, because signing a published release would replace signatures users already check against.
 5. Downloads the draft and refuses it unless all four binaries and all four manifests are there.
 6. Checks every binary's SHA-256 against its manifest, and that every manifest is exactly the two lines above with the tag's version on the first, before it signs anything. A manifest whose version differs from the tag is refused.
