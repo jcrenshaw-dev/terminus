@@ -265,20 +265,14 @@ fn write_export(reader: &Reader, destination: &Path) -> Result<Written, Failure>
 
 /// One export file, created 0600 and never overwritten.
 ///
-/// `create_new` rather than the truncating create `std::fs::write` performs:
+/// Exclusive rather than the truncating create `std::fs::write` performs:
 /// [`refuse_if_occupied`] has already established that the destination was
 /// empty or absent, so a name that is already taken by the time this runs is
 /// something else writing into the directory mid-export, and truncating that
-/// file would be the one thing this command says it never does. The mode is
-/// carried by the open itself, so the file holding a whole session's
-/// unredacted transcript is never on disk at the umask's width, not even for
-/// the moment between the create and a chmod.
+/// file would be the one thing this command says it never does. The file holds
+/// a whole session's unredacted transcript, so the mode has to ride the create.
 fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let mut file = terminus_core::owner_only::options()
-        .write(true)
-        .create_new(true)
-        .open(path)?;
-    file.write_all(bytes)
+    terminus_core::owner_only::create_new(path)?.write_all(bytes)
 }
 
 /// Widen a date range by one session's bound.

@@ -102,11 +102,7 @@ pub fn take(data_dir: &Path) -> Result<PathBuf> {
     // and the rename below carries that mode to the real name. The handle is
     // closed immediately: what is wanted from it is the inode and its mode, not
     // a writer.
-    let reserved = crate::owner_only::options()
-        .write(true)
-        .create_new(true)
-        .open(&temp)
-        .map_err(|e| Error::io(&temp, e))?;
+    let reserved = crate::owner_only::create_new(&temp).map_err(|e| Error::io(&temp, e))?;
     drop(reserved);
 
     // Bound, not interpolated: the destination is a path, and a path that
