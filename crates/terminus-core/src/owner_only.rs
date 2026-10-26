@@ -156,6 +156,32 @@ pub fn create_dir_new(path: &Path) -> std::io::Result<()> {
     builder.create(path)
 }
 
+/// Write `bytes` to `path` so a reader sees the old file or the new one, never
+/// a prefix of either, and the new one is [`FILE_MODE`].
+///
+/// The bytes go into a [`create_temporary`] beside `path`, named
+/// `{prefix}{pid}-{n}{suffix}` over 64 attempts, and the rename puts it in
+/// place. A failure removes the temporary and returns the error. The caller
+/// makes the directory.
+///
+/// No `fsync`. The rename gives the reader its atomicity, and a flush would put
+/// a disk wait on every caller, the hook's state save among them.
+pub fn replace(path: &Path, bytes: &[u8], prefix: &str, suffix: &str) -> std::io::Result<()> {
+    use std::io::Write as _;
+
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let pid = std::process::id();
+    let (temporary, mut file) =
+        create_temporary(dir, 64, |n| format!("{prefix}{pid}-{n}{suffix}"))?;
+    let written = file.write_all(bytes).and_then(|()| file.flush());
+    drop(file);
+    let outcome = written.and_then(|()| std::fs::rename(&temporary, path));
+    if outcome.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    outcome
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,5 +386,68 @@ mod tests {
                 path.display()
             );
         }
+    }
+
+    /// A new target lands owner-only and holds exactly the bytes.
+    #[test]
+    fn a_replace_lands_owner_only_with_exactly_the_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("target");
+
+        replace(&target, b"the bytes", ".t-", ".tmp").unwrap();
+
+        assert_eq!(std::fs::read(&target).unwrap(), b"the bytes");
+        assert_eq!(mode(&target), 0o600);
+    }
+
+    /// The rename puts a new inode at the target, and nothing else is left in
+    /// the directory.
+    #[test]
+    fn a_replace_renames_over_the_target_and_leaves_nothing_else() {
+        use std::os::unix::fs::MetadataExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("target");
+        std::fs::write(&target, b"old").unwrap();
+        let before = std::fs::metadata(&target).unwrap().ino();
+
+        replace(&target, b"new", ".t-", ".tmp").unwrap();
+
+        assert_eq!(std::fs::read(&target).unwrap(), b"new");
+        assert_ne!(std::fs::metadata(&target).unwrap().ino(), before);
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_replace_steps_over_a_stale_symlink_at_the_first_temporary_name() {
+        let root = tempfile::tempdir().unwrap();
+        let victim = root.path().join("victim");
+        std::fs::write(&victim, b"keep me").unwrap();
+        let first = format!(".t-{}-0.tmp", std::process::id());
+        std::os::unix::fs::symlink(&victim, root.path().join(first)).unwrap();
+        let target = root.path().join("target");
+
+        replace(&target, b"new", ".t-", ".tmp").unwrap();
+
+        assert_eq!(std::fs::read(&target).unwrap(), b"new");
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep me");
+    }
+
+    /// A rename that fails removes its temporary.
+    #[test]
+    fn a_failed_replace_leaves_no_temporary() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("target");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("inside"), b"occupied").unwrap();
+
+        replace(&target, b"new", ".t-", ".tmp").unwrap_err();
+
+        let leftovers: Vec<_> = std::fs::read_dir(root.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .filter(|name| name.to_string_lossy().starts_with(".t-"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
     }
 }
