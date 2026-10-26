@@ -567,6 +567,19 @@ fn a_manifest_naming_another_version_is_refused(shell: Shell) {
     );
 }
 
+/// A manifest `install.sh` refuses is refused with `install.sh`'s own message
+/// before anything is signed, so the signer runs its copy of `read_manifest`
+/// (#99). A third line after two correct ones is refused by that copy alone.
+fn a_manifest_install_sh_refuses_is_refused_with_its_message(shell: Shell) {
+    let fx = fixture(shell);
+    let manifest = fx.draft.join("terminus-linux-aarch64.manifest");
+    let mut text = std::fs::read_to_string(&manifest).unwrap();
+    text.push_str("a third line\n");
+    std::fs::write(&manifest, text).unwrap();
+    let stderr = assert_refused_before_signing(&fx);
+    assert_eq!(stderr, "terminus: manifest has content after line 2\n");
+}
+
 /// Beside the shipped `install.sh`, the throwaway key signs but its signature
 /// does not verify against the pinned key, so nothing is uploaded. The run
 /// stops at the first manifest, after one passphrase prompt.
@@ -664,6 +677,7 @@ both_shells!(
     a_draft_missing_a_file_is_refused,
     a_binary_that_does_not_match_its_manifest_is_refused,
     a_manifest_naming_another_version_is_refused,
+    a_manifest_install_sh_refuses_is_refused_with_its_message,
     a_signature_the_pinned_key_does_not_verify_is_refused,
     a_binary_ci_did_not_attest_is_refused,
     a_published_release_is_refused,

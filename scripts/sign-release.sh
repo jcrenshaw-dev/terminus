@@ -7,9 +7,10 @@
 # way install.sh does. Only when all four pass does it upload the .sig files and
 # publish the release as latest.
 # The public key is read from install.sh's release_key line as a value; this
-# script keeps no copy of it. valid_version and digest are copies of install.sh's,
-# so it refuses the versions the installer refuses without running any code out of
-# install.sh. A test fails when a copy differs from install.sh's.
+# script keeps no copy of it. valid_version, digest and read_manifest are copies of
+# install.sh's, so it refuses the versions and the manifests the installer refuses
+# without running any code out of install.sh. A test fails when a copy differs from
+# install.sh's.
 set -eu
 
 LC_ALL=C
@@ -54,10 +55,36 @@ valid_version() (
     done
 )
 
+read_manifest() {
+    {
+        IFS= read -r version_line || fail 'manifest line 1 is missing or has no final newline'
+        IFS= read -r digest_line || fail 'manifest line 2 is missing or has no final newline'
+        extra=
+        if IFS= read -r extra || [ -n "$extra" ]; then
+            fail 'manifest has content after line 2'
+        fi
+    } < "$1"
+    case $version_line in
+        'version '*) version=${version_line#version } ;;
+        *) fail 'manifest line 1 must start with "version "' ;;
+    esac
+    valid_version "$version" || fail 'manifest line 1 needs major.minor.patch with no leading zeros and each part fitting u64'
+    case $digest_line in
+        'sha256 '*) sha256=${digest_line#sha256 } ;;
+        *) fail 'manifest line 2 must start with "sha256 "' ;;
+    esac
+    case $sha256 in *[!0-9a-f]*) fail 'manifest line 2 needs 64 lowercase hex digits' ;; esac
+    [ "${#sha256}" -eq 64 ] || fail 'manifest line 2 needs 64 lowercase hex digits'
+    # Some shells discard NUL bytes during read, so compare the exact text too.
+    manifest_digest=$(digest < "$1")
+    text_digest=$(printf 'version %s\nsha256 %s\n' "$version" "$sha256" | digest)
+    [ "$manifest_digest" = "$text_digest" ] || fail 'manifest is not exactly two UTF-8 lines'
+}
+
 [ "$#" -eq 1 ] || fail "$usage"
 tag=$1
 case $tag in v*) ;; *) fail "$usage" ;; esac
-version=${tag#v}
+tag_version=${tag#v}
 
 case $0 in */*) here=${0%/*} ;; *) here=. ;; esac
 install_sh=$here/../install.sh
@@ -72,7 +99,7 @@ case $key in '' | *"'"*) fail "$install_sh: the release_key= line is not release
 
 # The tag is checked with this script's own valid_version, a copy of install.sh's,
 # so it refuses exactly what the installer refuses.
-valid_version "$version" || fail "$usage"
+valid_version "$tag_version" || fail "$usage"
 
 # Only a draft is signed. On a published release the upload would replace the
 # signatures users already verify against, and the edit would mark it latest.
@@ -94,15 +121,17 @@ for platform in $platforms; do
     done
 done
 
-# Every binary is checked before anything is signed, so a bad draft never asks
-# for the passphrase.
+# Every binary and manifest is checked before anything is signed, so a bad draft
+# never asks for the passphrase. A manifest install.sh would refuse is refused here
+# with install.sh's own message.
 for platform in $platforms; do
     binary=terminus-$platform
     actual=$(digest < "$work/$binary")
-    grep -q -x -F -e "sha256 $actual" "$work/$binary.manifest" ||
+    read_manifest "$work/$binary.manifest"
+    [ "$sha256" = "$actual" ] ||
         fail "$binary: SHA-256 mismatch, the binary is $actual and its manifest names another value"
-    [ "$(digest < "$work/$binary.manifest")" = "$(printf 'version %s\nsha256 %s\n' "$version" "$actual" | digest)" ] ||
-        fail "$binary.manifest: not exactly the lines version $version and sha256 $actual"
+    [ "$version" = "$tag_version" ] ||
+        fail "$binary.manifest: not exactly the lines version $tag_version and sha256 $actual"
 done
 
 # A binary and manifest swapped into the draft agree with each other, so each
