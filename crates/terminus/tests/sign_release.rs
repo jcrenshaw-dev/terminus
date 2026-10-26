@@ -638,6 +638,25 @@ fn a_published_release_is_refused(shell: Shell) {
     );
 }
 
+/// A signing run executes nothing it reads from `install.sh` (#99). The
+/// fixture's `install.sh` has a `valid_version` that creates a file, and the
+/// run leaves no such file.
+fn a_signing_run_executes_nothing_from_install_sh(shell: Shell) {
+    let fx = fixture(shell);
+    let marker = fx.root.join("ran-from-install-sh");
+    let path = fx.root.join("install.sh");
+    let shipped = std::fs::read_to_string(&path).unwrap();
+    let planted = shipped.replace(
+        "valid_version() (\n",
+        &format!("valid_version() (\n    : > '{}'\n", marker.display()),
+    );
+    assert_ne!(planted, shipped);
+    std::fs::write(&path, planted).unwrap();
+    let output = fx.run(TAG);
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(!marker.exists());
+}
+
 both_shells!(
     a_good_draft_is_signed_and_published,
     a_bad_tag_is_refused,
@@ -648,6 +667,7 @@ both_shells!(
     a_signature_the_pinned_key_does_not_verify_is_refused,
     a_binary_ci_did_not_attest_is_refused,
     a_published_release_is_refused,
+    a_signing_run_executes_nothing_from_install_sh,
 );
 
 /// The script reads the pinned key from `install.sh` and keeps no copy of it.
@@ -656,4 +676,11 @@ fn sign_release_holds_no_copy_of_the_key() {
     let script = std::fs::read_to_string(repo_file("scripts/sign-release.sh")).unwrap();
     let base64 = PINNED_KEY.split(' ').nth(1).unwrap();
     assert!(!script.contains(base64));
+}
+
+/// The script never evals anything (#99).
+#[test]
+fn sign_release_holds_no_eval() {
+    let script = std::fs::read_to_string(repo_file("scripts/sign-release.sh")).unwrap();
+    assert!(!script.contains("eval"));
 }
