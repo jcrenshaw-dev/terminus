@@ -1,0 +1,98 @@
+{
+  "status": "gaps",
+  "score": "6/7",
+  "truths": [
+    {
+      "n": 1,
+      "truth": "Under umask 022, with no config directory, terminus data move to a missing destination and to an existing empty destination each leave the pointer at 0600 and the config directory at 0700 (ROADMAP criterion 1)",
+      "status": "VERIFIED",
+      "uat_item": 1,
+      "evidence": "Exists and substantive: crates/terminus-core/src/store/open.rs:824-832 write_location_pointer creates the config directory with owner_only::create_dir_all and writes '<destination>\\n' through owner_only::replace with temporaries .data-location-<pid>-<n>.tmp, re-exported at store/mod.rs:11. Wired: crates/terminus/src/cmd/data.rs:223 run calls store::write_location_pointer(&destination)?, and data.rs:379 own_uid creates the same directory with owner_only::create_dir_all, reached from data.rs:115 when a destination exists. Value traced end to end: the destination given on the command line lands as the pointer's text, which the test reads back. Behaves: tests/owner_only.rs:384-413 a_data_move_creates_the_config_directory_0700_and_the_pointer_0600 loops over an absent and an existing 0700 destination. Each case removes bench.config_dir and asserts it is absent, runs the shipped binary under 'umask 022; exec' and asserts config 0700, data-location 0600 and the text destination+newline. It passed in the full run at HEAD (git archive HEAD, umask 022, --all-features)."
+    },
+    {
+      "n": 2,
+      "truth": "No exclusive-create retry loop exists outside owner_only.rs; outside it and test code .create_new(true) appears only in store/open.rs's create of terminus.db and no code calls std::os::unix::fs::symlink; the #73 sites call the helpers (ROADMAP criterion 2)",
+      "status": "VERIFIED",
+      "uat_item": 2,
+      "evidence": "grep over crates/ (tests/ excluded): create_new(true) hits only owner_only.rs:92 and store/open.rs:128 (Store::open's create, D-03), plus install/mod.rs:538 inside #[cfg(test)] at 510. Non-test unix::fs::symlink is only owner_only.rs:123. The other hits (install/mod.rs:522, json_file.rs:1149) sit in #[cfg(test)] modules. 'AlreadyExists => continue' appears only at owner_only.rs:138 (first_free). The remaining AlreadyExists matches (data.rs:180 and 389, install/mod.rs:92, json_file.rs:746 hard_link, open.rs:132) map an error to a message or a non-retry path. Sites on the helpers: install/mod.rs:59 and 70 (create_temporary, create_temporary_symlink, names {prefix}{pid} then {prefix}{pid}-{n}, 64 attempts), binary.rs:271 and 293, state.rs:255 (replace), decision.rs:322 and 343 (temporary, then reservation {stem}-{pid}-{stamp}-{n}.json), data.rs:381 (probe, 100 attempts), 379, 179 and 485 (create_dir_new), 504 (copy_file create_new), snapshot.rs:105, export.rs:275. No DirBuilder is left outside owner_only.rs. #73's own text was not read because the network is off limits; the site list checked is CONTEXT D-02's, a superset. Behaves: all 16 owner_only::tests unit tests passed, among them the_retry_steps_over_a_file_and_a_stale_symlink, the_retry_reports_exhaustion_as_already_exists, the_symlink_form_links_at_the_first_free_name, a_replace_steps_over_a_stale_symlink_at_the_first_temporary_name and a_failed_replace_leaves_no_temporary. Names kept: a_stale_temporary_name_is_stepped_over_rather_than_followed (tests/install.rs) and a_pass_sweeps_the_writers_old_temporaries_and_nothing_else (feedback) passed. Modes kept: everything_a_fresh_install_writes_is_owner_only_under_umask_022, an_export_directory_and_every_file_in_it_are_owner_only, a_data_move_writes_an_owner_only_tree_however_wide_the_source_was and cmd::install::tests::a_temporary_is_owner_only_from_the_open passed."
+    },
+    {
+      "n": 3,
+      "truth": "MIN_NAME and MAX_NAME are each defined once in crates/, the one session-id check is used by both writers, and the existing refusal tests for the state file and the decision file pass (ROADMAP criterion 3)",
+      "status": "VERIFIED",
+      "uat_item": 3,
+      "evidence": "grep MIN_NAME|MAX_NAME in crates/: the only definitions are inject/mod.rs:57-58. The other uses are mod.rs:74 and decision.rs:455, the test's crate::inject::MAX_NAME + 1. The check is inject/mod.rs:73-79 checked_session_id (length MIN_NAME..=MAX_NAME, ASCII hex digits and '-'). Wired: state.rs:220 path() calls it and then joins '{id}.json'. decision.rs:309 write_file calls it before create_dir_all or any join and uses the result as the stem. Behaves: a_session_id_that_could_name_a_path_creates_nothing_anywhere (terminus-core tests/inject_state.rs) and inject::decision::tests::a_hostile_session_id_reaches_no_filesystem_call both passed. Not weakened: git diff 4a89b49 HEAD -- crates/terminus-core/tests/ is empty, and the only test-module change in decision.rs is MAX_NAME to crate::inject::MAX_NAME."
+    },
+    {
+      "n": 4,
+      "truth": "scripts/sign-release.sh contains no eval and reads no code out of install.sh, and a signing run whose fixture install.sh holds a valid_version that creates a file leaves no such file (ROADMAP criterion 4, first half)",
+      "status": "VERIFIED",
+      "uat_item": 4,
+      "evidence": "grep -c eval scripts/sign-release.sh prints 0. The only read of install.sh is sign-release.sh:92-98, a grep of the release_key= line checked against release_key='<key>' (a value, D-13). There is no source, '.' or eval, and valid_version, digest and read_manifest are defined in the script (lines 28-82). sh -n and dash -n exit 0. Behaves: sign_release_holds_no_eval and a_signing_run_executes_nothing_from_install_sh::{sh,dash} (sign_release.rs:657-671, plants ': > marker' after 'valid_version() (' and asserts the text changed) passed at HEAD. Falsified: with 4a89b49's sign-release.sh (eval at its line 69) put in the scratch export, all three failed, the run test at sign_release.rs:670 because the marker appeared. Restored, they passed again. THREAT-MODEL.md, docs/release.md and docs/design/0008-install-and-release.md contain no 'eval'."
+    },
+    {
+      "n": 5,
+      "truth": "A test under cargo test, run in CI, passes on the tree and fails when the signer's valid_version, digest or read_manifest differs by one character from install.sh's (ROADMAP criterion 4, second half)",
+      "status": "VERIFIED",
+      "uat_item": 5,
+      "evidence": "sign_release.rs:723-738 the_signers_copies_are_install_shs_text cuts each function at its open and close lines (cut_function 704-717: exactly one opening line, a closed cut, more than two lines) and compares the cuts. It passed at HEAD, and a direct text compare of the three cuts also shows them identical (20, 9 and 27 lines). Spot-check, one mutation at a time in the scratch export, then restored: '-le 20' to '-le 21' failed with 'valid_version() ... differs', '%% *' to '% *' failed with 'digest() ... differs', 'line 2' to 'line 3' in a read_manifest message failed with 'read_manifest() ... differs', and renaming 'digest() {' failed at sign_release.rs:707. CI: .github/workflows/test.yml:194 runs cargo test --workspace --all-features on the four runners at line 22, and the skip list at 182-193 does not name it. Copy wired in: sign-release.sh:130 calls read_manifest on each draft manifest, and a_manifest_install_sh_refuses_is_refused_with_its_message::{sh,dash} (stderr exactly 'terminus: manifest has content after line 2') passed."
+    },
+    {
+      "n": 6,
+      "truth": "With install.sh's manifest parse moved into read_manifest, the existing manifest tests in crates/terminus/tests/install_script.rs pass with no expected value changed",
+      "status": "VERIFIED",
+      "uat_item": 6,
+      "evidence": "git diff 4a89b49 HEAD -- crates/terminus/tests/install_script.rs is empty. git diff 4a89b49 HEAD -- install.sh shows the inline parse moved verbatim into read_manifest() { ... } at install.sh:88-112. The only change is \"$scratch/manifest\" becoming \"$1\" in the two redirections, and the call is 'read_manifest \"$scratch/manifest\"' at install.sh:235, before verify_download. A { } body keeps the version and sha256 assignments global. sh -n and dash -n exit 0. install_script: 59 passed, 0 failed in the full run at HEAD."
+    },
+    {
+      "n": 7,
+      "truth": "cargo test --workspace --all-features passes",
+      "status": "FAILED",
+      "uat_item": 7,
+      "evidence": "Full run at HEAD 4e5ffb4 (git archive HEAD, umask 022, --offline --all-features --no-fail-fast) exited 101: 'error: 2 targets failed: -p terminus --test brief, -p terminus --test hook'. Failing: brief a_hundred_session_starts_stay_inside_the_budget_and_the_wall_clock (p99 21.87 ms over 10 ms, brief.rs:328), hook every_event_exits_zero_with_an_empty_stdout_inside_the_budget (p99 20.74 ms, hook.rs:413) and hook every_event_stays_inside_the_budget_with_the_redaction_knob_on (p99 36.17 ms, hook.rs:1132). Every other target passed (66 'test result: ok' lines). The 'fails at base too' claim is confirmed: in a clean export of 4a89b49, the same three run by name twice failed both times (p99 26.47 and 23.83 ms, 39.81 and 24.60 ms, 39.17 and 37.26 ms). The phase neither caused nor fixed them. test.yml:182-186 has skipped these three on every hosted runner since cbd2bdc0 (2026-10-15), which says they 'still run everywhere else'."
+    }
+  ],
+  "passes": [
+    {
+      "k": 1,
+      "name": "data move leaves the pointer 0600 and the config dir 0700",
+      "evidence": "store/open.rs:824-832 write_location_pointer (owner_only::create_dir_all + replace), called at cmd/data.rs:223; own_uid's owner_only::create_dir_all at data.rs:379. tests/owner_only.rs:384-413 a_data_move_creates_the_config_directory_0700_and_the_pointer_0600 removes the config dir, runs the binary under umask 022 for an absent and an existing empty destination, and asserts 0700, 0600 and destination+newline. It passed at HEAD."
+    },
+    {
+      "k": 2,
+      "name": "Only store/open.rs uses create_new outside owner_only, and no symlink call",
+      "evidence": "Non-test create_new(true) only at owner_only.rs:92 and store/open.rs:128 (install/mod.rs:538 is in #[cfg(test)] at 510). Non-test unix::fs::symlink only at owner_only.rs:123. 'AlreadyExists => continue' only at owner_only.rs:138. All 16 owner_only unit tests, the install stale-name test and the drain sweep test passed at HEAD."
+    },
+    {
+      "k": 3,
+      "name": "Session-id limits defined once and still refused",
+      "evidence": "MIN_NAME/MAX_NAME are defined only at inject/mod.rs:57-58. The check checked_session_id at mod.rs:73-79 is used by state.rs:220 and decision.rs:309. a_session_id_that_could_name_a_path_creates_nothing_anywhere and inject::decision::tests::a_hostile_session_id_reaches_no_filesystem_call passed. The core tests/ directory is unchanged since 4a89b49."
+    },
+    {
+      "k": 4,
+      "name": "Signer has no eval and runs no installer code",
+      "evidence": "grep -c eval scripts/sign-release.sh prints 0. Only the release_key= value is read from install.sh (sign-release.sh:92-98). sign_release_holds_no_eval and a_signing_run_executes_nothing_from_install_sh::{sh,dash} passed at HEAD and failed against 4a89b49's signer, where the marker file appeared."
+    },
+    {
+      "k": 5,
+      "name": "Drift test catches a one-character change",
+      "evidence": "the_signers_copies_are_install_shs_text (sign_release.rs:723-738) passed at HEAD. Each one-character mutation of the signer's valid_version, digest and read_manifest failed the test and named the function, and a renamed digest() line failed too. It runs under test.yml:194 cargo test --workspace on four runners and is not on the skip list."
+    },
+    {
+      "k": 6,
+      "name": "Manifest tests unchanged after read_manifest",
+      "evidence": "git diff 4a89b49 HEAD -- crates/terminus/tests/install_script.rs is empty. The install.sh diff moves the parse verbatim into read_manifest (install.sh:88-112, called at 235), with $scratch/manifest becoming $1. install_script: 59 passed, 0 failed at HEAD."
+    }
+  ],
+  "gaps": [
+    {
+      "k": 7,
+      "name": "Full workspace suite passes",
+      "reason": "behavior wrong - cargo test --workspace --all-features exits 101 at HEAD because three SessionStart p99 budget tests fail. The failure is pre-existing and not a regression: the same three fail at the phase base 4a89b49 with matching numbers. The acceptance criterion as written is still unmet.",
+      "evidence": "crates/terminus/tests/brief.rs:328 a_hundred_session_starts_stay_inside_the_budget_and_the_wall_clock: p99 21.87 ms over the 10 ms budget. crates/terminus/tests/hook.rs:413 every_event_exits_zero_with_an_empty_stdout_inside_the_budget: p99 20.74 ms. crates/terminus/tests/hook.rs:1132 every_event_stays_inside_the_budget_with_the_redaction_knob_on: p99 36.17 ms. At 4a89b49, run twice by name in a clean export: p99 23.8 to 39.8 ms, all failing. Every other test target passed. .github/workflows/test.yml:182-186 skips these three on all hosted runners (cbd2bdc0), so the CI gate is green on them by design, but the local command AC7 names is red.",
+      "severity": "major",
+      "missing": "Either get the three SessionStart budget tests passing locally, under their own issue since this phase does not touch the SessionStart path, or have John restate AC7 as the suite minus test.yml's three skipped budget tests (cargo test --workspace --all-features -- --skip every_event_exits_zero_with_an_empty_stdout_inside_the_budget --skip every_event_stays_inside_the_budget_with_the_redaction_knob_on --skip a_hundred_session_starts_stay_inside_the_budget_and_the_wall_clock), which passes at HEAD."
+    }
+  ],
+  "human_checks": []
+}
