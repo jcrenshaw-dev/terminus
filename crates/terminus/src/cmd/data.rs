@@ -220,7 +220,7 @@ pub fn run(options: Options) -> Result<(), Failure> {
     // and the pointer leaves both directories intact and the store still
     // resolving to the old one, which is recoverable. The other order loses the
     // store's address with the data still on disk.
-    write_pointer(&pointer, &destination)?;
+    store::write_location_pointer(&destination)?;
 
     // Only now, with the pointer naming the destination: holding the lock this
     // long kept an ingest out of the source from the copy until the pointer
@@ -357,7 +357,8 @@ fn refuse_unchecked_destination(
 /// A new file's owner is the creating process's effective uid on Linux and
 /// macOS, so this needs `std` alone and no `libc`. The probe goes in the
 /// pointer's directory: terminus's own config directory, which this command
-/// has to write the pointer into anyway. A taken name is stepped over rather
+/// has to write the pointer into anyway, so it is made here, 0700, when this
+/// runs before the pointer's writer does. A taken name is stepped over rather
 /// than opened, and a probe that cannot be made refuses the move.
 fn own_uid(pointer: &Path) -> Result<u32, Failure> {
     use std::os::unix::fs::MetadataExt;
@@ -375,7 +376,7 @@ fn own_uid(pointer: &Path) -> Result<u32, Failure> {
         ))
     };
 
-    std::fs::create_dir_all(dir).map_err(|e| failed(dir, e))?;
+    terminus_core::owner_only::create_dir_all(dir).map_err(|e| failed(dir, e))?;
     let pid = std::process::id();
     match terminus_core::owner_only::create_temporary(dir, 100, |n| {
         format!(".uid-probe-{pid}-{n}")
@@ -417,31 +418,6 @@ fn answered(source: &Path, yes: bool) -> Result<bool, Failure> {
             source.display()
         ))
     })
-}
-
-/// The pointer `store::open::data_dir` reads, written through a temporary file
-/// and a rename.
-///
-/// Atomic because the alternative is a truncated pointer: a process killed
-/// mid-write would leave a file naming half a path, and the next command would
-/// resolve a store that does not exist rather than either the old one or the
-/// new one.
-fn write_pointer(pointer: &Path, destination: &Path) -> Result<(), Failure> {
-    let Some(dir) = pointer.parent() else {
-        return Err(Failure::Operational(format!(
-            "{} has no parent directory to write into",
-            pointer.display()
-        )));
-    };
-    let io = |path: &Path, e: std::io::Error| {
-        Failure::Operational(format!("{} could not be written: {e}", path.display()))
-    };
-
-    std::fs::create_dir_all(dir).map_err(|e| io(dir, e))?;
-    let temporary = pointer.with_extension("tmp");
-    std::fs::write(&temporary, format!("{}\n", destination.display()))
-        .map_err(|e| io(&temporary, e))?;
-    std::fs::rename(&temporary, pointer).map_err(|e| io(pointer, e))
 }
 
 /// A relative destination resolved against the working directory, with

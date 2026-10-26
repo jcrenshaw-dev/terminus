@@ -370,6 +370,48 @@ fn a_data_move_writes_an_owner_only_tree_however_wide_the_source_was() {
     assert_tree_is_owner_only(&destination);
 }
 
+/// A move that has to create the config directory writes it 0700 and the pointer
+/// 0600, whichever of the two things that need the directory comes first (#73).
+///
+/// The bench makes `config` up front, so each case removes it and asserts it is
+/// gone before the move: without that the test would pass on a build that never
+/// creates it. An absent destination reaches the pointer's writer first. An
+/// existing empty one reaches the uid probe first, because the destination
+/// rule has to learn the account's uid to compare it with the directory's
+/// owner. The destination here is 0700, as the rule requires: it refuses a wider
+/// one.
+#[test]
+fn a_data_move_creates_the_config_directory_0700_and_the_pointer_0600() {
+    for existing in [false, true] {
+        let bench = bench_located(Located::ByPlatform);
+        bench.place("session-basic.jsonl");
+        bench.ok(&["ingest"]);
+
+        let destination = bench.root.join("elsewhere").join("terminus");
+        if existing {
+            std::fs::create_dir_all(&destination).unwrap();
+            set(&destination, 0o700);
+        }
+
+        std::fs::remove_dir_all(&bench.config_dir).unwrap();
+        assert!(
+            !bench.config_dir.exists(),
+            "the config directory is still there"
+        );
+
+        bench.ok(&["data", "move", destination.to_str().unwrap(), "--yes"]);
+
+        owner_only(&bench.config_dir, 0o700);
+        let pointer = bench.config_dir.join("data-location");
+        owner_only(&pointer, 0o600);
+        assert_eq!(
+            std::fs::read_to_string(&pointer).unwrap(),
+            format!("{}\n", destination.display()),
+            "existing destination: {existing}"
+        );
+    }
+}
+
 /// The session one payload names, long enough and plain enough to be allowed to
 /// name a file (the one check in the `inject` module, which both writers use).
 const SESSION_ID: &str = "0e5e6a1e-9f2b-4c7a-8d31-6b4f2a9c1d55";

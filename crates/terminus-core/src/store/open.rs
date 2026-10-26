@@ -808,6 +808,29 @@ pub fn location_pointer_path() -> Result<PathBuf> {
     Ok(crate::config::config_dir()?.join(LOCATION_FILE_NAME))
 }
 
+/// Record that the data directory now lives at `destination`, for `terminus
+/// data move` and nothing else.
+///
+/// The text is the destination and one newline, written through a temporary
+/// and a rename ([`owner_only::replace`](crate::owner_only::replace)). Atomic
+/// because the alternative is a truncated pointer: a process killed mid-write
+/// would leave a file naming half a path, and the next command would resolve a
+/// store that does not exist rather than either the old one or the new one.
+///
+/// The pointer is 0600 from the create. The config directory is made 0700 only
+/// when this call makes it: one that already exists keeps its mode. A move
+/// killed mid-write can leave `.data-location-{pid}-{n}.tmp` behind in the
+/// config directory, and nothing deletes it.
+pub fn write_location_pointer(destination: &Path) -> Result<()> {
+    let pointer = location_pointer_path()?;
+    if let Some(dir) = pointer.parent() {
+        crate::owner_only::create_dir_all(dir).map_err(|e| Error::io(dir, e))?;
+    }
+    let text = format!("{}\n", destination.display());
+    crate::owner_only::replace(&pointer, text.as_bytes(), ".data-location-", ".tmp")
+        .map_err(|e| Error::io(&pointer, e))
+}
+
 /// The data directory, resolved once at startup and passed down explicitly
 /// afterwards, never re-derived (`DESIGN-BRIEF.md:404`).
 ///
