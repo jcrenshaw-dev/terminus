@@ -698,3 +698,41 @@ fn sign_release_holds_no_eval() {
     let script = std::fs::read_to_string(repo_file("scripts/sign-release.sh")).unwrap();
     assert!(!script.contains("eval"));
 }
+
+/// From the one line equal to `open` through the first line after it equal to
+/// `close`, as text.
+fn cut_function(script: &str, file: &str, open: &str, close: &str) -> String {
+    let lines: Vec<&str> = script.lines().collect();
+    let starts: Vec<usize> = (0..lines.len()).filter(|&i| lines[i] == open).collect();
+    assert_eq!(starts.len(), 1, "{file}: lines equal to {open:?}: {starts:?}");
+    let start = starts[0];
+    let end = lines[start + 1..]
+        .iter()
+        .position(|line| *line == close)
+        .unwrap_or_else(|| panic!("{file}: no line {close:?} closes {open:?}"))
+        + start
+        + 1;
+    assert!(end > start + 1, "{file}: {open:?} holds nothing");
+    lines[start..=end].join("\n")
+}
+
+/// The signer's `valid_version`, `digest` and `read_manifest` are the text of
+/// `install.sh`'s (#99), so it refuses what the installer refuses without
+/// running any of it.
+#[test]
+fn the_signers_copies_are_install_shs_text() {
+    let install = std::fs::read_to_string(repo_file("install.sh")).unwrap();
+    let signer = std::fs::read_to_string(repo_file("scripts/sign-release.sh")).unwrap();
+    for (open, close) in [
+        ("valid_version() (", ")"),
+        ("digest() {", "}"),
+        ("read_manifest() {", "}"),
+    ] {
+        let name = open.trim_end_matches(" {").trim_end_matches(" (");
+        assert_eq!(
+            cut_function(&install, "install.sh", open, close),
+            cut_function(&signer, "scripts/sign-release.sh", open, close),
+            "{name} in scripts/sign-release.sh differs from install.sh's"
+        );
+    }
+}
