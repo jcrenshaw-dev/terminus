@@ -6,8 +6,10 @@
 # signs each manifest with ~/.ssh/crenshawdev-release and verifies each signature the
 # way install.sh does. Only when all four pass does it upload the .sig files and
 # publish the release as latest.
-# The public key and the version check are read from install.sh's release_key line
-# and valid_version function; this script keeps no copy of either.
+# The public key is read from install.sh's release_key line as a value; this
+# script keeps no copy of it. valid_version and digest are copies of install.sh's,
+# so it refuses the versions the installer refuses without running any code out of
+# install.sh. A test fails when a copy differs from install.sh's.
 set -eu
 
 LC_ALL=C
@@ -31,6 +33,27 @@ digest() {
     printf '%s\n' "${sum%% *}"
 }
 
+valid_version() (
+    case $1 in '' | *[!0-9.]* | .* | *. | *..*) return 1 ;; esac
+    set -f
+    IFS=.
+    set -- $1
+    [ "$#" -eq 3 ] || return 1
+    for part do
+        case $part in 0?*) return 1 ;; esac
+        [ "${#part}" -le 20 ] || return 1
+        if [ "${#part}" -eq 20 ]; then
+            # Compare halves without overflowing the shell's signed integer.
+            high=${part%??????????}
+            low=${part#??????????}
+            [ "$high" -le 1844674407 ] || return 1
+            if [ "$high" -eq 1844674407 ]; then
+                [ "$low" -le 3709551615 ] || return 1
+            fi
+        fi
+    done
+)
+
 [ "$#" -eq 1 ] || fail "$usage"
 tag=$1
 case $tag in v*) ;; *) fail "$usage" ;; esac
@@ -47,26 +70,8 @@ key=${key%\'}
 case $key in '' | *"'"*) fail "$install_sh: the release_key= line is not release_key='<key>'" ;; esac
 [ "$line" = "release_key='$key'" ] || fail "$install_sh: the release_key= line is not release_key='<key>'"
 
-# The version check is install.sh's own valid_version, so the signer refuses
-# exactly what the installer refuses.
-count=$(grep -c -E -e '^[[:space:]]*valid_version[[:space:]]*\(' "$install_sh") || :
-[ "$count" = 1 ] || fail "$install_sh: needs exactly one valid_version function, found ${count:-none}"
-check=
-closed=
-while IFS= read -r text; do
-    if [ -n "$check" ]; then
-        check="$check
-$text"
-        if [ "$text" = ')' ]; then
-            closed=1
-            break
-        fi
-    elif [ "$text" = 'valid_version() (' ]; then
-        check=$text
-    fi
-done < "$install_sh"
-[ -n "$closed" ] || fail "$install_sh: needs a valid_version() ( line and a ) line closing it"
-eval "$check"
+# The tag is checked with this script's own valid_version, a copy of install.sh's,
+# so it refuses exactly what the installer refuses.
 valid_version "$version" || fail "$usage"
 
 # Only a draft is signed. On a published release the upload would replace the
