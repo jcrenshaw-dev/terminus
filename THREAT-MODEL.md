@@ -81,7 +81,7 @@ Last reviewed: 2026-10-23
 
 `compact` runs a plain `VACUUM`. Terminus sets no `temp_store` pragma, so SQLite's own temporary files go wherever SQLite puts them, with whatever mode it gives them [VERIFY]. Terminus sets no `secure_delete` pragma, so deleted rows stay in free pages until `compact` and stay in snapshots until those are pruned.
 
-**Config directory.** `terminus data move` writes `data-location` through `data-location.tmp` and a rename. It uses `std::fs::write`, not `owner_only`, so the file gets the umask mode and the write follows a symlink at the temporary name (`bin/cmd/data.rs`). `terminus.toml` is never written.
+**Config directory.** `terminus data move` writes `data-location` 0600, through an exclusive temporary, `.data-location-<pid>-<n>.tmp`, and a rename (`core/store/open.rs`). It creates the config directory 0700, when it learns the account's uid or when it writes the pointer, whichever comes first. A config directory that already exists keeps its mode. A move killed during the write can leave the temporary behind, and nothing deletes it. `terminus.toml` is never written.
 
 **Outside Terminus's own directories.**
 

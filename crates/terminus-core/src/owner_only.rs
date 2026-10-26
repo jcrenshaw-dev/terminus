@@ -5,9 +5,16 @@
 //! exists. That is not tidiness: a `create` followed by a `chmod` leaves a
 //! window in which the file is on disk at the umask's mode with the first
 //! bytes already in it, and the file this project writes holds whole session
-//! transcripts. Every creation site in the store, the ingest lock, the
-//! snapshot copy, the injection scratch and the export goes through the two
-//! helpers below, so there is one place to read the rule off.
+//! transcripts. Every site that creates a file or a directory goes through the
+//! helpers below, so there is one place to read the rule off:
+//!
+//! - the store and the ingest lock;
+//! - the snapshot;
+//! - the injection state and decision writers;
+//! - the export;
+//! - install's temporaries and its stable-path link;
+//! - `data move`'s directories, copies, uid probe and `LOCK`;
+//! - the `data-location` pointer and the config directory.
 //!
 //! `std` alone does it: [`std::os::unix::fs::DirBuilderExt::mode`] and
 //! [`std::os::unix::fs::OpenOptionsExt::mode`]. No `libc`, no `nix` - the hook
