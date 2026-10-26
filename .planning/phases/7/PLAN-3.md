@@ -69,7 +69,7 @@ Signing a release runs no code read out of `install.sh`, and a CI test fails whe
 - **Verify:**
   - **AC6.** `cargo test -p terminus --all-features --test install_script` passes, and `git diff --stat -- crates/terminus/tests/install_script.rs` is empty.
   - **Syntax.** `sh -n install.sh` and `dash -n install.sh` both exit 0.
-  - **Placement.** `grep -n '^read_manifest() {$' install.sh` prints one line, numbered below the line of the final brace group's `{`. `grep -n 'scratch/manifest' install.sh` shows the `curl`, the `ssh-keygen` and the one call, and no `read`.
+  - **Placement.** `grep -n '^read_manifest() {$' install.sh` prints one line, whose line number is lower than that of the final brace group's opening `{`, so the function is defined before the group that calls it. `grep -n 'scratch/manifest' install.sh` shows the `curl`, the `ssh-keygen` and the one call, and no `read`.
   - **Neighbour tests.** `cargo test -p terminus --all-features --lib cmd::install::binary::tests::install_sh_holds_the_same_marker` passes.
 
 ### Task 2: Give the signer its own valid_version, and run nothing from install.sh
