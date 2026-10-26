@@ -48,6 +48,36 @@ use crate::error::Result;
 use crate::recall::scope::{self, Scope, Scoped};
 use crate::store::Store;
 
+/// The shortest and longest a `session_id` may be and still name a file.
+///
+/// A Claude Code `session_id` is a 36-character uuid. The window is wider than
+/// that on both sides so a harness that changes its id format does not silently
+/// lose suppression, and narrow enough that nothing pathological gets near a
+/// filesystem call.
+const MIN_NAME: usize = 8;
+const MAX_NAME: usize = 64;
+
+/// The `session_id`, when it is fit to be part of a file name, or nothing.
+///
+/// ASCII hex digits and dashes at a plausible uuid length, and nothing else: an
+/// allow-list rather than a scan for the dangerous spellings, because the list
+/// of dangerous spellings is per-platform and open-ended (`..`, `/`, `\`, `:`,
+/// a NUL, a trailing dot, `CON`) while the list of characters a session id is
+/// made of is closed. Byte length is character length here because every
+/// admitted byte is ASCII.
+///
+/// A `session_id` arrives on an untrusted payload and becomes a file name, so
+/// the check runs before any path is built: a value that fails it must reach no
+/// filesystem call at all - not a `join` that gets checked afterwards, which is
+/// the shape that keeps being wrong on the platform nobody tested.
+fn checked_session_id(session_id: &str) -> Option<&str> {
+    let plausible = (MIN_NAME..=MAX_NAME).contains(&session_id.len());
+    let shaped = session_id
+        .bytes()
+        .all(|b| b.is_ascii_hexdigit() || b == b'-');
+    (plausible && shaped).then_some(session_id)
+}
+
 /// The hook payload fields injection reads, borrowed from whoever parsed them.
 ///
 /// All five travel together even where an arm ignores one, so that the seam

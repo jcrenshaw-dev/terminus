@@ -50,15 +50,6 @@ pub const DIR_NAME: &str = "injection";
 /// injected twice.
 const FORMAT: u32 = 1;
 
-/// The shortest and longest a `session_id` may be and still name a file.
-///
-/// A Claude Code `session_id` is a 36-character uuid. The window is wider than
-/// that on both sides so a harness that changes its id format does not silently
-/// lose suppression, and narrow enough that nothing pathological gets near a
-/// filesystem call.
-const MIN_NAME: usize = 8;
-const MAX_NAME: usize = 64;
-
 /// How many suppressions one session's file keeps.
 ///
 /// The list is a record to read and not a fact anything decides on, so it is
@@ -223,31 +214,11 @@ impl State {
 
 /// The file one `session_id` names, or nothing.
 ///
-/// **The refusal happens before any path is built.** A `session_id` arrives on
-/// an untrusted payload and becomes a file name, so a value carrying a
-/// separator, a `..`, a NUL or anything else that is not a plausible session id
-/// must reach no filesystem call at all - not a `join` that gets checked
-/// afterwards, which is the shape that keeps being wrong on the platform nobody
-/// tested.
+/// The check runs before any path is built, so a `session_id` that fails it
+/// reaches no filesystem call at all: [`super::checked_session_id`].
 fn path(data_dir: &Path, session_id: Option<&str>) -> Option<PathBuf> {
-    let name = file_name(session_id?)?;
-    Some(data_dir.join(DIR_NAME).join(name))
-}
-
-/// `<session_id>.json`, when the `session_id` is one.
-///
-/// ASCII hex digits and dashes at a plausible uuid length, and nothing else: an
-/// allow-list rather than a scan for the dangerous spellings, because the list
-/// of dangerous spellings is per-platform and open-ended (`..`, `/`, `\`, `:`,
-/// a NUL, a trailing dot, `CON`) while the list of characters a session id is
-/// made of is closed. Byte length is character length here because every
-/// admitted byte is ASCII.
-fn file_name(session_id: &str) -> Option<String> {
-    let plausible = (MIN_NAME..=MAX_NAME).contains(&session_id.len());
-    let shaped = session_id
-        .bytes()
-        .all(|b| b.is_ascii_hexdigit() || b == b'-');
-    (plausible && shaped).then(|| format!("{session_id}.json"))
+    let id = super::checked_session_id(session_id?)?;
+    Some(data_dir.join(DIR_NAME).join(format!("{id}.json")))
 }
 
 /// Write `state` to `path`, replacing it whole.
@@ -280,6 +251,6 @@ fn write_atomically(path: &Path, state: &State) -> Option<()> {
     let bytes = serde_json::to_vec_pretty(state).ok()?;
 
     // The temporary can never collide with a session's own file: it starts with a
-    // dot and ends in `.tmp`, and [`file_name`] admits neither.
+    // dot and ends in `.tmp`, and [`super::checked_session_id`] admits neither.
     crate::owner_only::replace(path, &bytes, TEMPORARY_PREFIX, TEMPORARY_SUFFIX).ok()
 }

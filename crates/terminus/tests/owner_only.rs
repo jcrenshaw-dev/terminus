@@ -371,7 +371,7 @@ fn a_data_move_writes_an_owner_only_tree_however_wide_the_source_was() {
 }
 
 /// The session one payload names, long enough and plain enough to be allowed to
-/// name a file (`inject::state`'s allow-list, mirrored in `inject::decision`).
+/// name a file (the one check in the `inject` module, which both writers use).
 const SESSION_ID: &str = "0e5e6a1e-9f2b-4c7a-8d31-6b4f2a9c1d55";
 
 /// One fresh ingest, one `SessionStart`, one `UserPromptSubmit`, one export,

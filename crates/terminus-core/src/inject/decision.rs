@@ -57,14 +57,6 @@ pub const DIR_NAME: &str = "decisions";
 /// evidence about neither.
 const FORMAT: u32 = 1;
 
-/// The shortest and longest a `session_id` may be and still name a file.
-///
-/// Mirrored from [`super::state`] rather than shared with it, deliberately: both
-/// turn an untrusted payload field into a file name, and the allow-list is the
-/// whole of that defence, so it is stated where it is applied.
-const MIN_NAME: usize = 8;
-const MAX_NAME: usize = 64;
-
 /// Enough to step over a name a same-millisecond sibling already took. Past
 /// that, something is wrong with the directory rather than with the name.
 const ATTEMPTS: u32 = 64;
@@ -314,7 +306,7 @@ fn write_file(dir: &Path, decision: &Decision) -> Option<PathBuf> {
     // id arrives on an untrusted payload and becomes part of a file name, so a
     // value carrying a separator, a `..` or a NUL must reach no `create_dir_all`
     // and no `join` at all.
-    let stem = file_stem(decision.session_id.as_deref()?)?;
+    let stem = super::checked_session_id(decision.session_id.as_deref()?)?;
     // `decisions/` alone: [`Decision::save`] refuses a data directory that does
     // not exist, so the parent is never this call's to create and the
     // leaf is the only thing here to narrow.
@@ -322,7 +314,7 @@ fn write_file(dir: &Path, decision: &Decision) -> Option<PathBuf> {
     let bytes = serde_json::to_vec(decision).ok()?;
 
     // The temporary can never collide with a record's own name: it starts with a
-    // dot and ends in `.tmp`, and [`file_stem`] admits neither. It holds the
+    // dot and ends in `.tmp`, and [`super::checked_session_id`] admits neither. It holds the
     // whole record - the prompt's spellings, the candidates and what was
     // injected - under its own name for the length of the write, so it is
     // 0600 from the create.
@@ -361,21 +353,6 @@ fn write_file(dir: &Path, decision: &Decision) -> Option<PathBuf> {
     }
     let _ = std::fs::remove_file(&temporary);
     None
-}
-
-/// The part of a file name a `session_id` may contribute, when it is one.
-///
-/// ASCII hex digits and dashes at a plausible uuid length, and nothing else: an
-/// allow-list rather than a scan for dangerous spellings, because the list of
-/// dangerous spellings is per-platform and open-ended (`..`, `/`, `\`, `:`, a
-/// NUL, a trailing dot, `CON`) while the list of characters a session id is made
-/// of is closed.
-fn file_stem(session_id: &str) -> Option<String> {
-    let plausible = (MIN_NAME..=MAX_NAME).contains(&session_id.len());
-    let shaped = session_id
-        .bytes()
-        .all(|b| b.is_ascii_hexdigit() || b == b'-');
-    (plausible && shaped).then(|| session_id.to_owned())
 }
 
 #[cfg(test)]
@@ -475,7 +452,7 @@ mod tests {
             "0e5e6a1e\0truncated-here-0000000000",
             "0e5e6a1e:9f2b:4c7a:8d31:6b4f2a9c1d55",
             "short",
-            &"f".repeat(MAX_NAME + 1),
+            &"f".repeat(crate::inject::MAX_NAME + 1),
         ] {
             let decision = Decision::opened(Some(hostile), Some("/code/verbatim"), "hello");
             assert!(
