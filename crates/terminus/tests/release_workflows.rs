@@ -7,20 +7,20 @@ use std::path::Path;
 /// private key.
 const FORBIDDEN: [&str; 4] = ["secrets.", "secrets[", "-Y sign", "PRIVATE KEY"];
 
-/// The lines that may read a secret, and the one workflow they may sit in:
-/// the API key the review hands to Claude, and the review app's key, which
-/// posts the security-review check and signs nothing. The whole line has to
-/// match, so a secret whose name only starts with one of these is still
-/// refused.
-const REVIEW_KEY_LINES: [&str; 2] = [
-    "ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}",
-    "private-key: ${{ secrets.SENTINEL_APP_PRIVATE_KEY }}",
+/// The lines that may read a secret, each with the workflow it may sit in:
+/// the API key the review hands to Claude in `fast.yml`, and the review app's
+/// key, which posts the security-review check and signs nothing, in
+/// `fast.yml` and `review-mark.yml`. The whole line has to match, so a secret
+/// whose name only starts with one of these is still refused.
+const REVIEW_KEY_LINES: [(&str, &str); 3] = [
+    ("fast.yml", "ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}"),
+    ("fast.yml", "private-key: ${{ secrets.SENTINEL_APP_PRIVATE_KEY }}"),
+    ("review-mark.yml", "private-key: ${{ secrets.SENTINEL_APP_PRIVATE_KEY }}"),
 ];
-const REVIEW_WORKFLOW: &str = "fast.yml";
 
 /// What one line of a workflow holds that it must not.
 fn forbidden_in(workflow: &str, line: &str) -> Vec<&'static str> {
-    if workflow == REVIEW_WORKFLOW && REVIEW_KEY_LINES.contains(&line.trim()) {
+    if REVIEW_KEY_LINES.contains(&(workflow, line.trim())) {
         return Vec::new();
     }
     FORBIDDEN.into_iter().filter(|needle| line.contains(needle)).collect()
@@ -28,7 +28,8 @@ fn forbidden_in(workflow: &str, line: &str) -> Vec<&'static str> {
 
 /// CI never holds the release key. The draft is made with the job's
 /// `github.token`, and the only secrets any workflow reads are the API key
-/// and the review app's key in `fast.yml`'s review jobs, which sign nothing. A
+/// and the review app's key in `fast.yml` and `review-mark.yml`, which sign
+/// nothing. A
 /// workflow that signs anything means the key has moved off the owner's
 /// machine. An empty folder fails too, so a moved one cannot pass by reading
 /// nothing.
@@ -59,16 +60,18 @@ fn workflows_read_only_the_review_keys_and_never_sign() {
     assert!(found.is_empty(), "{}", found.join("\n"));
 }
 
-/// The review-key lines pass only whole and only in `fast.yml`. A secret
-/// whose name starts with a review key's name is a different secret, and a
-/// review key under another name is a second place it can leak from.
+/// The review-key lines pass only whole and only in their own workflow. A
+/// secret whose name starts with a review key's name is a different secret,
+/// and a review key under another name is a second place it can leak from.
 #[test]
 fn only_the_whole_review_key_lines_pass() {
-    for allowed in [
-        "          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}",
-        "          private-key: ${{ secrets.SENTINEL_APP_PRIVATE_KEY }}",
-    ] {
-        assert!(forbidden_in("fast.yml", allowed).is_empty(), "{allowed}");
+    let api_key = "          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}";
+    let app_key = "          private-key: ${{ secrets.SENTINEL_APP_PRIVATE_KEY }}";
+    assert!(forbidden_in("fast.yml", api_key).is_empty());
+    assert!(forbidden_in("fast.yml", app_key).is_empty());
+    assert!(forbidden_in("review-mark.yml", app_key).is_empty());
+    assert_eq!(forbidden_in("review-mark.yml", api_key), ["secrets."]);
+    for allowed in [api_key, app_key] {
         assert_eq!(forbidden_in("release.yml", allowed), ["secrets."], "{allowed}");
     }
     for line in [
