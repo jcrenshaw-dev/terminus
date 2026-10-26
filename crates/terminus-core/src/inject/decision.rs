@@ -321,7 +321,16 @@ fn write_file(dir: &Path, decision: &Decision) -> Option<PathBuf> {
     crate::owner_only::create_dir_all(dir).ok()?;
     let bytes = serde_json::to_vec(decision).ok()?;
 
-    let (temporary, mut file) = create_temporary(dir)?;
+    // The temporary can never collide with a record's own name: it starts with a
+    // dot and ends in `.tmp`, and [`file_stem`] admits neither. It holds the
+    // whole record - the prompt's spellings, the candidates and what was
+    // injected - under its own name for the length of the write, so it is
+    // 0600 from the create.
+    let pid = std::process::id();
+    let (temporary, mut file) = crate::owner_only::create_temporary(dir, ATTEMPTS, |n| {
+        format!("{TEMPORARY_PREFIX}{pid}-{n}{TEMPORARY_SUFFIX}")
+    })
+    .ok()?;
     let written = file.write_all(&bytes).and_then(|()| file.flush());
     // Closed before the rename. Nothing needs that order, and keeping it costs
     // nothing.
@@ -332,34 +341,23 @@ fn write_file(dir: &Path, decision: &Decision) -> Option<PathBuf> {
     }
 
     // One session submits many prompts, so the name has to be unique per EVENT
-    // and not per session. The target is reserved with `create_new` rather than
-    // probed with `exists`, so two prompts of one session landing in the same
+    // and not per session. The target is reserved exclusively rather than probed
+    // with `exists`, so two prompts of one session landing in the same
     // millisecond cannot both pick the same name and lose one record. The
     // reservation carries 0600 as well, because the rename below replaces the
     // file it reserved and a reservation left behind on a failed rename would
     // otherwise be a wide empty file in the data directory.
     let stamp = decision.at_ms;
-    let pid = std::process::id();
-    for attempt in 0..ATTEMPTS {
-        let target = dir.join(format!("{stem}-{pid}-{stamp}-{attempt}.json"));
-        match crate::owner_only::options()
-            .write(true)
-            .create_new(true)
-            .open(&target)
-        {
-            Ok(reserved) => {
-                drop(reserved);
-                if std::fs::rename(&temporary, &target).is_ok() {
-                    return Some(target);
-                }
-                // The reservation is ours and holds nothing; leaving it would
-                // give the drain an empty file to report as malformed.
-                let _ = std::fs::remove_file(&target);
-                break;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(_) => break,
+    if let Ok((target, reserved)) = crate::owner_only::create_temporary(dir, ATTEMPTS, |n| {
+        format!("{stem}-{pid}-{stamp}-{n}.json")
+    }) {
+        drop(reserved);
+        if std::fs::rename(&temporary, &target).is_ok() {
+            return Some(target);
         }
+        // The reservation is ours and holds nothing; leaving it would give the
+        // drain an empty file to report as malformed.
+        let _ = std::fs::remove_file(&target);
     }
     let _ = std::fs::remove_file(&temporary);
     None
@@ -378,39 +376,6 @@ fn file_stem(session_id: &str) -> Option<String> {
         .bytes()
         .all(|b| b.is_ascii_hexdigit() || b == b'-');
     (plausible && shaped).then(|| session_id.to_owned())
-}
-
-/// A new file in `dir`, created exclusively.
-///
-/// `create_new` and not `File::create`: `O_EXCL` fails on anything already at
-/// the name rather than following it and truncating it, so a stale symlink left
-/// by a killed run cannot turn this write into a truncation of whatever it
-/// points at.
-///
-/// The name can never collide with a record's own: it starts with a dot and ends
-/// in `.tmp`, and [`file_stem`] admits neither character.
-///
-/// Owner-only from the moment it exists. The temporary holds the whole record -
-/// the prompt's spellings, the candidates and what was injected - under its own
-/// name for the length of the write, so the mode has to ride the create rather
-/// than follow the bytes.
-fn create_temporary(dir: &Path) -> Option<(PathBuf, std::fs::File)> {
-    let pid = std::process::id();
-    for attempt in 0..ATTEMPTS {
-        let path = dir.join(format!(
-            "{TEMPORARY_PREFIX}{pid}-{attempt}{TEMPORARY_SUFFIX}"
-        ));
-        match crate::owner_only::options()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-        {
-            Ok(file) => return Some((path, file)),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(_) => return None,
-        }
-    }
-    None
 }
 
 #[cfg(test)]

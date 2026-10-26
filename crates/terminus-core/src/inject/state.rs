@@ -30,7 +30,6 @@
 //! something twice, and the worst an error could do is inject nothing ever
 //! again.
 
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -251,24 +250,17 @@ fn file_name(session_id: &str) -> Option<String> {
     (plausible && shaped).then(|| format!("{session_id}.json"))
 }
 
-/// Write `state` to `path` through a temporary in the same directory.
+/// Write `state` to `path`, replacing it whole.
 ///
-/// The same shape `crates/terminus/src/cmd/install/json_file.rs` writes
-/// settings with, and for the same reason: a kill between the `open` and the
-/// last byte must not leave a half-written document where the next prompt
-/// expects one. A rename within a directory is atomic, so a reader sees the old
-/// file or the new one and never a prefix of either.
+/// This runs on the hook's abandoned thread: the injection runs on a thread the
+/// binary never joins and process exit takes it wherever it got to, so a write
+/// cut off at the deadline leaves the target holding its previous content and at
+/// worst a `.inject-*.tmp` beside it - never a document the next prompt reads
+/// half of.
 ///
-/// The same property is what makes this safe on the hook's abandoned thread:
-/// the injection runs on a thread the binary never joins and process exit takes
-/// it wherever it got to, so a write cut off at the deadline leaves the
-/// target holding its previous content and at worst a `.inject-*.tmp` beside
-/// it - never a document the next prompt reads half of.
-///
-/// No `fsync`. The rename is what buys the atomicity a reader cares about;
-/// `fsync` would only add durability across a power cut, and this is
-/// per-session scratch whose loss costs one repeated injection - paid for with
-/// a disk flush on the path where the user is waiting.
+/// No `fsync`, which is right for per-session scratch whose loss costs one
+/// repeated injection, paid for otherwise with a disk flush on the path where
+/// the user is waiting.
 ///
 /// Pretty-printed, because a person reads suppression reasons out of this file
 /// and the whole document is a few hundred bytes.
@@ -287,57 +279,7 @@ fn write_atomically(path: &Path, state: &State) -> Option<()> {
     crate::owner_only::create_dir_all(dir).ok()?;
     let bytes = serde_json::to_vec_pretty(state).ok()?;
 
-    let (temporary, mut file) = create_temporary(dir)?;
-    let written = file.write_all(&bytes).and_then(|()| file.flush());
-    // Closed before the rename, not after. Nothing needs that order, and
-    // keeping it costs nothing.
-    drop(file);
-
-    let outcome = written.and_then(|()| std::fs::rename(&temporary, path));
-    if outcome.is_err() {
-        // A refusal that left a stray file in the data directory would be its
-        // own small mess, and this one would accumulate one per prompt.
-        let _ = std::fs::remove_file(&temporary);
-        return None;
-    }
-    Some(())
-}
-
-/// A new file in `dir`, created exclusively.
-///
-/// `create_new` and not `File::create`: `O_EXCL` fails on anything already at
-/// the name rather than following it and truncating it, so a stale symlink left
-/// by a killed run cannot turn this write into a truncation of whatever it
-/// points at - and the rename that follows would move the link rather than the
-/// file.
-///
-/// The name can never collide with a session's own file: it starts with a dot
-/// and ends in `.tmp`, and [`file_name`] admits neither.
-///
-/// Owner-only from the moment it exists. The temporary holds the same document
-/// the target does: the turn ids injected and briefed, the suppressions and the
-/// compaction flag, a record of what this person's sessions were given. It is
-/// on disk under its own name for the length of the write, so a mode applied
-/// after the fact would cover the target and miss the bytes.
-fn create_temporary(dir: &Path) -> Option<(PathBuf, std::fs::File)> {
-    /// Enough to step over a stale name or two. Past that, something is wrong
-    /// with the directory rather than with the name.
-    const ATTEMPTS: u32 = 64;
-
-    let pid = std::process::id();
-    for attempt in 0..ATTEMPTS {
-        let path = dir.join(format!(
-            "{TEMPORARY_PREFIX}{pid}-{attempt}{TEMPORARY_SUFFIX}"
-        ));
-        match crate::owner_only::options()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-        {
-            Ok(file) => return Some((path, file)),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(_) => return None,
-        }
-    }
-    None
+    // The temporary can never collide with a session's own file: it starts with a
+    // dot and ends in `.tmp`, and [`file_name`] admits neither.
+    crate::owner_only::replace(path, &bytes, TEMPORARY_PREFIX, TEMPORARY_SUFFIX).ok()
 }
