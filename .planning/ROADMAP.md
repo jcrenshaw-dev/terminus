@@ -13,7 +13,7 @@ mule takes the bugs open at 1.0.0 and the cleanup the 2026-10-22 simplify review
 - [x] **Phase 5: One ingest pass** - one pass driver, and recovery notes no longer read as errors
 - [x] **Phase 6: Archive** - continuation links, retention's delete, and the observations query
 - [x] **Phase 7: Owner-only files and signing** - one owner-only helper set, and a signer that runs no installer code
-- [ ] **Phase 8: Output** - escaped text, `--json` failure documents, an honest purge size and cut mark
+- [x] **Phase 8: Output** - escaped text, `--json` failure documents, an honest purge size and cut mark
 
 ## Phase Details
 
@@ -94,4 +94,4 @@ mule takes the bugs open at 1.0.0 and the cleanup the 2026-10-22 simplify review
 2. `compact`, `reindex`, `observations regenerate`, `stats` and `replay`, made to fail under `--json`, each print a document with `ok: false`, and `read::unusable` no longer exists
 3. The install estimate and `status` print the same size in the same unit
 4. The size `uninstall --purge` shows before it asks includes `snapshots/`
-5. A prompt-line share of 1 to 3 characters shows a cut mark rather than a bare fragment
+5. A prompt-line share of 1 to 3 characters shows a cut mark rather than a bare fragment, or leaves the turn out when the budget cannot hold the mark
