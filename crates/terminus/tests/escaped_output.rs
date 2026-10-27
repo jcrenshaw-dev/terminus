@@ -267,3 +267,49 @@ fn sessions_json_carries_the_raw_bytes_the_human_output_escapes() {
         .any(|v| v.contains('\u{1b}') && v.contains('\u{07}'));
     assert!(planted, "no value decodes to a string holding ESC and BEL: {text}");
 }
+
+#[test]
+fn doctor_escapes_the_last_run_in_its_report_and_keeps_it_in_json() {
+    let bench = Bench::planted();
+    let out = bench.run(&["doctor"]);
+    assert_escaped_stdout("doctor", &out);
+
+    let out = bench.run(&["doctor", "--json"]);
+    let value: Value = serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|e| panic!("doctor --json is not a document ({e}): {}", stdout(&out)));
+    let last_run = &value["data"]["last_run"];
+    let finding = last_run["finding"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no last_run finding: {value}"));
+    assert!(
+        finding.contains('\u{1b}') && finding.contains('\u{07}'),
+        "the finding was escaped on its way into the document: {finding:?}"
+    );
+}
+
+#[test]
+fn show_writes_the_record_body_raw_under_an_escaped_header() {
+    let bench = Bench::planted();
+    let id: i64 = bench
+        .conn()
+        .query_row("SELECT id FROM turns WHERE turn_seq = 1", [], |r| r.get(0))
+        .unwrap();
+    let out = bench.run(&["show", &id.to_string(), "--project", "*", "--before", "1"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(
+        holds(&out.stdout, &[b't', b'a', b'i', b'l', 0x7F, 0xC2, 0x9B, b'e']),
+        "the body was not written raw: {:?}",
+        stdout(&out)
+    );
+    let header = out.stdout.split(|b| *b == b'\n').next().unwrap();
+    assert!(
+        !drives_a_terminal(header),
+        "the header wrote ESC or BEL: {:?}",
+        String::from_utf8_lossy(header)
+    );
+    let header = String::from_utf8_lossy(header);
+    assert!(
+        header.contains("\\u001b") && header.contains("\\u0007"),
+        "the header does not show the escapes: {header}"
+    );
+}

@@ -28,7 +28,6 @@ use terminus_core::recall::{search, Filters, Query, Request, MAX_RESULTS};
 use super::json::Document;
 use super::read::{self, Opened};
 use super::Failure;
-use crate::escape;
 
 /// The command name, which is also what the `--json` envelope reports.
 const COMMAND: &str = "search";
@@ -120,18 +119,18 @@ pub fn run(args: Args) -> Result<(), Failure> {
         // takes, and following a hit into the conversation around it is what
         // the next command a reader runs does.
         //
-        // Everything archived on these two lines goes through `escape`, after
-        // the day cut and after core's excerpt cut, so an excerpt holding a
-        // control prints longer than `EXCERPT_CHARS`.
+        // Everything archived on these two lines goes out through the default
+        // escape in `out.rs`, after the day cut and after core's excerpt cut,
+        // so an excerpt holding a control prints longer than `EXCERPT_CHARS`.
         outln!(
             "{}  {}  {}  {}{}",
             hit.turn_id,
-            escape::controls(day(hit.ts.as_deref())),
-            escape::controls(session_of(&hit.session_key)),
-            escape::controls(hit.project.as_deref().unwrap_or("(no project)")),
+            day(hit.ts.as_deref()),
+            session_of(&hit.session_key),
+            hit.project.as_deref().unwrap_or("(no project)"),
             if hit.sidechain { "  (subagent)" } else { "" },
         );
-        outln!("    {}", escape::controls(&hit.excerpt));
+        outln!("    {}", hit.excerpt);
     }
 
     // Commentary on stderr, so stdout stays the hits and nothing else. It is

@@ -1274,9 +1274,9 @@ fn report(checks: &[Check]) -> String {
 /// the checks earned still stands - a problem found and not printed is still a
 /// problem - so the pipe error is dropped and the exit code is left to `run`.
 fn write_out(text: &str) -> Result<(), Failure> {
-    use std::io::Write;
-    let mut out = std::io::stdout().lock();
-    match out.write_all(text.as_bytes()).and_then(|()| out.flush()) {
+    // The whole rendered report goes through the escaping write (#72), never
+    // `Check.finding`, which `doctor --json` carries byte for byte.
+    match crate::out::try_write(format_args!("{text}")) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
         Err(e) => Err(Failure::Operational(format!(

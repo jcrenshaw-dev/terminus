@@ -22,10 +22,11 @@
 //!
 //! **The header and the window are escaped, the body is not.** The header's
 //! time, file name and project and every window line are archived text, and
-//! they go through [`crate::escape`] so a control in them cannot drive the
-//! terminal, with or without `--raw`. The body stays the archived line: JSON
-//! already spells every C0 control as `\u00XX`, and escaping the DEL and C1 it
-//! can still carry would end this as the way back to the record's own bytes.
+//! they go out through the default escape in `out.rs` (#72) so a control in
+//! them cannot drive the terminal, with or without `--raw`. The body goes out
+//! through the raw byte write and stays the archived line: JSON already spells
+//! every C0 control as `\u00XX`, and escaping the DEL and C1 it can still carry
+//! would end this as the way back to the record's own bytes.
 //!
 //! **The window stops at the session** and says which end it stopped at,
 //! rather than just returning a shorter list. A caller that cannot tell "there
@@ -33,14 +34,12 @@
 //! whether to look in the session this one continues from - which is returned,
 //! unfollowed, for exactly that decision.
 
-use std::io::Write;
-
 use terminus_core::recall::{context, get, ContextTurn, Window};
 
 use super::json::Document;
 use super::read::{self, Opened};
 use super::Failure;
-use crate::escape;
+use crate::out;
 
 const COMMAND: &str = "show";
 
@@ -101,78 +100,74 @@ pub fn run(args: Args) -> Result<(), Failure> {
 }
 
 /// The human rendering: a header a reader can scan, then the bytes themselves.
+///
+/// Every line but the body is written through the escaping path, and each write
+/// returns its failure, so `run` decides what a closed stdout means.
 fn render(fetched: &get::Fetched, windows: &[Option<Window>]) -> std::io::Result<()> {
-    let mut out = std::io::stdout().lock();
     for (index, record) in fetched.records.iter().enumerate() {
-        let header = format!(
-            "{}  {}  {}  {}{}",
+        out::try_write(format_args!(
+            "{}  {}  {}  {}{}\n",
             record.turn_id,
-            escape::controls(record.ts.as_deref().unwrap_or("(no time)")),
-            escape::controls(file_name(&record.session_key)),
-            escape::controls(record.project.as_deref().unwrap_or("(no project)")),
+            record.ts.as_deref().unwrap_or("(no time)"),
+            file_name(&record.session_key),
+            record.project.as_deref().unwrap_or("(no project)"),
             if record.body_evicted {
                 "  (body evicted)"
             } else {
                 ""
             },
-        );
-        writeln!(out, "{header}")?;
+        ))?;
 
         match &record.body {
             // Written as bytes: this is the command that answers "what exactly
             // was said", and a lossy conversion would answer something else.
             Some(bytes) => {
-                out.write_all(bytes)?;
-                writeln!(out)?;
+                out::try_write_raw(bytes)?;
+                out::try_write_raw(b"\n")?;
             }
             // Evicted is said in the header; a body that would not read at all
             // is archive damage, which `terminus verify` is the command for.
             None if !record.body_evicted => {
-                writeln!(
-                    out,
-                    "(the archive would not give this record up; run `terminus verify`)"
-                )?;
+                out::try_write(format_args!(
+                    "(the archive would not give this record up; run `terminus verify`)\n"
+                ))?;
             }
             None => {}
         }
 
         if let Some(window) = windows.get(index).and_then(Option::as_ref) {
-            render_window(&mut out, window)?;
+            render_window(window)?;
         }
     }
     Ok(())
 }
 
 /// The conversation around one turn, in `turn_seq` order with its ends marked.
-fn render_window(out: &mut impl Write, window: &Window) -> std::io::Result<()> {
+fn render_window(window: &Window) -> std::io::Result<()> {
     if let Some(reason) = &window.reason {
-        writeln!(out, "  (no context: {reason})")?;
-        return Ok(());
+        return out::try_write(format_args!("  (no context: {reason})\n"));
     }
     if window.at_session_start {
-        writeln!(out, "  --- start of session ---")?;
+        out::try_write(format_args!("  --- start of session ---\n"))?;
     }
     for turn in &window.turns {
-        writeln!(
-            out,
-            "  {} {}  {}  {}",
+        out::try_write(format_args!(
+            "  {} {}  {}  {}\n",
             if turn.is_anchor { '>' } else { ' ' },
             turn.turn_seq,
-            escape::controls(&label(turn)),
-            escape::controls(&turn.text)
-        )?;
+            label(turn),
+            turn.text
+        ))?;
     }
     if window.at_session_end {
-        writeln!(out, "  --- end of session ---")?;
+        out::try_write(format_args!("  --- end of session ---\n"))?;
     }
     // Returned and NOT followed. A caller that wants the turns before
     // this file's first one resolves this itself and runs a second `show`.
     if let Some(previous) = &window.continues_from {
-        writeln!(
-            out,
-            "  (this session continues from {})",
-            escape::controls(previous)
-        )?;
+        out::try_write(format_args!(
+            "  (this session continues from {previous})\n"
+        ))?;
     }
     Ok(())
 }

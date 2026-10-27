@@ -27,7 +27,6 @@ use terminus_core::Store;
 use super::json::Document;
 use super::read::{self, Opened};
 use super::Failure;
-use crate::escape;
 
 /// The command name, which is also what the `--json` envelope reports.
 const COMMAND: &str = "observations";
@@ -224,10 +223,11 @@ impl Row {
     /// that ran no command and hit no error would otherwise be six lines of
     /// nothing between the two sessions worth reading.
     ///
-    /// Every archived string goes through [`crate::escape`]. A stored command
-    /// is only clipped, so a heredoc keeps its newlines, which print, and can
-    /// hold a CR, which prints as `\u000d` rather than overprinting the line.
-    /// The stored document keeps its controls; this is a rendering.
+    /// Every line goes out through the default escape in `out.rs` (#72). A
+    /// stored command is only clipped, so a heredoc keeps its newlines, which
+    /// print, and can hold a CR, which prints as `\u000d` rather than
+    /// overprinting the line. The stored document keeps its controls; this is a
+    /// rendering.
     fn print(&self) {
         let facts = self
             .mechanical
@@ -237,8 +237,8 @@ impl Row {
 
         outln!(
             "{}  {}  {} turn(s)  {}  {} compaction(s)",
-            escape::controls(file_name(&self.session_key)),
-            escape::controls(text(&facts["branch"]).unwrap_or("(no branch)")),
+            file_name(&self.session_key),
+            text(&facts["branch"]).unwrap_or("(no branch)"),
             number(&facts["turns"]),
             duration(facts["duration_seconds"].as_i64()),
             number(&facts["compactions"]),
@@ -253,18 +253,14 @@ impl Row {
         ] {
             let values = strings(&facts[field]);
             if !values.is_empty() {
-                outln!("  {label:<15} {}", escape::controls(&values.join(", ")));
+                outln!("  {label:<15} {}", values.join(", "));
             }
         }
         // What the row itself says was cut, so a list a cap shortened is never
         // read as the whole of what the session did.
         let cut = strings(&facts["truncated"]);
         if !cut.is_empty() {
-            outln!(
-                "  {:<15} {}",
-                "truncated",
-                escape::controls(&cut.join(", "))
-            );
+            outln!("  {:<15} {}", "truncated", cut.join(", "));
         }
     }
 }
