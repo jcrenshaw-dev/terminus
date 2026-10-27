@@ -131,7 +131,7 @@ fn clean(path: &Path, stable: &Path) -> bool {
     let document = match Document::read(path) {
         Ok(document) => document,
         Err(failure) => {
-            outln!("    left alone: {}", detail(failure));
+            outln!("    left alone: {}", failure.text());
             return false;
         }
     };
@@ -154,7 +154,7 @@ fn clean(path: &Path, stable: &Path) -> bool {
     let before = backup.as_ref().map(Document::value);
     let edit = |root: &mut Json| strip_hooks(root, &stable, before, &removed);
     if let Err(failure) = document.apply(&edit) {
-        outln!("    left alone: {}", detail(failure));
+        outln!("    left alone: {}", failure.text());
         return false;
     }
     let Some(count) = std::num::NonZeroUsize::new(removed.get()) else {
@@ -199,7 +199,7 @@ fn restore(path: &Path, backup_path: Option<&Path>, backup: Option<Document>) ->
             outln!(
                 "    backup kept at {}: {}",
                 backup_path.display(),
-                detail(failure)
+                failure.text()
             );
             return false;
         }
@@ -216,7 +216,7 @@ fn restore(path: &Path, backup_path: Option<&Path>, backup: Option<Document>) ->
         outln!(
             "    backup kept at {}: {}",
             backup_path.display(),
-            detail(failure)
+            failure.text()
         );
         return false;
     }
@@ -316,7 +316,7 @@ fn unregister(path: &Path) -> bool {
     outln!("  {}", path.display());
     let ok = match Document::read(path) {
         Err(failure) => {
-            outln!("    left alone: {}", detail(failure));
+            outln!("    left alone: {}", failure.text());
             false
         }
         Ok(document) => {
@@ -380,7 +380,7 @@ fn unplace(stable: &Path, versions: &Path) -> bool {
             true
         }
         Err(failure) => {
-            outln!("    left alone: {}", detail(failure));
+            outln!("    left alone: {}", failure.text());
             false
         }
     }
@@ -531,11 +531,4 @@ fn size_bytes(data_dir: &Path) -> u64 {
         }
     }
     total
-}
-
-fn detail(failure: Failure) -> String {
-    match failure {
-        Failure::Operational(message) | Failure::Misuse(message) => message,
-        Failure::Silent => "it could not be read".to_owned(),
-    }
 }

@@ -36,7 +36,6 @@ use serde_json::{json, Map, Value};
 use terminus_core::recall::{self, context, get, search, Filters, Query, Request, Scope};
 
 use crate::cmd::read::{self, Opened, Reader};
-use crate::cmd::Failure;
 
 use super::rpc;
 
@@ -583,10 +582,7 @@ fn reader() -> Result<Box<Reader>, Refused> {
         // ingested is the ordinary starting state, and a model told "error"
         // would report a broken tool instead of an empty archive.
         Ok(Opened::Nothing(reason)) => Err(Refused::archive(reason)),
-        Err(Failure::Operational(message) | Failure::Misuse(message)) => {
-            Err(Refused::archive(message))
-        }
-        Err(Failure::Silent) => Err(Refused::archive("the store could not be read")),
+        Err(failure) => Err(Refused::archive(failure.text())),
     }
 }
 

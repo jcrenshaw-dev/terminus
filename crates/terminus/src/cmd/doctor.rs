@@ -250,7 +250,7 @@ impl Doctor {
                 // Every check still reports, as `unknown`: one run's document
                 // carries the same keys as any other's, so a caller reads a
                 // state rather than a missing key.
-                let why = detail(failure);
+                let why = failure.text();
                 self.push(Check::new(
                     "binary",
                     State::Unknown,
@@ -279,7 +279,7 @@ impl Doctor {
                 format!(
                     "{} could not be read: {}",
                     stable.display(),
-                    detail(failure)
+                    failure.text()
                 ),
             )
             .with_fix(self.install_command()),
@@ -354,7 +354,7 @@ impl Doctor {
         let path = match targets::settings_path() {
             Ok(path) => path,
             Err(failure) => {
-                let why = detail(failure);
+                let why = failure.text();
                 self.push(Check::new(
                     "settings_file",
                     State::Unknown,
@@ -369,7 +369,7 @@ impl Doctor {
             Err(failure) => {
                 // Unreadable or not JSON. Install refuses to write a settings
                 // file it cannot read, so this is why nothing is wired up.
-                self.push(Check::new("settings_file", State::Problem, detail(failure)));
+                self.push(Check::new("settings_file", State::Problem, failure.text()));
                 self.unknown_hooks("the settings file could not be read");
                 return;
             }
@@ -491,7 +491,7 @@ impl Doctor {
         let path = match targets::claude_json_path() {
             Ok(path) => path,
             Err(failure) => {
-                let why = detail(failure);
+                let why = failure.text();
                 self.push(Check::new(
                     "mcp_server",
                     State::Unknown,
@@ -503,7 +503,7 @@ impl Doctor {
         let document = match Document::read(&path) {
             Ok(document) => document,
             Err(failure) => {
-                self.push(Check::new("mcp_server", State::Problem, detail(failure)));
+                self.push(Check::new("mcp_server", State::Problem, failure.text()));
                 return;
             }
         };
@@ -674,7 +674,7 @@ impl Doctor {
         let data_dir = match crate::cmd::data_dir() {
             Ok(dir) => dir,
             Err(failure) => {
-                let why = detail(failure);
+                let why = failure.text();
                 self.push(Check::new(
                     "data_directory",
                     State::Problem,
@@ -792,7 +792,7 @@ impl Doctor {
                 return;
             }
             Err(failure) => {
-                self.push(Check::new("store", State::Problem, detail(failure)));
+                self.push(Check::new("store", State::Problem, failure.text()));
                 self.unknown("last_run", "the store could not be opened");
                 return;
             }
@@ -1216,14 +1216,6 @@ fn precedes(version: &str, floor: &str) -> bool {
 /// The `rm -f` command that removes a file.
 fn removal(path: &Path) -> String {
     format!("rm -f '{}'", path.display())
-}
-
-/// A failure's own words, for a check that reports it rather than raising it.
-fn detail(failure: Failure) -> String {
-    match failure {
-        Failure::Operational(message) | Failure::Misuse(message) => message,
-        Failure::Silent => "no detail".to_owned(),
-    }
 }
 
 /// The whole report, as one string.

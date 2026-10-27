@@ -278,7 +278,7 @@ struct Incomplete {
 /// no `claude` at all.
 fn register(path: &Path, stable: &Path) -> Result<Registered, Incomplete> {
     let document = Document::read(path).map_err(|failure| Incomplete {
-        cause: reason(failure),
+        cause: failure.text(),
         command: targets::finishing_command(None, stable),
     })?;
     let found = document
@@ -349,7 +349,7 @@ fn start_backfill(stable: &Path, data_dir: &Path, config: &Config) -> bool {
         Err(why) => {
             outln!(
                 "  problem: the backfill could not be sized ({}).",
-                reason(why)
+                why.text()
             );
             outln!("  nothing else is affected; the next hook archives the same tree.");
             return false;
@@ -373,18 +373,10 @@ fn start_backfill(stable: &Path, data_dir: &Path, config: &Config) -> bool {
              session, and `terminus status` is where to watch it."
         ),
         Err(why) => {
-            outln!("  problem: {}", reason(why));
+            outln!("  problem: {}", why.text());
         }
     }
     false
-}
-
-/// A [`Failure`]'s text, for a line that reports rather than returns.
-fn reason(failure: Failure) -> String {
-    match failure {
-        Failure::Operational(why) | Failure::Misuse(why) => why,
-        Failure::Silent => "no reason was recorded".to_owned(),
-    }
 }
 
 /// The advisories install gives and the settings it never changes.

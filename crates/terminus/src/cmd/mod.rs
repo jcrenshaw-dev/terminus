@@ -77,6 +77,21 @@ pub enum Failure {
     Misuse(String),
 }
 
+impl Failure {
+    /// The failure's own words, for a line that reports it rather than
+    /// returns it (#107).
+    ///
+    /// `Silent` has no message because the command already wrote its account;
+    /// no caller that reports a failure this way is fed one, so the wording is
+    /// the fallback a future caller would print.
+    pub fn text(self) -> String {
+        match self {
+            Failure::Operational(message) | Failure::Misuse(message) => message,
+            Failure::Silent => "no reason was recorded".to_owned(),
+        }
+    }
+}
+
 impl From<terminus_core::Error> for Failure {
     fn from(error: terminus_core::Error) -> Self {
         Failure::Operational(error.to_string())
