@@ -280,25 +280,63 @@ fn render(hits: &[Hit], budget: usize, decision: &mut Decision) -> Option<String
     let room = budget.saturating_sub(super::frame_cost(DESCRIPTION));
     let empty: Vec<String> = hits.iter().map(|_| String::new()).collect();
     let bare = super::chars(&assemble(hits, &empty));
-    let share = room.saturating_sub(bare) / hits.len();
 
-    let texts: Vec<String> = hits
+    // A share smaller than the text and no larger than the mark cannot hold a
+    // marked cut: `clip` would hand back a few raw characters, and a share of
+    // nothing would drop the turn. Either way the turn is shown as the mark,
+    // the rule the brief follows (#94). The mark is a fixed cost of its line,
+    // so each turn marked takes three characters off what the others share, and
+    // that can mark another: the loop runs until no turn is added. It ends,
+    // because a turn is marked at most once.
+    let excerpts: Vec<&str> = hits.iter().map(|hit| hit.excerpt.trim()).collect();
+    let mark = super::chars(excerpt::ELISION);
+    let mut marked = vec![false; hits.len()];
+    let share = loop {
+        let cut = marked.iter().filter(|cut| **cut).count();
+        let open = hits.len() - cut;
+        if open == 0 {
+            break 0;
+        }
+        let share = room.saturating_sub(bare + cut * mark) / open;
+        if share > mark {
+            break share;
+        }
+        for (cut, text) in marked.iter_mut().zip(&excerpts) {
+            *cut = *cut || super::chars(text) > share;
+        }
+        if marked.iter().filter(|cut| **cut).count() == cut {
+            break share;
+        }
+    };
+
+    let texts: Vec<String> = excerpts
         .iter()
-        .map(|hit| super::clip(hit.excerpt.trim(), share))
+        .zip(&marked)
+        .map(|(text, cut)| {
+            if *cut {
+                excerpt::ELISION.to_owned()
+            } else {
+                super::clip(text, share)
+            }
+        })
         .collect();
 
     // The backstop clip inside `frame` cuts the lines and never the frame: it
-    // fires when the ids and dates alone are over what the frame left, which
-    // no cut to the quoted turns can fix. No frame, no injection, and nothing
-    // recorded as given.
+    // fires when the ids, the dates and the marks alone are over what the frame
+    // left, which no cut to the quoted turns can fix. No frame, no injection,
+    // and nothing recorded as given.
     let text = super::frame(DESCRIPTION, &assemble(hits, &texts), budget)?;
 
     // Per turn, the text that turn contributed - not its share of the total.
-    // The frame and the ids are the injection's and belong to no turn.
+    // The frame and the ids are the injection's and belong to no turn. A turn
+    // shown as the mark alone is not here: the model was not shown it, and a
+    // later prompt must still be free to quote it.
     decision.injected = hits
         .iter()
         .zip(&texts)
-        .map(|(hit, text)| Injected {
+        .zip(&marked)
+        .filter(|(_, cut)| !**cut)
+        .map(|((hit, text), _)| Injected {
             turn_id: hit.turn_id,
             chars: super::chars(text),
         })
@@ -1022,6 +1060,138 @@ mod tests {
             ids(&capped(admitted, &BTreeSet::new(), MAX_TURNS)),
             vec![1, 2, 3]
         );
+    }
+
+    /// One hit whose excerpt is `text`.
+    fn said(turn_id: i64, text: &str) -> Hit {
+        Hit {
+            excerpt: text.into(),
+            ..hit(turn_id, 1)
+        }
+    }
+
+    /// The budget at which [`render`] leaves `spare` characters for the texts:
+    /// the frame, then the lines with nothing in them, then `spare`. Built from
+    /// the pieces `render` measures, so a share is a number a test can choose.
+    fn budget_for(hits: &[Hit], spare: usize) -> usize {
+        let empty: Vec<String> = hits.iter().map(|_| String::new()).collect();
+        super::super::frame_cost(DESCRIPTION) + super::super::chars(&assemble(hits, &empty)) + spare
+    }
+
+    /// What `render` emits at `budget`, and the text it put on each turn's line.
+    fn rendered(hits: &[Hit], budget: usize) -> (String, Vec<String>, Decision) {
+        let mut decision = Decision::opened(None, None, "");
+        let text = render(hits, budget, &mut decision).expect("the frame fits");
+        let lines = text
+            .lines()
+            .filter(|line| line.starts_with("- turn "))
+            .map(|line| {
+                line.split_once(": ")
+                    .map_or("", |(_, text)| text)
+                    .to_owned()
+            })
+            .collect();
+        (text, lines, decision)
+    }
+
+    /// A longer excerpt with a share of 3 or less is the mark alone (#94). The
+    /// share here is just what is spared per turn, so the mark fits it exactly.
+    #[test]
+    fn a_cut_the_share_cannot_hold_is_shown_as_the_mark() {
+        let hits = [said(1, "abcdefgh")];
+        let (_, lines, decision) = rendered(&hits, budget_for(&hits, 3));
+        assert_eq!(lines, vec!["..."]);
+        assert!(decision.injected.is_empty(), "a mark alone was recorded");
+
+        // Several turns, each sharing 3.
+        let hits = [
+            said(1, "abcdefgh"),
+            said(2, "ijklmnop"),
+            said(3, "qrstuvwx"),
+        ];
+        let (_, lines, decision) = rendered(&hits, budget_for(&hits, 9));
+        assert_eq!(lines, vec!["...", "...", "..."]);
+        assert!(decision.injected.is_empty());
+    }
+
+    /// A share of 0 to 2 beside a turn that needs nothing: the long one is the
+    /// mark, the short one is what it is, and the sum fits.
+    #[test]
+    fn a_mark_takes_its_three_characters_from_the_turns_beside_it() {
+        // Spare 4 over two turns is a share of 2; the mark leaves 1 for the
+        // empty one.
+        let hits = [said(1, "abcdefgh"), said(2, "")];
+        let (text, lines, decision) = rendered(&hits, budget_for(&hits, 4));
+        assert_eq!(lines, vec!["...", ""]);
+        assert_eq!(text.chars().count(), budget_for(&hits, 3));
+        assert_eq!(
+            decision
+                .injected
+                .iter()
+                .map(|i| i.turn_id)
+                .collect::<Vec<_>>(),
+            vec![2]
+        );
+
+        // A turn that fit the first share and no longer fits what the mark
+        // leaves is marked too. Two marks do not fit 4 spare characters, and
+        // the backstop cuts the last line, never the first.
+        let hits = [said(1, "abcdefgh"), said(2, "ab")];
+        let (_, lines, _) = rendered(&hits, budget_for(&hits, 5));
+        assert_eq!(lines, vec!["...", "ab"]);
+        let (text, lines, _) = rendered(&hits, budget_for(&hits, 4));
+        assert_eq!(lines[0], "...");
+        assert_eq!(text.chars().count(), budget_for(&hits, 4));
+    }
+
+    /// An excerpt that fits its share whole prints as it is, at every share a
+    /// mark would otherwise be wanted, and the empty one is one of them.
+    #[test]
+    fn an_excerpt_that_fits_its_share_prints_whole() {
+        for (text, share) in [("", 0), ("a", 1), ("ab", 2), ("abc", 3), ("abcd", 4)] {
+            let hits = [said(1, text)];
+            let (_, lines, decision) = rendered(&hits, budget_for(&hits, share));
+            assert_eq!(lines, vec![text], "share {share}");
+            assert_eq!(decision.injected.len(), 1, "share {share}");
+        }
+    }
+
+    /// From a share of 4 the cut is `clip`'s marked cut, and the turn is
+    /// remembered.
+    #[test]
+    fn a_share_of_four_is_cut_with_the_mark_as_before() {
+        let hits = [said(1, "abcdefgh")];
+        let (_, lines, decision) = rendered(&hits, budget_for(&hits, 4));
+        assert_eq!(lines, vec!["a..."]);
+        assert_eq!(decision.injected.len(), 1);
+    }
+
+    /// At every budget from the frame's cost to the whole injection, whatever
+    /// the mix of long, short and empty turns, the text is within the budget.
+    #[test]
+    fn the_text_never_exceeds_the_budget_at_any_budget() {
+        let mixes = [
+            vec![
+                said(1, "abcdefghijkl"),
+                said(2, "abcdefghijkl"),
+                said(3, "abcdefghijkl"),
+            ],
+            vec![said(1, "abcdefghijkl"), said(2, ""), said(3, "ab")],
+            vec![said(1, "abc"), said(2, "abcdefghijkl")],
+            vec![said(1, "abcdefghijkl")],
+        ];
+        for hits in &mixes {
+            let frame = super::super::frame_cost(DESCRIPTION);
+            let full = budget_for(hits, 12 * hits.len());
+            for budget in frame + 1..=full {
+                let (text, _, _) = rendered(hits, budget);
+                assert!(
+                    text.chars().count() <= budget,
+                    "{} characters against a budget of {budget}: {text}",
+                    text.chars().count()
+                );
+            }
+        }
     }
 
     /// The record's copy comes off the value in force, never off the constants.
