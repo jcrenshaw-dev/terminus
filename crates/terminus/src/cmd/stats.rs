@@ -27,18 +27,15 @@ pub fn run(json: bool) -> Result<(), Failure> {
     };
 
     // A decision log missing either table is damage, caught here so the
-    // failure stays inside the envelope: the query below would hand
-    // `no such table: decisions` to an operational failure that never learns
-    // `--json` was asked for. Zeroes reported as a clean answer would read as
-    // "injection has recorded nothing", which a damaged store must not say.
+    // failure names it: the query below would fail with a raw
+    // `no such table: decisions`. Zeroes reported as a clean answer would read
+    // as "injection has recorded nothing", which a damaged store must not say.
+    // Under `--json` `main` writes the empty document with `ok: false` and this
+    // reason (#107).
     match read::decision_log(&reader) {
         read::DecisionLog::Present => {}
         read::DecisionLog::Damaged(tables) => {
-            return Err(read::unusable(
-                document(&Stats::default()),
-                read::damaged(tables),
-                json,
-            ))
+            return Err(Failure::Operational(read::damaged(tables)))
         }
     }
 

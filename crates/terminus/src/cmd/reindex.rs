@@ -35,12 +35,8 @@ pub fn run(json: bool) -> Result<(), Failure> {
                 "another terminus process holds {}; try again when it finishes",
                 data_dir.join(lock::LOCK_FILE_NAME).display()
             );
-            if json {
-                // A refusal is still an answer, and a `--json` caller that got
-                // an empty stdout could not tell it from a crash.
-                empty().failed().because(&held).emit();
-                return Err(Failure::Silent);
-            }
+            // Under `--json` `main` answers with `empty()`, `ok: false` and
+            // this reason (#107).
             return Err(Failure::Operational(held));
         }
         Attempt::Acquired(guard) => guard,

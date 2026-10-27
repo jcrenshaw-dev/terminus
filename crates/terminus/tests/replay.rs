@@ -303,9 +303,9 @@ fn a_malformed_threshold_is_misuse() {
 ///
 /// Every store this build can open was created with both tables, so neither
 /// being there is damage from outside and never an empty answer. The `--json`
-/// half is the half with teeth: left to the query, the failure would be an
-/// operational error printed by `main`, which never sees the flag, so `--json`
-/// would exit 1 with no document at all.
+/// half is the half with teeth: left to the query, the failure would be a raw
+/// sqlite line, where `main` now writes the command's empty document with
+/// `ok: false` and the reason named here (#107).
 #[test]
 fn stats_and_replay_call_a_store_missing_the_whole_decision_log_a_failure() {
     let bench = bench();
@@ -403,6 +403,54 @@ fn stats_and_replay_call_half_a_decision_log_a_failure() {
                 stderr(&out)
             );
         }
+    }
+}
+
+/// A damaged decision log answers `--json` with the command's empty document:
+/// every count at zero, the thresholds in force, `ok: false`, the reason, and
+/// nothing on stderr (#107). Human mode still names the table on stderr.
+#[test]
+fn a_damaged_decision_log_answers_with_the_empty_document() {
+    let healthy = bench();
+    healthy.ingest_fixture();
+    let shipped = document(&healthy.run(&["replay", "--json"]))["data"]["thresholds"].clone();
+    assert!(shipped.is_object(), "{shipped}");
+
+    let bench = bench();
+    bench.ingest_fixture();
+    let conn = bench.conn();
+    conn.execute_batch("DROP TABLE labels;").unwrap();
+    drop(conn);
+
+    let out = bench.run(&["replay", "--json"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(stderr(&out), "");
+    let value = document(&out);
+    assert_eq!(value["ok"], false, "{value}");
+    assert_eq!(value["data"]["thresholds"], shipped, "{value}");
+    assert_eq!(value["data"]["decisions"], 0, "{value}");
+    assert_eq!(value["data"]["labels"], serde_json::json!([]), "{value}");
+    assert_eq!(value["data"]["changed"], serde_json::json!([]), "{value}");
+
+    let out = bench.run(&["stats", "--json"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(stderr(&out), "");
+    let value = document(&out);
+    assert_eq!(value["ok"], false, "{value}");
+    let data = value["data"].as_object().expect("data is an object");
+    for (key, count) in data {
+        match key.as_str() {
+            "precision" => assert!(count.is_null(), "{value}"),
+            _ => assert_eq!(*count, 0, "`{key}` in {value}"),
+        }
+    }
+    assert!(data.contains_key("precision"), "{value}");
+
+    for command in ["replay", "stats"] {
+        let out = bench.run(&[command]);
+        assert_eq!(out.status.code(), Some(1), "`{command}`: {}", stderr(&out));
+        assert_eq!(stdout(&out), "", "`{command}`");
+        assert!(stderr(&out).contains("labels"), "{}", stderr(&out));
     }
 }
 

@@ -37,12 +37,13 @@ pub fn run(args: Args) -> Result<(), Failure> {
     };
 
     // The same catch `stats` makes, for the same reason: a damaged log is a
-    // failure rather than a diff of nothing, and never a raw sqlite line
-    // escaping the envelope.
+    // failure rather than a diff of nothing, and never a raw sqlite line.
+    // Under `--json` `main` writes the empty document, thresholds included,
+    // with `ok: false` and this reason (#107).
     match read::decision_log(&reader) {
         read::DecisionLog::Present => {}
         read::DecisionLog::Damaged(tables) => {
-            return Err(read::unusable(empty(&args), read::damaged(tables), args.json))
+            return Err(Failure::Operational(read::damaged(tables)))
         }
     }
 

@@ -819,6 +819,42 @@ fn reindex_json_reports_a_held_lock_as_a_document() {
     drop(guard);
 }
 
+/// `observations regenerate --json` under a held lock answers the same way: one
+/// document, `ok: false`, a reason naming the lock, and the rebuild's own keys
+/// (#107).
+#[test]
+fn observations_regenerate_json_reports_a_held_lock_as_a_document() {
+    let bench = bench();
+    bench.ingest("session-basic.jsonl");
+
+    let guard = match terminus_core::ingest::lock::try_acquire(&bench.data_dir).unwrap() {
+        terminus_core::ingest::Attempt::Acquired(guard) => guard,
+        other => panic!("the lock should have been free: {other:?}"),
+    };
+
+    let out = bench.run(&["observations", "regenerate", "--json"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(stderr(&out), "");
+    let document = document(&out);
+    assert_eq!(document["ok"], false);
+    assert!(
+        document["reason"]
+            .as_str()
+            .is_some_and(|r| r.contains("LOCK")),
+        "the refusal must name the lock: {document}"
+    );
+    let mut keys: Vec<&str> = document["data"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["notes", "regenerated", "selected", "since"]);
+
+    drop(guard);
+}
+
 /// `preserved` reaches the output: an evicted session's index is carried
 /// across rather than rebuilt, and the count of those is reported apart from
 /// `sessions`. With nothing evicted, plain `reindex` prints only the line it

@@ -133,11 +133,10 @@ pub enum DecisionLog {
 
 /// What this store can be asked about the decision log.
 ///
-/// Asking here, at the open, is what keeps the failure inside the envelope:
-/// left to the query it surfaces as [`Failure::Operational`] carrying a raw
-/// `no such table: decisions`, which `main` prints on stderr and exits 1 on -
-/// without knowing whether `--json` was asked for, so the envelope the contract
-/// promises is never written at all.
+/// Asking here, at the open, is what names the damage: left to the query it
+/// surfaces as [`Failure::Operational`] carrying a raw `no such table:
+/// decisions`. `main` writes the failure as the command's own document under
+/// `--json` and as a line on stderr otherwise (#107).
 ///
 /// Nothing is repaired, because a read never migrates. The next
 /// write-mode `terminus ingest` would create a missing table through
@@ -210,23 +209,6 @@ pub fn empty(document: Document, reason: &str, json: bool) -> Result<(), Failure
         eprintln!("terminus: {reason}");
     }
     Ok(())
-}
-
-/// Say why this store cannot answer the question, and exit 1.
-///
-/// The counterpart of [`empty`] for a store that is *wrong* rather than empty.
-/// The `--json` arm writes the envelope with `ok: false` and then returns
-/// [`Failure::Silent`], because `main` would otherwise print a second account of
-/// the same thing on stderr after the document already carried it - the shape
-/// `verify` established. Exit 1 either way, so a caller reading the code and a
-/// caller parsing the document agree.
-pub fn unusable(document: Document, reason: String, json: bool) -> Failure {
-    if json {
-        document.failed().because(&reason).emit();
-        Failure::Silent
-    } else {
-        Failure::Operational(reason)
-    }
 }
 
 #[cfg(test)]

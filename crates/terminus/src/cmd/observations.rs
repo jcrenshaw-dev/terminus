@@ -136,13 +136,8 @@ fn regenerate(args: Regenerate) -> Result<(), Failure> {
                     "another terminus process holds {}; try again when it finishes",
                     data_dir.join(lock::LOCK_FILE_NAME).display()
                 );
-                if args.json {
-                    regenerated_document(&args, &Regenerated::default())
-                        .failed()
-                        .because(&held)
-                        .emit();
-                    return Err(Failure::Silent);
-                }
+                // Under `--json` `main` answers with the empty rebuild document,
+                // `ok: false` and this reason (#107).
                 return Err(Failure::Operational(held));
             }
             Attempt::Acquired(guard) => guard,
