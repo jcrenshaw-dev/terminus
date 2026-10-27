@@ -803,6 +803,13 @@ fn the_injection_is_cut_to_the_configured_budget() {
 
     let full = prompt::user_prompt_submit(&bench.data_dir, &Config::default(), &payload).unwrap();
     let length = full.chars().count();
+    let whole: std::collections::BTreeMap<i64, String> = bench
+        .fired(&cwd, &raw)
+        .hits
+        .iter()
+        .map(|hit| (hit.turn_id, hit.excerpt.trim().to_owned()))
+        .collect();
+    assert!(!whole.is_empty(), "the prompt fired on nothing");
     let (mut silent, mut spoke) = (0, 0);
     for budget in 0..=length {
         let session = format!("22222222-0000-4000-8000-{budget:012}");
@@ -825,11 +832,114 @@ fn the_injection_is_cut_to_the_configured_budget() {
                     text.chars().count()
                 );
                 assert_framed(&text);
+
+                // Each turn's line is its whole excerpt or ends with the mark,
+                // and a turn shown as the mark alone is not remembered (#94).
+                let state = inject::state::State::load(&bench.data_dir, Some(&session));
+                for (turn, said) in turn_lines(&text) {
+                    let Some(said) = said else { continue };
+                    assert!(
+                        said == whole[&turn] || said.ends_with("..."),
+                        "budget {budget}: turn {turn} shows {said:?} of {:?}",
+                        whole[&turn]
+                    );
+                    if said == "..." && whole[&turn] != "..." {
+                        assert!(
+                            !state.injected.contains(&turn),
+                            "budget {budget}: turn {turn} shown as the mark was remembered"
+                        );
+                    }
+                }
             }
         }
     }
     assert!(silent > 0, "no budget was too small for the frame");
     assert!(spoke > 0, "no budget was large enough to inject");
+}
+
+/// Each turn line of an injection as the turn id and the text after the day,
+/// or `None` for that text when the backstop cut the line before it.
+fn turn_lines(text: &str) -> Vec<(i64, Option<String>)> {
+    between_tags(text)
+        .lines()
+        .filter_map(|line| {
+            let rest = line.strip_prefix("- turn ")?;
+            let id = rest.split(|c: char| !c.is_ascii_digit()).next()?;
+            let said = line.split_once("): ").map(|(_, said)| said.to_owned());
+            Some((id.parse().ok()?, said))
+        })
+        .collect()
+}
+
+/// A turn the prompt line has to cut to a share it cannot hold is shown as
+/// `...` alone and is not remembered, so the next prompt of the session can
+/// quote it (#94).
+///
+/// One session throughout. The budget is found by scanning, as the sweep above
+/// does, for one that shows a firing turn as the mark; the state and the
+/// decision that prompt wrote are then read off the data directory.
+#[test]
+fn a_turn_shown_as_the_mark_alone_is_not_remembered_and_can_be_quoted_later() {
+    let bench = bench();
+    let cwd = bench.project();
+    let raw = format!("what changed in {RELATIVE}");
+    let session = "22222222-0000-4000-8000-200000000000";
+    let payload = bench.payload_of(session, &cwd, &raw);
+
+    let full = prompt::user_prompt_submit(
+        &bench.data_dir,
+        &Config::default(),
+        &bench.payload_of("22222222-0000-4000-8000-200000000001", &cwd, &raw),
+    )
+    .unwrap();
+    let fired = bench.fired(&cwd, &raw);
+    let turn = fired.hits.first().expect("the prompt fires").turn_id;
+    let said = fired.hits[0].excerpt.trim().to_owned();
+    assert!(said.chars().count() > 3, "{said:?} is too short to be cut");
+
+    // A scan under sessions of its own, so the one under test is untouched.
+    let budget = (0..=full.chars().count())
+        .find(|&budget| {
+            let probe = format!("22222222-0000-4000-8000-3{budget:011}");
+            let payload = bench.payload_of(&probe, &cwd, &raw);
+            prompt::user_prompt_submit(&bench.data_dir, &config_with(&bench, budget), &payload)
+                .is_some_and(|text| {
+                    turn_lines(&text)
+                        .iter()
+                        .any(|(id, said)| *id == turn && said.as_deref() == Some("..."))
+                })
+        })
+        .expect("no budget showed the turn as the mark");
+
+    let text = prompt::user_prompt_submit(&bench.data_dir, &config_with(&bench, budget), &payload)
+        .unwrap();
+    assert!(
+        text.lines()
+            .any(|line| line.starts_with(&format!("- turn {turn} ")) && line.ends_with(": ...")),
+        "{text}"
+    );
+    let state = inject::state::State::load(&bench.data_dir, Some(session));
+    assert!(!state.injected.contains(&turn), "{:?}", state.injected);
+
+    let ours = inject::decision::read_all(&bench.data_dir)
+        .into_iter()
+        .filter_map(|found| found.decision)
+        .find(|decision| {
+            decision.session_id.as_deref() == Some(session) && decision.chars_injected > 0
+        })
+        .expect("the arm wrote no decision for the session");
+    assert!(
+        ours.injected.iter().all(|shown| shown.turn_id != turn),
+        "{:?}",
+        ours.injected
+    );
+
+    let later = prompt::user_prompt_submit(&bench.data_dir, &Config::default(), &payload)
+        .expect("the turn was refused to a later prompt");
+    assert!(
+        later.contains(&format!("- turn {turn} ")) && later.contains(&said),
+        "{later}"
+    );
 }
 
 /// A closing tag planted in a firing turn's excerpt or in its stored timestamp

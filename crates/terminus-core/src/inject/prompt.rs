@@ -211,7 +211,8 @@ pub struct Fired {
 /// completed HERE rather than inside [`selected`] because what one injection
 /// cost is known only after [`render`] has clipped it, and it is written after
 /// the state save, on the same thread the hook abandons - a write that fails
-/// changes nothing about what is emitted.
+/// changes nothing about what is emitted. [`selected`] renders too, because
+/// what the state remembers as injected is what the render showed.
 pub fn user_prompt_submit(data_dir: &Path, config: &Config, payload: &Payload) -> Option<String> {
     let mut decision = Decision::opened(
         payload.session_id,
@@ -223,8 +224,8 @@ pub fn user_prompt_submit(data_dir: &Path, config: &Config, payload: &Payload) -
     let thresholds = Thresholds::default();
     decision.thresholds = thresholds.recorded(budget);
 
-    let fired = selected(data_dir, config, payload, &thresholds, &mut decision).unwrap_or_default();
-    let text = render(&fired.hits, budget, &mut decision);
+    let text =
+        selected(data_dir, config, payload, &thresholds, &mut decision).and_then(|(_, text)| text);
 
     decision.save(data_dir);
     text
@@ -391,7 +392,9 @@ fn day(ts: &str) -> &str {
 /// The record is filled and then dropped: this seam answers "what would fire",
 /// and only [`user_prompt_submit`] - the arm the hook actually calls - persists
 /// what was decided. One code path either way, so what a test observes here is
-/// what a prompt logs there.
+/// what a prompt logs there: it renders at the config's budget too, because the
+/// turns the session remembers as injected are the ones the render showed, and
+/// the state this leaves is the state the hook leaves.
 pub fn select(data_dir: &Path, config: &Config, payload: &Payload) -> Fired {
     let mut decision = Decision::opened(
         payload.session_id,
@@ -405,6 +408,7 @@ pub fn select(data_dir: &Path, config: &Config, payload: &Payload) -> Fired {
         &Thresholds::default(),
         &mut decision,
     )
+    .map(|(fired, _)| fired)
     .unwrap_or_default()
 }
 
@@ -414,13 +418,17 @@ pub fn select(data_dir: &Path, config: &Config, payload: &Payload) -> Fired {
 /// afterwards: every `?` below is an exit that injected nothing, and what makes
 /// those exits distinguishable in the log is how much of the record was filled
 /// before one of them fired.
+///
+/// The text is what [`render`] made of the turns, or nothing when they did not
+/// fit the frame. It is rendered here, ahead of the state save, because a turn
+/// is remembered as injected only when the render showed it with text.
 fn selected(
     data_dir: &Path,
     config: &Config,
     payload: &Payload,
     thresholds: &Thresholds,
     decision: &mut Decision,
-) -> Option<Fired> {
+) -> Option<(Fired, Option<String>)> {
     let prompt = payload.prompt.filter(|prompt| !prompt.trim().is_empty())?;
     let cwd = payload.cwd.filter(|cwd| !cwd.is_empty())?;
 
@@ -526,10 +534,14 @@ fn selected(
             super::neutralize,
         ) {
             Ok(reads) => {
-                for hit in &hits {
-                    state.record_injected(hit.turn_id);
+                let text = render(&hits, budget(config), decision);
+                // What the render showed with text and nothing else: a turn
+                // shown as the mark alone is not in `decision.injected`, and a
+                // later prompt in this session can still quote it (#94).
+                for shown in &decision.injected {
+                    state.record_injected(shown.turn_id);
                 }
-                Some(Fired { hits, reads })
+                Some((Fired { hits, reads }, text))
             }
             // The excerpt is what makes an injection worth reading, so a blob
             // that will not open is silence rather than a line of turn ids -
