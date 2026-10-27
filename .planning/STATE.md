@@ -1,6 +1,6 @@
 # State
 
-Phase: 7 of 8 (Owner-only files and signing)
-Status: phase complete
-Next: /cad-context 8
-Updated: 2026-10-26
+Phase: 8 of 8 (Output)
+Status: context gathered
+Next: /cad-plan 8
+Updated: 2026-10-27
