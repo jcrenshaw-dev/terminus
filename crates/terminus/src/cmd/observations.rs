@@ -298,14 +298,10 @@ fn strings(value: &Value) -> Vec<&str> {
         .unwrap_or_default()
 }
 
-/// Wall-clock seconds as a person reads a duration.
+/// Wall-clock seconds as a person reads a duration, or the words for a session
+/// that recorded none.
 fn duration(seconds: Option<i64>) -> String {
-    match seconds {
-        None => "(no duration)".to_owned(),
-        Some(total) if total < 60 => format!("{total}s"),
-        Some(total) if total < 3600 => format!("{}m {}s", total / 60, total % 60),
-        Some(total) => format!("{}h {}m", total / 3600, (total % 3600) / 60),
-    }
+    seconds.map_or_else(|| "(no duration)".to_owned(), super::duration)
 }
 
 fn file_name(session_key: &str) -> &str {
@@ -451,11 +447,10 @@ mod tests {
         );
     }
 
+    /// A session with no duration says so, and one of zero seconds is a duration.
     #[test]
-    fn a_duration_reads_as_a_duration() {
+    fn a_missing_duration_has_words_and_zero_seconds_does_not() {
         assert_eq!(duration(None), "(no duration)");
-        assert_eq!(duration(Some(2)), "2s");
-        assert_eq!(duration(Some(201)), "3m 21s");
-        assert_eq!(duration(Some(7_400)), "2h 3m");
+        assert_eq!(duration(Some(0)), "0s");
     }
 }

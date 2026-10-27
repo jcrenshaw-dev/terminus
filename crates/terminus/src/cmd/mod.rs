@@ -166,6 +166,23 @@ pub fn human(bytes: u64) -> String {
     }
 }
 
+/// Whole seconds as a person reads a duration: `Ns` under a minute, `Nm Ns`
+/// under an hour, `Nh Nm` from there on.
+///
+/// A signed count because `observations` reads one from a stored column, and a
+/// damaged row can make it negative; that prints as the seconds it is. The
+/// words for "none" and "under a second" stay with the callers that have them
+/// (#107).
+pub fn duration(seconds: i64) -> String {
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else if seconds < 3600 {
+        format!("{}m {}s", seconds / 60, seconds % 60)
+    } else {
+        format!("{}h {}m", seconds / 3600, (seconds % 3600) / 60)
+    }
+}
+
 /// The `--json` flag as spelled on every command line.
 pub const JSON_FLAG: &str = "json";
 
@@ -224,5 +241,17 @@ mod tests {
         assert_eq!(human(1023), "1023 B");
         assert_eq!(human(1024), "1.0 KiB");
         assert_eq!(human(1_400_000_000), "1.3 GiB");
+    }
+
+    #[test]
+    fn a_duration_reads_as_seconds_minutes_or_hours() {
+        assert_eq!(duration(0), "0s");
+        assert_eq!(duration(2), "2s");
+        assert_eq!(duration(59), "59s");
+        assert_eq!(duration(100), "1m 40s");
+        assert_eq!(duration(201), "3m 21s");
+        assert_eq!(duration(3599), "59m 59s");
+        assert_eq!(duration(7_400), "2h 3m");
+        assert_eq!(duration(-5), "-5s");
     }
 }

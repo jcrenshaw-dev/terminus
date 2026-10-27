@@ -193,17 +193,10 @@ pub fn print_estimate(estimate: &Estimate) {
 
 /// A duration a human reads, at the resolution the estimate deserves.
 fn duration(elapsed: std::time::Duration) -> String {
-    let secs = elapsed.as_secs();
-    if secs == 0 {
-        return "under a second".to_owned();
+    match elapsed.as_secs() {
+        0 => "under a second".to_owned(),
+        secs => super::duration(i64::try_from(secs).unwrap_or(i64::MAX)),
     }
-    if secs < 60 {
-        return format!("{secs}s");
-    }
-    if secs < 3_600 {
-        return format!("{}m {}s", secs / 60, secs % 60);
-    }
-    format!("{}h {}m", secs / 3_600, (secs % 3_600) / 60)
 }
 
 /// The internal argument that means "you are the working process".
