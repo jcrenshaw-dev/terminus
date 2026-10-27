@@ -9,7 +9,7 @@ holds `doctor`'s shape.
 ## The envelope
 
 Every `--json` run writes at most one JSON document on one line to stdout, and
-nothing else to stdout, ever. The runs that write none are listed under
+nothing else to stdout, ever. Misuse is the one run that writes none; see
 [Exit codes](#exit-codes).
 
 ```json
@@ -49,29 +49,20 @@ A caller that parses `ok` and a caller that checks the exit code never
 disagree. `verify --json` on a damaged store writes its document **and** exits
 1; the document is the evidence and the code is the verdict.
 
-**Most operational failures write no document.** The ones that do are named
-under their commands: `verify` with a failure, `reindex` with a skipped session,
-a held ingest lock in `reindex`, `observations regenerate` and `compact`, a
-decision log missing either or both of its tables in `stats` and `replay`, and a
-`problem` check in `doctor`. Every other operational failure is reported on
-stderr with exit 1, and stdout stays empty:
+Under `--json`, every operational failure writes the command's own empty
+document with `ok: false` and the reason. It is the document the command's
+no-store answer carries, with the arguments echoed where the shape echoes them:
+`replay`'s `thresholds`, `observations regenerate`'s `since` and `export`'s
+`destination`. The failure puts nothing on stderr. Warnings still go there, such
+as a store older than this build.
 
-- a data directory that cannot be resolved
-- a `terminus.toml` that does not load
-- a working directory that cannot be read, when `--project` does not name the
-  project
-- a store that is there and cannot be opened or read, including a store in an
-  archive format this build refuses
-- a SQLite error while the command reads or writes the store
-- an ingest lock file that cannot be created or opened
-- an `export` destination that already holds anything, and an export directory
-  or file that cannot be created or written
-- a `VACUUM` or a WAL truncation that fails in `compact`
+Four failure documents carry real data instead of the empty one: `verify` with
+failures, `reindex` with skipped sessions, `doctor` with a `problem` check, and
+`compact`'s held lock with its measured `before` and `after`.
 
-`doctor` reports a data directory, config or store it cannot use as a check
-rather than failing. Misuse (exit 2) never writes a document. Empty stdout with
-a non-zero exit is therefore part of the contract, and a caller must check the
-exit code before it parses.
+Misuse (exit 2) is the one run that writes no document. It is raised before the
+command's output mode is known, so empty stdout with a non-zero exit means exit
+2 only.
 
 ## Streams
 
@@ -587,9 +578,10 @@ snapshot, not an export.
 - **A destination that already holds anything is refused**, exit 1, with nothing
   written - not merely one that already holds an export. A file this command did
   not write is never overwritten, and every refusal lands before the first byte.
-  With `--json` the refusal writes no document either: stdout stays empty and
-  the reason is on stderr. A missing destination on the command line is misuse (exit 2): there is no
-  default place to put an unredacted copy of every transcript.
+  With `--json` the refusal writes the empty document with `ok: false` and the
+  reason, naming the destination it was given. A missing destination on the
+  command line is misuse (exit 2): there is no default place to put an
+  unredacted copy of every transcript.
 - The manifest carries `notice`, `archive_format` as the store itself reports
   it, the session / turn / evicted counts, the total bytes, the distinct
   projects, the `first_turn_at`..`last_turn_at` range, and a `files` array with
