@@ -459,7 +459,9 @@ fn absolute(path: &Path) -> Result<PathBuf, Failure> {
 /// `to` is already there: [`run`] found it as an empty owner-only directory or
 /// made it with one exclusive `mkdir`, and nothing here makes a directory at
 /// the top that could stand in for either. Each directory below it is one
-/// exclusive `mkdir` too: a taken name is something else writing mid-move.
+/// exclusive `mkdir` too: a taken name is something else writing mid-move. No
+/// parent is made, so a `to` renamed away mid-copy fails the move instead of
+/// being made again with half the store in it.
 ///
 /// The `LOCK` file is skipped at the top level: this process is holding it, and
 /// [`run`] creates an empty one at the destination instead.
@@ -485,8 +487,7 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
         let destination = to.join(&name);
         let kind = entry.file_type().map_err(|e| failed(&source, e))?;
         if kind.is_dir() {
-            terminus_core::owner_only::create_dir_new(&destination)
-                .map_err(|e| failed(&source, e))?;
+            terminus_core::owner_only::create_dir(&destination).map_err(|e| failed(&source, e))?;
             copy_tree(&source, &destination)?;
         } else {
             copy_file(&source, &destination).map_err(|e| failed(&source, e))?;
@@ -518,6 +519,20 @@ mod tests {
             Ok(path) => path,
             Err(_) => panic!("{path} did not resolve"),
         }
+    }
+
+    /// The destination renamed away between two entries of the copy: the next
+    /// directory fails, and nothing is made at the old path.
+    #[test]
+    fn a_destination_gone_mid_copy_is_not_made_again() {
+        let root = tempfile::tempdir().unwrap();
+        let from = root.path().join("from");
+        std::fs::create_dir_all(from.join("snapshots")).unwrap();
+        std::fs::write(from.join("snapshots/terminus-1.db"), "snapshot").unwrap();
+        let to = root.path().join("to");
+
+        assert!(copy_tree(&from, &to).is_err());
+        assert!(!to.exists(), "the copy made the missing destination again");
     }
 
     #[test]

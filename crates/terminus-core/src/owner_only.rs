@@ -155,6 +155,16 @@ pub fn create_dir_new(path: &Path) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    create_dir(path)
+}
+
+/// [`create_dir_new`] without the parents: a missing parent is
+/// [`std::io::ErrorKind::NotFound`] and nothing is made.
+///
+/// For a directory inside one this process already made, where a parent that
+/// has gone means something moved it, and making it again would write into a
+/// directory nobody checked.
+pub fn create_dir(path: &Path) -> std::io::Result<()> {
     let mut builder = std::fs::DirBuilder::new();
     {
         use std::os::unix::fs::DirBuilderExt;
@@ -393,6 +403,21 @@ mod tests {
                 path.display()
             );
         }
+    }
+
+    #[test]
+    fn a_directory_without_parents_is_owner_only_and_makes_no_parent() {
+        let root = tempfile::tempdir().unwrap();
+        let leaf = root.path().join("leaf");
+        create_dir(&leaf).unwrap();
+        assert_eq!(mode(&leaf), 0o700);
+
+        let orphan = root.path().join("gone/leaf");
+        assert_eq!(
+            create_dir(&orphan).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+        assert!(!root.path().join("gone").exists());
     }
 
     /// A new target lands owner-only and holds exactly the bytes.
