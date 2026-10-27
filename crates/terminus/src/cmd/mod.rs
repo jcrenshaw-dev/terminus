@@ -147,7 +147,7 @@ impl Footprint {
 
 /// Measure that footprint now.
 ///
-/// `cmd::status` and `cmd::uninstall` each keep their own copy of this rule.
+/// `cmd::status` keeps its own copy of this rule.
 pub fn footprint(data_dir: &Path) -> Footprint {
     let of = |name: String| {
         std::fs::metadata(data_dir.join(name))
@@ -160,6 +160,28 @@ pub fn footprint(data_dir: &Path) -> Footprint {
         wal: of(format!("{db}-wal")),
         shm: of(format!("{db}-shm")),
     }
+}
+
+/// What a directory holds, in bytes: every file under it, recursively.
+///
+/// Every file rather than the three [`footprint`] sums. `data move` carries
+/// the injection-state directory (`decision::DIR_NAME`) and the snapshots too,
+/// and `uninstall --purge` deletes them, so a size that named only the database
+/// would understate a directory holding three rolling copies of it by a factor
+/// of four (#95).
+pub fn directory_bytes(dir: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut total = 0;
+    for entry in entries.flatten() {
+        match entry.file_type() {
+            Ok(kind) if kind.is_dir() => total += directory_bytes(&entry.path()),
+            Ok(_) => total += entry.metadata().map(|m| m.len()).unwrap_or(0),
+            Err(_) => {}
+        }
+    }
+    total
 }
 
 /// A byte count as a person reads it, for the non-`--json` output.

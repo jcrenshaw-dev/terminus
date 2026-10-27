@@ -121,7 +121,10 @@ pub fn run(options: Options) -> Result<(), Failure> {
     outln!();
     outln!("  from  {}", source.display());
     outln!("  to    {}", destination.display());
-    outln!("  {} byte(s), including the archive itself", bytes(&source));
+    outln!(
+        "  {} byte(s), including the archive itself",
+        super::directory_bytes(&source)
+    );
     outln!();
     outln!("{NETWORK_WARNING}");
     outln!();
@@ -504,27 +507,6 @@ fn copy_file(source: &Path, destination: &Path) -> std::io::Result<()> {
     let mut writer = terminus_core::owner_only::create_new(destination)?;
     std::io::copy(&mut reader, &mut writer)?;
     Ok(())
-}
-
-/// What the move is about to carry, in bytes.
-///
-/// Every file under the directory rather than the three `cmd::status` sums:
-/// what moves here is the injection-state directory (`decision::DIR_NAME`) and
-/// the snapshots too, and a size that named only the database would understate
-/// a directory holding three rolling copies of it by a factor of four.
-fn bytes(dir: &Path) -> u64 {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return 0;
-    };
-    let mut total = 0;
-    for entry in entries.flatten() {
-        match entry.file_type() {
-            Ok(kind) if kind.is_dir() => total += bytes(&entry.path()),
-            Ok(_) => total += entry.metadata().map(|m| m.len()).unwrap_or(0),
-            Err(_) => {}
-        }
-    }
-    total
 }
 
 #[cfg(test)]

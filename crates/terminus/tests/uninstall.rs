@@ -190,17 +190,31 @@ impl Fixture {
         child.wait_with_output().unwrap()
     }
 
-    /// `terminus status`'s `size_bytes` for this fixture's store.
-    fn status_size(&self) -> u64 {
-        let output = self.run(&["status", "--json"]);
-        assert!(output.status.success(), "status failed: {}", text(&output));
-        let document: serde_json::Value =
-            serde_json::from_slice(&output.stdout).expect("status emits one JSON document");
-        document["data"]["size_bytes"].as_u64().unwrap()
+    /// Every file under the data directory, which is what `--purge` counts,
+    /// measured with no connection open (#95).
+    fn footprint(&self) -> u64 {
+        fn walk(dir: &Path) -> u64 {
+            std::fs::read_dir(dir)
+                .map(|entries| {
+                    entries
+                        .map(|entry| entry.unwrap())
+                        .map(|entry| {
+                            let path = entry.path();
+                            if path.is_dir() {
+                                walk(&path)
+                            } else {
+                                std::fs::metadata(&path).unwrap().len()
+                            }
+                        })
+                        .sum()
+                })
+                .unwrap_or(0)
+        }
+        walk(&self.data_dir())
     }
 
-    /// The three files `--purge` counts, measured with no connection open.
-    fn footprint(&self) -> u64 {
+    /// The three store files alone, the rule `terminus status` sums.
+    fn store_files(&self) -> u64 {
         ["terminus.db", "terminus.db-wal", "terminus.db-shm"]
             .iter()
             .filter_map(|name| std::fs::metadata(self.data_dir().join(name)).ok())
@@ -776,23 +790,24 @@ fn answering_no_keeps_the_archive_and_exits_zero() {
 
 /// The size and the path are shown before the question, and `--yes` deletes.
 ///
-/// The byte count is the footprint on disk - the same three files
-/// `terminus status` reports and the same rule - and it is asserted against a
-/// measurement this test takes for itself. `status`'s own number is checked as
-/// an upper bound instead, because it measures while its connection is open.
-/// Its read-only open leaves the `-shm` and an empty `-wal` on disk when it
-/// exits, so the footprint is taken after it, as `--purge` will find the files.
+/// The byte count is every file under the data directory, the snapshots and
+/// the injection state included, and it is asserted against a sum this test
+/// takes for itself after planting a file in `snapshots/` and one in
+/// `decisions/`, so the test does not depend on whether a snapshot was due
+/// (#95). The deleted line prints the same number.
 #[test]
 fn purge_with_yes_prints_the_size_and_the_path_then_deletes() {
     let fixture = fixture();
     fixture.install().ingest();
-    let reported = fixture.status_size();
+    for (dir, name) in [("snapshots", "old.db"), ("decisions", "turn.json")] {
+        let dir = fixture.data_dir().join(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(name), vec![b'x'; 4096]).unwrap();
+    }
     let footprint = fixture.footprint();
-    assert!(footprint > 0);
     assert!(
-        footprint <= reported,
-        "status counts the same files plus the sidecars its own connection makes: \
-         {footprint} > {reported}"
+        footprint > fixture.store_files(),
+        "the purge counts more than the three store files: {footprint}"
     );
 
     let output = fixture.run(&["uninstall", "--purge", "--yes"]);

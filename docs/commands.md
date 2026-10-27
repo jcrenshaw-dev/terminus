@@ -216,7 +216,7 @@ Removes what `install` added: the four hook entries from `settings.json`, the MC
 
 It keeps the versions folder, because a session already running may be using one of its files, and it keeps the data directory, because the archive is the product. It prints both paths. A step that cannot be done is reported, the rest still happen, and the command exits 1.
 
-- `--purge`: also deletes the whole data directory, its snapshots and the state the hooks keep included, after showing its path and a size and asking once. The size counts only `terminus.db` and its `-wal` and `-shm` files, not the snapshots. With no `terminus.db` in the directory, it prints that there is nothing to purge and deletes nothing. The default answer is no. It takes the ingest lock and deletes nothing while a pass is running. With no answer to read, nothing is deleted and the command exits 1. It never deletes the versions folder.
+- `--purge`: also deletes the whole data directory, its snapshots and the state the hooks keep included, after showing its path and a size and asking once. The size counts everything `--purge` deletes, the snapshots and the state the hooks keep included. With no `terminus.db` in the directory, it prints that there is nothing to purge and deletes nothing. The default answer is no. It takes the ingest lock and deletes nothing while a pass is running. With no answer to read, nothing is deleted and the command exits 1. It never deletes the versions folder.
 - `-y`, `--yes`: answers the `--purge` question yes. Without `--purge` it changes nothing.
 
 ## Run by Claude Code

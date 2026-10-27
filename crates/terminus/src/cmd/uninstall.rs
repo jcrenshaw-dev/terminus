@@ -446,7 +446,11 @@ fn purge(data_dir: &Path, yes: bool) -> Result<(), Failure> {
         outln!("  no store at that path, so there is nothing to purge");
         return Ok(());
     }
-    let bytes = size_bytes(data_dir);
+    // Every file under the directory, because `remove_dir_all` below deletes
+    // every file under it: the snapshots, the injection state and `LOCK` as
+    // well as the store (#95). Measured once, with nothing open, so the number
+    // shown and the number reported after the delete are the same.
+    let bytes = super::directory_bytes(data_dir);
     outln!("  --purge deletes the archive itself. this cannot be undone.");
     outln!("    {}", data_dir.display());
     outln!("    {bytes} byte(s) ({})", super::human(bytes));
@@ -507,28 +511,4 @@ fn answered(data_dir: &Path, yes: bool) -> Result<bool, Failure> {
             data_dir.display()
         ))
     })
-}
-
-/// The store's footprint on disk: the database and its two sidecars.
-///
-/// The same three files and the same rule as `cmd::status`'s `size_bytes`, and
-/// deliberately so. `status` measures while its own connection is open, and
-/// this opens nothing. `status`'s read-only open leaves the 32 KiB `-shm` and
-/// an empty `-wal` on disk when it exits, so after a `status` run this counts
-/// them too, while a writable open that closes cleanly removes both.
-///
-/// What `--purge` shows is therefore what is on disk at that moment, which is
-/// the number that is about to go.
-fn size_bytes(data_dir: &Path) -> u64 {
-    let mut total = 0u64;
-    for name in [
-        DB_FILE_NAME.to_owned(),
-        format!("{DB_FILE_NAME}-wal"),
-        format!("{DB_FILE_NAME}-shm"),
-    ] {
-        if let Ok(meta) = std::fs::metadata(data_dir.join(name)) {
-            total += meta.len();
-        }
-    }
-    total
 }
