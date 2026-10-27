@@ -271,14 +271,47 @@ pub const MAX_PROMPT_CHARS: usize = 10_000;
 /// counting them anywhere but here would be a second, drifting account of what a
 /// prompt spent.
 fn render(hits: &[Hit], budget: usize, decision: &mut Decision) -> Option<String> {
-    if hits.is_empty() {
-        return None;
-    }
-
-    // The frame is a fixed cost and comes off first. Then what the lines
-    // cost with no text in them: the ids and the dates. Both measured rather
-    // than estimated, so the share below is what is actually left.
+    // The frame is a fixed cost and comes off first.
     let room = budget.saturating_sub(super::frame_cost(DESCRIPTION));
+
+    // Every line shown is whole. When the ids, the dates and the marks alone
+    // are over what the frame leaves, the last turn is left out and the rest
+    // share again, down to none. Cutting the lines instead, which `frame`
+    // would, cuts the last turn's id (#94).
+    let (hits, texts, marked) = (1..=hits.len())
+        .rev()
+        .find_map(|kept| fitted(&hits[..kept], room))?;
+
+    // `frame` cuts the lines and never the frame, and here the lines fit, so it
+    // has nothing to cut. No frame, no injection, and nothing recorded as given.
+    let text = super::frame(DESCRIPTION, &assemble(hits, &texts), budget)?;
+
+    // Per turn, the text that turn contributed - not its share of the total.
+    // The frame and the ids are the injection's and belong to no turn. A turn
+    // shown as the mark alone, or left out, is not here: the model was not
+    // shown it, and a later prompt must still be free to quote it.
+    decision.injected = hits
+        .iter()
+        .zip(&texts)
+        .zip(&marked)
+        .filter(|(_, cut)| !**cut)
+        .map(|((hit, text), _)| Injected {
+            turn_id: hit.turn_id,
+            chars: super::chars(text),
+        })
+        .collect();
+    // The whole emitted string, frame included: what the model was actually
+    // given, which the per-turn shares do not sum to.
+    decision.chars_injected = super::chars(&text);
+    Some(text)
+}
+
+/// `hits` with each turn's text and whether it is the mark alone, or `None`
+/// when their lines cannot all be whole inside `room`.
+fn fitted(hits: &[Hit], room: usize) -> Option<(&[Hit], Vec<String>, Vec<bool>)> {
+    // What the lines cost with no text in them: the ids and the dates.
+    // Measured rather than estimated, so the share below is what is actually
+    // left.
     let empty: Vec<String> = hits.iter().map(|_| String::new()).collect();
     let bare = super::chars(&assemble(hits, &empty));
 
@@ -310,6 +343,12 @@ fn render(hits: &[Hit], budget: usize, decision: &mut Decision) -> Option<String
         }
     };
 
+    // Each open text is within the share, so only the ids, the dates and the
+    // marks can be over.
+    if bare + marked.iter().filter(|cut| **cut).count() * mark > room {
+        return None;
+    }
+
     let texts: Vec<String> = excerpts
         .iter()
         .zip(&marked)
@@ -321,31 +360,7 @@ fn render(hits: &[Hit], budget: usize, decision: &mut Decision) -> Option<String
             }
         })
         .collect();
-
-    // The backstop clip inside `frame` cuts the lines and never the frame: it
-    // fires when the ids, the dates and the marks alone are over what the frame
-    // left, which no cut to the quoted turns can fix. No frame, no injection,
-    // and nothing recorded as given.
-    let text = super::frame(DESCRIPTION, &assemble(hits, &texts), budget)?;
-
-    // Per turn, the text that turn contributed - not its share of the total.
-    // The frame and the ids are the injection's and belong to no turn. A turn
-    // shown as the mark alone is not here: the model was not shown it, and a
-    // later prompt must still be free to quote it.
-    decision.injected = hits
-        .iter()
-        .zip(&texts)
-        .zip(&marked)
-        .filter(|(_, cut)| !**cut)
-        .map(|((hit, text), _)| Injected {
-            turn_id: hit.turn_id,
-            chars: super::chars(text),
-        })
-        .collect();
-    // The whole emitted string, frame included: what the model was actually
-    // given, which the per-turn shares do not sum to.
-    decision.chars_injected = super::chars(&text);
-    Some(text)
+    Some((hits, texts, marked))
 }
 
 /// What this arm says the block holds, ahead of [`super::QUOTED_HISTORY`] on
@@ -1115,6 +1130,15 @@ mod tests {
         assert_eq!(lines, vec!["..."]);
         assert!(decision.injected.is_empty(), "a mark alone was recorded");
 
+        // Less than the mark to spare leaves a lone turn no whole line, so it
+        // is left out, and there is nothing to inject.
+        for spare in 0..3 {
+            let mut decision = Decision::opened(None, None, "");
+            let text = render(&hits, budget_for(&hits, spare), &mut decision);
+            assert_eq!(text, None, "spare {spare}");
+            assert!(decision.injected.is_empty(), "spare {spare}");
+        }
+
         // Several turns, each sharing 3.
         let hits = [
             said(1, "abcdefgh"),
@@ -1146,14 +1170,21 @@ mod tests {
         );
 
         // A turn that fit the first share and no longer fits what the mark
-        // leaves is marked too. Two marks do not fit 4 spare characters, and
-        // the backstop cuts the last line, never the first.
+        // leaves is marked too. Two marks do not fit 4 spare characters, so
+        // the last turn is left out and the first has its line to itself.
         let hits = [said(1, "abcdefgh"), said(2, "ab")];
         let (_, lines, _) = rendered(&hits, budget_for(&hits, 5));
         assert_eq!(lines, vec!["...", "ab"]);
-        let (text, lines, _) = rendered(&hits, budget_for(&hits, 4));
-        assert_eq!(lines[0], "...");
-        assert_eq!(text.chars().count(), budget_for(&hits, 4));
+        let (_, lines, decision) = rendered(&hits, budget_for(&hits, 4));
+        assert_eq!(lines, vec!["abcdefgh"]);
+        assert_eq!(
+            decision
+                .injected
+                .iter()
+                .map(|i| i.turn_id)
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
     }
 
     /// An excerpt that fits its share whole prints as it is, at every share a
@@ -1179,7 +1210,9 @@ mod tests {
     }
 
     /// At every budget from the frame's cost to the whole injection, whatever
-    /// the mix of long, short and empty turns, the text is within the budget.
+    /// the mix of long, short and empty turns, the text is within the budget
+    /// and every line in it is whole: the leading turns in order, each with its
+    /// id and day, then its text whole or ending in the mark.
     #[test]
     fn the_text_never_exceeds_the_budget_at_any_budget() {
         let mixes = [
@@ -1196,12 +1229,28 @@ mod tests {
             let frame = super::super::frame_cost(DESCRIPTION);
             let full = budget_for(hits, 12 * hits.len());
             for budget in frame + 1..=full {
-                let (text, _, _) = rendered(hits, budget);
+                let mut decision = Decision::opened(None, None, "");
+                let Some(text) = render(hits, budget, &mut decision) else {
+                    assert!(decision.injected.is_empty(), "budget {budget}");
+                    continue;
+                };
                 assert!(
                     text.chars().count() <= budget,
                     "{} characters against a budget of {budget}: {text}",
                     text.chars().count()
                 );
+                let lines: Vec<&str> = text
+                    .lines()
+                    .filter(|line| line.starts_with("- turn "))
+                    .collect();
+                assert!(!lines.is_empty(), "budget {budget}: {text}");
+                for (line, hit) in lines.iter().zip(hits) {
+                    let said = line.strip_prefix(&format!("- turn {} (2026-08-13): ", hit.turn_id));
+                    assert!(
+                        said.is_some_and(|said| said == hit.excerpt || said.ends_with("...")),
+                        "budget {budget}: {line:?}"
+                    );
+                }
             }
         }
     }

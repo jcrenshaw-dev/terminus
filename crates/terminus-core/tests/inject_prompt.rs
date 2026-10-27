@@ -833,11 +833,14 @@ fn the_injection_is_cut_to_the_configured_budget() {
                 );
                 assert_framed(&text);
 
-                // Each turn's line is its whole excerpt or ends with the mark,
-                // and a turn shown as the mark alone is not remembered (#94).
+                // Each turn's line is whole, its excerpt whole or ending with
+                // the mark, and a turn shown as the mark alone is not
+                // remembered (#94).
                 let state = inject::state::State::load(&bench.data_dir, Some(&session));
                 for (turn, said) in turn_lines(&text) {
-                    let Some(said) = said else { continue };
+                    let Some(said) = said else {
+                        panic!("budget {budget}: turn {turn}'s line was cut: {text}")
+                    };
                     assert!(
                         said == whole[&turn] || said.ends_with("..."),
                         "budget {budget}: turn {turn} shows {said:?} of {:?}",
@@ -858,7 +861,7 @@ fn the_injection_is_cut_to_the_configured_budget() {
 }
 
 /// Each turn line of an injection as the turn id and the text after the day,
-/// or `None` for that text when the backstop cut the line before it.
+/// or `None` for that text when the line was cut before it.
 fn turn_lines(text: &str) -> Vec<(i64, Option<String>)> {
     between_tags(text)
         .lines()
