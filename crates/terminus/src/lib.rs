@@ -7,8 +7,10 @@
 //! Exit codes: 0 success, 1 operational failure, 2 misuse. Data goes to stdout,
 //! errors go to stderr.
 
-// Stdout goes through `outln!` and `out!`, which survive a closed pipe.
-#![cfg_attr(not(test), deny(clippy::print_stdout))]
+// Stdout goes through `outln!` and `out!` and stderr through `errln!`. All three
+// escape archived controls and survive a closed pipe, and the print macros do
+// neither, so both streams are denied them.
+#![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
 
 use std::process::ExitCode;
 
@@ -95,14 +97,14 @@ fn ended(failure: Failure, empty: Option<Document>) -> ExitCode {
                 Some(document) => {
                     let _ = document.failed().because(msg).try_emit();
                 }
-                None => eprintln!("terminus: {msg}"),
+                None => errln!("terminus: {msg}"),
             }
             ExitCode::from(1)
         }
         Failure::Silent => ExitCode::from(1),
         Failure::Misuse(msg) => {
-            eprintln!("terminus: {msg}");
-            eprintln!("{USAGE}");
+            errln!("terminus: {msg}");
+            errln!("{USAGE}");
             ExitCode::from(2)
         }
     }

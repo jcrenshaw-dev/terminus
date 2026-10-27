@@ -102,7 +102,7 @@ fn list(args: List) -> Result<(), Failure> {
     }
     // Commentary on stderr the way `sessions` reports its own, so stdout stays
     // the answer.
-    eprintln!("{} observation(s)", listed.len());
+    errln!("{} observation(s)", listed.len());
     Ok(())
 }
 
@@ -162,12 +162,12 @@ fn regenerate(args: Regenerate) -> Result<(), Failure> {
     // Nothing on stdout without `--json`, the way `reindex` reports: this
     // command produces no data, and a caller must not have to filter a progress
     // line out of the document.
-    eprintln!(
+    errln!(
         "regenerated {} of {} selected observation(s)",
         done.rewritten, done.selected
     );
     for note in &done.notes {
-        eprintln!("{note}");
+        errln!("{note}");
     }
     Ok(())
 }

@@ -233,7 +233,7 @@ impl Payload {
 pub fn run(event: &str) -> Result<(), Failure> {
     // First, and before stdin is touched.
     if let Err(e) = spawn::detached(&["ingest"]) {
-        eprintln!("terminus: {event} could not start an ingest: {e}");
+        errln!("terminus: {event} could not start an ingest: {e}");
     }
 
     let payload = drain(event);
@@ -309,7 +309,7 @@ fn inject(event: &str, payload: Payload) -> Option<String> {
             let _ = done.send(text);
         });
     if let Err(e) = worker {
-        eprintln!("terminus: {event} could not start its injection: {e}");
+        errln!("terminus: {event} could not start its injection: {e}");
         return None;
     }
 
@@ -317,7 +317,7 @@ fn inject(event: &str, payload: Payload) -> Option<String> {
     match injected.recv_timeout(deadline) {
         Ok(text) => text,
         Err(RecvTimeoutError::Timeout) => {
-            eprintln!(
+            errln!(
                 "terminus: {event} abandoned its injection after {} ms",
                 deadline.as_millis()
             );
@@ -377,7 +377,7 @@ fn drain(event: &str) -> Payload {
             let _ = done.send((Payload::parse(&line), outcome.err()));
         });
     if let Err(e) = reader {
-        eprintln!("terminus: {event} could not read its payload: {e}");
+        errln!("terminus: {event} could not read its payload: {e}");
         return Payload::default();
     }
 
@@ -387,18 +387,18 @@ fn drain(event: &str) -> Payload {
         // A read that failed part way still parses what arrived, which is
         // almost always nothing. The line on stderr is the same one it was.
         Ok((payload, Some(e))) => {
-            eprintln!("terminus: {event} could not read its payload: {e}");
+            errln!("terminus: {event} could not read its payload: {e}");
             payload
         }
         Err(RecvTimeoutError::Timeout) => {
-            eprintln!(
+            errln!(
                 "terminus: {event} stopped waiting on a stdin that stayed open for {} ms",
                 deadline.as_millis()
             );
             Payload::default()
         }
         Err(RecvTimeoutError::Disconnected) => {
-            eprintln!("terminus: {event} lost the thread reading its payload");
+            errln!("terminus: {event} lost the thread reading its payload");
             Payload::default()
         }
     }

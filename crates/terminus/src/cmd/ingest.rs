@@ -25,7 +25,7 @@ pub fn run(args: Args) -> Result<(), Failure> {
             // produced no archive, where the hook spawning this per file is
             // owed silence on stdout.
             Outcome::Excluded(project) => {
-                eprintln!(
+                errln!(
                     "skipped {}: inside the excluded project {}",
                     transcript.display(),
                     project.display()
@@ -50,10 +50,10 @@ fn tree(data_dir: &std::path::Path) -> Result<(), Failure> {
     // run at all is a different thing and reaches `Failure::Operational`
     // through the `?` above.
     for (path, reason) in summary.failures.iter().chain(&summary.unreadable) {
-        eprintln!("{}", pass::note(path, reason));
+        errln!("{}", pass::note(path, reason));
     }
     if !summary.failures.is_empty() {
-        eprintln!("{} file(s) skipped", summary.failures.len());
+        errln!("{} file(s) skipped", summary.failures.len());
     }
 
     // The snapshot step's notes, on stderr and not in `runs.error`: it runs
@@ -62,7 +62,7 @@ fn tree(data_dir: &std::path::Path) -> Result<(), Failure> {
     // was not due: a snapshot is a copy of what is already archived, so there
     // is nothing to report unless it did not happen.
     for note in &summary.snapshot.notes {
-        eprintln!("{note}");
+        errln!("{note}");
     }
     Ok(())
 }

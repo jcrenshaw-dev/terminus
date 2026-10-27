@@ -44,7 +44,7 @@ pub fn run(json: bool) -> Result<(), Failure> {
         // omission: `--json` means the document IS the answer, so routine
         // commentary moves into it and stderr is left for warnings. Printing
         // both would give a caller two accounts of one walk that can disagree.
-        eprintln!("{} session(s) checked, {failed} failed", report.checked);
+        errln!("{} session(s) checked, {failed} failed", report.checked);
     }
 
     if report.is_ok() {

@@ -57,7 +57,7 @@ pub fn run(args: Args) -> Result<(), Failure> {
         // On stderr, and the search still runs. The tokens are conjoined, so a
         // truncated query is BROADER than the one asked for rather than wrong in
         // a direction the user cannot see - but they are owed the fact.
-        eprintln!(
+        errln!(
             "terminus: only the first {} tokens of the query were used",
             query.tokens().len()
         );
@@ -136,8 +136,8 @@ pub fn run(args: Args) -> Result<(), Failure> {
     // Commentary on stderr, so stdout stays the hits and nothing else. It is
     // also what makes an empty result visibly empty rather than silent.
     match &response.reason {
-        Some(reason) => eprintln!("terminus: {reason}"),
-        None => eprintln!("{} hit(s)", response.hits.len()),
+        Some(reason) => errln!("terminus: {reason}"),
+        None => errln!("{} hit(s)", response.hits.len()),
     }
     Ok(())
 }

@@ -115,7 +115,7 @@ pub fn run(args: Args) -> Result<(), Failure> {
 
     // Commentary on stderr the way `status` reports its own, so stdout stays one
     // parseable line per session.
-    eprintln!("{} session(s)", listed.len());
+    errln!("{} session(s)", listed.len());
     Ok(())
 }
 

@@ -62,23 +62,23 @@ pub fn run(json: bool) -> Result<(), Failure> {
         // a caller must not have to filter a progress line out of the document.
         // In JSON mode the same counts are in the document, so printing them
         // here as well would be two accounts of one rebuild.
-        eprintln!(
+        errln!(
             "rebuilt {} turn(s) across {} session(s)",
             rebuilt.turns, rebuilt.sessions
         );
         // Only when there is one, so a store with nothing evicted prints the
         // one line it always has.
         if rebuilt.preserved > 0 {
-            eprintln!(
+            errln!(
                 "preserved {} evicted session(s) without rebuilding them",
                 rebuilt.preserved
             );
         }
         for (session_key, reason) in &rebuilt.failed {
-            eprintln!("{session_key}: {reason}");
+            errln!("{session_key}: {reason}");
         }
         if !rebuilt.failed.is_empty() {
-            eprintln!(
+            errln!(
                 "{} session(s) could not be rebuilt and were skipped",
                 rebuilt.failed.len()
             );

@@ -339,7 +339,7 @@ fn work(data_dir: &Path) -> Result<(), Failure> {
     // the durable record and `terminus status` is where it is read. It is here
     // for the case where a person ran the flag by hand.
     for (path, reason) in summary.failures.iter().chain(&summary.unreadable) {
-        eprintln!("{}", pass::note(path, reason));
+        errln!("{}", pass::note(path, reason));
     }
     Ok(())
 }

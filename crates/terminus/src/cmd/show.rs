@@ -94,7 +94,7 @@ pub fn run(args: Args) -> Result<(), Failure> {
     }
 
     for absent in &fetched.absent {
-        eprintln!("terminus: {}", absent.reason);
+        errln!("terminus: {}", absent.reason);
     }
     Ok(())
 }

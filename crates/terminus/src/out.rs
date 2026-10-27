@@ -19,6 +19,11 @@
 //! body `show` prints. No mode chooses it: the hook's document and `show`'s body
 //! are not `--json` output, and a process-wide flag would be one more thing to
 //! forget.
+//!
+//! **Stderr matches.** `errln!` escapes the whole formatted text the same way
+//! and drops it once the reader has gone, so a closed stderr cannot turn a
+//! hook's exit 0 into a panic. Both streams are linted (`print_stdout` and
+//! `print_stderr`), so a command cannot write around this file.
 
 use std::fmt;
 use std::io::{self, Write};
@@ -39,6 +44,13 @@ macro_rules! outln {
 macro_rules! out {
     ($($arg:tt)*) => {
         $crate::out::write(format_args!($($arg)*))
+    };
+}
+
+/// `eprintln!`, escaped, and dropped once stderr's reader has gone.
+macro_rules! errln {
+    ($($arg:tt)*) => {
+        $crate::out::write_err(format_args!("{}\n", format_args!($($arg)*)))
     };
 }
 
@@ -85,4 +97,18 @@ pub fn write_raw(bytes: &[u8]) {
 /// The same raw write, with its failure returned rather than handled.
 pub fn try_write_raw(bytes: &[u8]) -> io::Result<()> {
     put(bytes)
+}
+
+/// Write to stderr with its controls escaped, and drop the bytes if the reader
+/// has gone.
+///
+/// `eprintln!` panics on a stderr it cannot write. The hook's exit-0 rule leans
+/// on this stream, so a closed one drops the line the way a closed stdout does.
+pub fn write_err(args: fmt::Arguments<'_>) {
+    let mut err = io::stderr().lock();
+    settle(
+        err.write_all(escaped(args).as_bytes())
+            .and_then(|()| err.flush()),
+        "stderr",
+    );
 }

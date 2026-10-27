@@ -103,7 +103,7 @@ pub fn open_in(data_dir: &Path, config: Config) -> Result<Opened, Failure> {
     };
 
     if store.predates_this_build() {
-        eprintln!("terminus: {STALE}");
+        errln!("terminus: {STALE}");
     }
 
     Ok(Opened::Ready(Box::new(Reader { store, config })))
@@ -206,7 +206,7 @@ pub fn empty(document: Document, reason: &str, json: bool) -> Result<(), Failure
     if json {
         document.because(reason).emit();
     } else {
-        eprintln!("terminus: {reason}");
+        errln!("terminus: {reason}");
     }
     Ok(())
 }

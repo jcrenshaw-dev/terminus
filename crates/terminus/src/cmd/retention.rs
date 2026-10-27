@@ -95,20 +95,20 @@ pub fn run(args: Args) -> Result<(), Failure> {
 
     // Commentary on stderr, so stdout stays the list. `status` reports its own
     // counts the same way.
-    eprintln!(
+    errln!(
         "{} session(s) would be evicted, {} deleted, by the next ingest pass",
         selection.evict.len(),
         selection.delete.len()
     );
     if selection.over > 0 {
-        eprintln!(
+        errln!(
             "{} more are waiting: one pass acts on at most {} per action",
             selection.over,
             retention::MAX_PER_PASS
         );
     }
     if selection.excluded > 0 {
-        eprintln!(
+        errln!(
             "{} session(s) in excluded projects were left alone",
             selection.excluded
         );

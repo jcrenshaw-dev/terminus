@@ -313,3 +313,109 @@ fn show_writes_the_record_body_raw_under_an_escaped_header() {
         "the header does not show the escapes: {header}"
     );
 }
+
+impl Bench {
+    /// Cut the planted sidecar below its watermark, so the next pass fails it
+    /// as diverged and names its path.
+    fn diverge(&self) {
+        std::fs::write(self.sidecar(), b"{}\n").unwrap();
+    }
+}
+
+/// Neither stream holds ESC or BEL, and the two together spell both.
+fn assert_escaped_streams(label: &str, output: &Output) {
+    assert!(
+        !drives_a_terminal(&output.stdout) && !drives_a_terminal(&output.stderr),
+        "{label} wrote ESC or BEL:\nstdout {:?}\nstderr {:?}",
+        stdout(output),
+        stderr(output)
+    );
+    let both = format!("{}{}", stdout(output), stderr(output));
+    assert!(
+        both.contains("\\u001b") && both.contains("\\u0007"),
+        "{label} does not show the escapes:\nstdout {:?}\nstderr {:?}",
+        stdout(output),
+        stderr(output)
+    );
+}
+
+#[test]
+fn a_failed_pass_names_its_path_on_stderr_escaped() {
+    let bench = Bench::planted();
+    bench.diverge();
+    // The failure is on stderr alone, so the stdout half of the helper would
+    // pass on nothing: assert on stderr by name.
+    for args in [&["ingest"][..], &["backfill", "--work"]] {
+        let out = bench.run(args);
+        let err = stderr(&out);
+        assert!(
+            !drives_a_terminal(&out.stderr),
+            "{args:?} wrote ESC or BEL to stderr: {err:?}"
+        );
+        assert!(
+            err.contains("agent-\\u001b\\u0007.jsonl"),
+            "{args:?} did not name the diverged path: {err:?}"
+        );
+    }
+}
+
+#[test]
+fn reindex_names_a_damaged_session_on_stderr_escaped() {
+    let bench = Bench::planted();
+    terminus_core::testkit::damage(&bench.conn(), &bench.session_key());
+    let out = bench.run(&["reindex"]);
+    let err = stderr(&out);
+    assert!(
+        !drives_a_terminal(&out.stderr),
+        "reindex wrote ESC or BEL to stderr: {err:?}"
+    );
+    assert!(
+        err.contains("agent-\\u001b\\u0007.jsonl"),
+        "reindex did not name the session: {err:?}"
+    );
+}
+
+/// All twelve commands, in human mode, on stdout and on stderr.
+#[test]
+fn no_command_writes_an_archived_control_to_either_stream() {
+    let bench = Bench::planted();
+    let id: i64 = bench
+        .conn()
+        .query_row("SELECT id FROM turns WHERE turn_seq = 1", [], |r| r.get(0))
+        .unwrap();
+    let id = id.to_string();
+    std::fs::write(
+        bench.config_dir.join("terminus.toml"),
+        "[retention]\naction = \"evict\"\nage_days = 30\n",
+    )
+    .unwrap();
+    // Read-only commands first: `ingest` and `backfill` start a run and would
+    // replace the planted run row, and `retention` and the passes would evict.
+    for args in [
+        vec!["sessions", "--project", "*"],
+        vec!["usage"],
+        vec!["status"],
+        vec!["doctor"],
+        vec!["search", "greeting", "--project", "*"],
+        vec!["show", &id, "--project", "*", "--before", "1"],
+        vec!["observations", "--project", "*"],
+        vec!["retention", "--dry-run"],
+    ] {
+        let out = bench.run(&args);
+        assert_escaped_streams(&args.join(" "), &out);
+    }
+
+    // The two that fail the planted session, on a store damaged the way
+    // bit-rot would, and the two passes on a transcript that diverged.
+    std::fs::remove_file(bench.config_dir.join("terminus.toml")).unwrap();
+    bench.diverge();
+    for args in [vec!["ingest"], vec!["backfill", "--work"]] {
+        let out = bench.run(&args);
+        assert_escaped_streams(&args.join(" "), &out);
+    }
+    terminus_core::testkit::damage(&bench.conn(), &bench.session_key());
+    for args in [vec!["verify"], vec!["reindex"]] {
+        let out = bench.run(&args);
+        assert_escaped_streams(&args.join(" "), &out);
+    }
+}
