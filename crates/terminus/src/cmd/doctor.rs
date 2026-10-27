@@ -40,6 +40,7 @@ use terminus_core::Config;
 
 use super::install::json_file::{Document, Json};
 use super::install::targets;
+use super::install::{CLAUDE_DEFAULT_CLEANUP_DAYS, KEEP_CLEANUP_DAYS};
 use super::install::{binary, claude};
 use super::json::Document as Envelope;
 use super::read::{self, Opened};
@@ -70,15 +71,9 @@ const MAX_ERROR_LINE: usize = 200;
 const AUTO_COMPACT_ENV: &str = "DISABLE_AUTO_COMPACT";
 
 /// Below this many days of Claude Code's own retention, doctor says what that
-/// costs. `cmd::install` holds the default and the raise value too, for its
-/// receipt. A change to either belongs in both.
+/// costs. The default it compares against and the raise value it prints are
+/// `cmd::install`'s definitions, which install's receipt reads too (#107).
 const LOW_CLEANUP_DAYS: i64 = 90;
-
-/// What Claude Code deletes after when `cleanupPeriodDays` is not set at all.
-const CLAUDE_DEFAULT_CLEANUP_DAYS: i64 = 30;
-
-/// What doctor's printed edit sets it to: ten years, which is "keep them".
-const KEEP_CLEANUP_DAYS: i64 = 3650;
 
 /// What one check found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

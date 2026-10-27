@@ -32,11 +32,12 @@ use json_file::{Document, Json};
 use crate::cmd::Failure;
 
 /// What Claude Code deletes after, when `cleanupPeriodDays` is not set at all.
-const CLAUDE_DEFAULT_CLEANUP_DAYS: i64 = 30;
+/// Doctor reads this definition too (#107).
+pub(super) const CLAUDE_DEFAULT_CLEANUP_DAYS: i64 = 30;
 
 /// What the printed line raises it to: ten years, which is "keep them". Doctor
-/// prints the same line.
-const KEEP_CLEANUP_DAYS: i64 = 3650;
+/// prints the same line from this definition.
+pub(super) const KEEP_CLEANUP_DAYS: i64 = 3650;
 
 /// A new owner-only file in `dir`, and the path it landed at.
 ///
