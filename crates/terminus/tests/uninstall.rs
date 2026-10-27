@@ -891,6 +891,40 @@ fn purge_refuses_while_an_ingest_holds_the_lock() {
     assert!(!fixture.data_dir().exists());
 }
 
+/// A data directory this process cannot read is not a missing store: `--purge`
+/// fails, says it cannot read the store, and leaves the archive where it is.
+#[test]
+fn purge_on_an_unreadable_data_directory_fails_and_keeps_the_archive() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = fixture();
+    fixture.install().ingest();
+    let data_dir = fixture.data_dir();
+    let mode =
+        |bits| std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(bits)).unwrap();
+    mode(0o000);
+    // Root reads through the mode bits, which leaves nothing to test.
+    if std::fs::read_dir(&data_dir).is_ok() {
+        mode(0o700);
+        return;
+    }
+    let output = fixture.run(&["uninstall", "--purge", "--yes"]);
+    mode(0o700);
+
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(
+        text(&output).contains("cannot read the terminus store"),
+        "{}",
+        text(&output)
+    );
+    assert!(
+        !out(&output).contains("nothing to purge"),
+        "{}",
+        text(&output)
+    );
+    assert!(data_dir.join("terminus.db").is_file(), "the archive went");
+}
+
 /// `--purge` with no store is a state, not a failure, and deletes nothing.
 #[test]
 fn purge_before_the_first_ingest_deletes_nothing() {

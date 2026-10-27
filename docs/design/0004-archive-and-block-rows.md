@@ -269,7 +269,7 @@ Options are in [commands.md](../commands.md#the-store), and the `--json` fields 
 
 - **Inputs:** the store.
 - **Outputs:** `VACUUM`, which rebuilds the file without its free pages, then `PRAGMA wal_checkpoint(TRUNCATE)`, because on a WAL store the vacuum writes the rebuilt file through the WAL and the checkpoint is what makes the space come back. It prints the size of `terminus.db` and its two sidecars before and after. It deletes no row: only retention deletes sessions, and this gives back the space that left.
-- **Refusals:** it takes `LOCK` before it opens anything, and exits 1 when a pass holds it. With no store, there is nothing to reclaim and it exits 0.
+- **Refusals:** it takes `LOCK` before it opens anything, and exits 1 when a pass holds it. With no store, there is nothing to reclaim and it exits 0. A store it cannot read exits 1.
 
 ### `terminus usage`
 

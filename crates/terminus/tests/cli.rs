@@ -1608,6 +1608,46 @@ fn a_json_command_that_fails_operationally_answers_with_a_document() {
     }
 }
 
+/// A data directory this process cannot read holds a store it cannot read, and
+/// `compact` says so the way every other data command does, rather than calling
+/// it no store and exiting 0.
+#[test]
+fn compact_on_an_unreadable_data_directory_fails() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let bench = bench();
+    bench.ingest("session-recall.jsonl");
+    let mode = |bits| {
+        std::fs::set_permissions(&bench.data_dir, std::fs::Permissions::from_mode(bits)).unwrap()
+    };
+    mode(0o000);
+    // Root reads through the mode bits, which leaves nothing to test.
+    if std::fs::read_dir(&bench.data_dir).is_ok() {
+        mode(0o700);
+        return;
+    }
+    let plain = bench.run(&["compact"]);
+    let json = bench.run(&["compact", "--json"]);
+    mode(0o700);
+
+    assert_eq!(plain.status.code(), Some(1), "{}", stderr(&plain));
+    assert!(
+        stderr(&plain).starts_with("terminus: cannot read the terminus store"),
+        "{}",
+        stderr(&plain)
+    );
+    assert_eq!(json.status.code(), Some(1));
+    assert_eq!(stderr(&json), "");
+    let value = document(&json);
+    assert_eq!(value["ok"], false, "{value}");
+    assert!(
+        value["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.starts_with("cannot read the terminus store")),
+        "{value}"
+    );
+}
+
 /// A reader that closes the pipe changes no exit code and prints no panic.
 ///
 /// `println!` panicked with exit 101 on a closed stdout, so `terminus sessions |

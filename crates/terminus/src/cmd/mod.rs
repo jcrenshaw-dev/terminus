@@ -162,6 +162,20 @@ pub fn footprint(data_dir: &Path) -> Footprint {
     }
 }
 
+/// Whether `data_dir` holds a store.
+///
+/// A store this process cannot look at is a failure, not a missing store:
+/// `Path::exists` says false for both, and a command would then answer an
+/// archive it cannot read with "there is no store". The rule
+/// `Store::open_read_only` follows.
+pub fn has_store(data_dir: &Path) -> Result<bool, Failure> {
+    let path = data_dir.join(terminus_core::store::DB_FILE_NAME);
+    path.try_exists().map_err(|e| {
+        let detail = e.to_string();
+        Failure::Operational(terminus_core::Error::StoreUnreadable { path, detail }.to_string())
+    })
+}
+
 /// What a directory holds, in bytes: every file under it, recursively.
 ///
 /// Every file rather than the three [`footprint`] sums. `data move` carries

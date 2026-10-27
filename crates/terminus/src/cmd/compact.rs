@@ -27,7 +27,7 @@
 //! that did not happen is an operational failure rather than an empty answer.
 
 use terminus_core::ingest::{lock, Attempt};
-use terminus_core::store::{Store, DB_FILE_NAME};
+use terminus_core::store::Store;
 
 use super::json::Document;
 use super::{footprint, human, read, Failure, Footprint};
@@ -42,7 +42,7 @@ pub fn run(json: bool) -> Result<(), Failure> {
     // it locks in. A machine that has never ingested must not acquire a data
     // directory by being asked to compact one, and "there is nothing to
     // reclaim" is a true answer to the question rather than a failure of it.
-    if !data_dir.join(DB_FILE_NAME).exists() {
+    if !super::has_store(&data_dir)? {
         let reason = format!(
             "no terminus store at {}; there is nothing to reclaim",
             data_dir.display()

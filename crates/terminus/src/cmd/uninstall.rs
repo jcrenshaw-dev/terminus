@@ -42,7 +42,6 @@ use std::cell::Cell;
 use std::path::Path;
 
 use terminus_core::ingest::lock;
-use terminus_core::store::DB_FILE_NAME;
 
 use super::install::json_file::{self, Document, Json};
 use super::install::{self, binary, claude, targets};
@@ -438,7 +437,7 @@ fn unplace_dangling(stable: &Path, versions: &Path) -> bool {
 /// it, because the answer is the last moment either of them can change
 /// anything.
 fn purge(data_dir: &Path, yes: bool) -> Result<(), Failure> {
-    if !data_dir.join(DB_FILE_NAME).exists() {
+    if !super::has_store(data_dir)? {
         // Either nothing was ever ingested here or this is not a data
         // directory. Either way there is no store to delete, and
         // `remove_dir_all` on a directory terminus cannot recognize is not a

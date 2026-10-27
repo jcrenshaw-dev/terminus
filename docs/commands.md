@@ -127,7 +127,7 @@ Prints the store's path and size, the number of sessions and turns, how far into
 
 ### `terminus compact`
 
-Gives back the disk space retention freed. It rebuilds the database file without its free pages and then empties the write-ahead log, and prints the store's size before and after and the bytes reclaimed. It deletes nothing itself. It takes the ingest lock and exits 1 when a pass is running. With no store, it says there is nothing to reclaim and exits 0.
+Gives back the disk space retention freed. It rebuilds the database file without its free pages and then empties the write-ahead log, and prints the store's size before and after and the bytes reclaimed. It deletes nothing itself. It takes the ingest lock and exits 1 when a pass is running. With no store, it says there is nothing to reclaim and exits 0. A store it cannot read is an operational failure and exits 1.
 
 - `--json`
 
@@ -216,7 +216,7 @@ Removes what `install` added: the four hook entries from `settings.json`, the MC
 
 It keeps the versions folder, because a session already running may be using one of its files, and it keeps the data directory, because the archive is the product. It prints both paths. A step that cannot be done is reported, the rest still happen, and the command exits 1.
 
-- `--purge`: also deletes the whole data directory, its snapshots and the state the hooks keep included, after showing its path and a size and asking once. The size counts everything `--purge` deletes, the snapshots and the state the hooks keep included. With no `terminus.db` in the directory, it prints that there is nothing to purge and deletes nothing. The default answer is no. It takes the ingest lock and deletes nothing while a pass is running. With no answer to read, nothing is deleted and the command exits 1. It never deletes the versions folder.
+- `--purge`: also deletes the whole data directory, its snapshots and the state the hooks keep included, after showing its path and a size and asking once. The size counts everything `--purge` deletes, the snapshots and the state the hooks keep included. With no `terminus.db` in the directory, it prints that there is nothing to purge and deletes nothing. The default answer is no. It takes the ingest lock and deletes nothing while a pass is running. With no answer to read, or a store it cannot read, nothing is deleted and the command exits 1. It never deletes the versions folder.
 - `-y`, `--yes`: answers the `--purge` question yes. Without `--purge` it changes nothing.
 
 ## Run by Claude Code

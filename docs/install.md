@@ -88,7 +88,7 @@ It keeps two folders and prints both paths:
 - **The versions folder**, `~/.local/lib/crenshawdev/terminus/versions/`, because a session already running may be using one of its files.
 - **The data directory**, which holds the archive ([where it is](configuration.md#the-data-directory)).
 
-`terminus uninstall --purge` also deletes the whole data directory, its snapshots and the state the hooks keep included. It shows the directory's path and the size of everything it deletes, the snapshots and the state the hooks keep included, and asks once, with no as the default answer. When the directory holds no `terminus.db`, it prints that there is nothing to purge and deletes nothing, the snapshots and the state the hooks keep included. `-y` or `--yes` answers yes without asking, and does nothing without `--purge`. With no answer to read, or while an ingest is running, nothing is deleted and the command exits 1. `--purge` never deletes the versions folder.
+`terminus uninstall --purge` also deletes the whole data directory, its snapshots and the state the hooks keep included. It shows the directory's path and the size of everything it deletes, the snapshots and the state the hooks keep included, and asks once, with no as the default answer. When the directory holds no `terminus.db`, it prints that there is nothing to purge and deletes nothing, the snapshots and the state the hooks keep included. `-y` or `--yes` answers yes without asking, and does nothing without `--purge`. With no answer to read, a store it cannot read, or while an ingest is running, nothing is deleted and the command exits 1. `--purge` never deletes the versions folder.
 
 The full options are in [commands](commands.md#terminus-uninstall).
 
