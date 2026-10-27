@@ -171,7 +171,7 @@ fn document(
 /// a hot WAL can hold a large share of what has been written.
 fn size(data_dir: &Path) -> String {
     let total = size_bytes(data_dir);
-    format!("{total} byte(s) ({})", human(total))
+    format!("{total} byte(s) ({})", super::human(total))
 }
 
 /// The same footprint as a number, which is what `--json` carries: a consumer
@@ -189,19 +189,4 @@ fn size_bytes(data_dir: &Path) -> u64 {
         }
     }
     total
-}
-
-fn human(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit + 1 < UNITS.len() {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{bytes} {}", UNITS[0])
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
-    }
 }

@@ -211,3 +211,18 @@ pub fn json_flag(parser: &mut lexopt::Parser) -> Result<bool, Failure> {
     }
     Ok(json)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One formatter for every size a command prints, so the install estimate
+    /// and `status` agree on a byte count (#107).
+    #[test]
+    fn a_byte_count_reads_in_powers_of_two() {
+        assert_eq!(human(0), "0 B");
+        assert_eq!(human(1023), "1023 B");
+        assert_eq!(human(1024), "1.0 KiB");
+        assert_eq!(human(1_400_000_000), "1.3 GiB");
+    }
+}

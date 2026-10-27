@@ -247,6 +247,14 @@ fn backfill_prints_an_estimate_and_finishes_behind_the_shell() {
         "the estimate must name a byte total: {stdout}"
     );
     assert!(
+        stdout.contains("(1.3 GiB in "),
+        "the measured rate must read in the unit status uses (#107): {stdout}"
+    );
+    assert!(
+        !["GB", "MB", "KB"].iter().any(|unit| stdout.contains(unit)),
+        "no size may print in powers of ten (#107): {stdout}"
+    );
+    assert!(
         stdout.contains("an estimate from a measured rate"),
         "the estimate must say it is an estimate from a measured rate: {stdout}"
     );

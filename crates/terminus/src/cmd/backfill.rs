@@ -173,13 +173,13 @@ pub fn print_estimate(estimate: &Estimate) {
     outln!(
         "{} transcript(s), {} not yet archived",
         estimate.transcripts,
-        bytes(estimate.unread_bytes)
+        super::human(estimate.unread_bytes)
     );
     outln!(
         "about {} across {WORKERS} workers - an estimate from a measured rate \
          ({} in {}), not a promise",
         duration(estimate.duration()),
-        bytes(MEASURED_BYTES),
+        super::human(MEASURED_BYTES),
         duration(std::time::Duration::from_millis(MEASURED_MS)),
     );
     for (path, reason) in &estimate.unreadable {
@@ -189,29 +189,6 @@ pub fn print_estimate(estimate: &Estimate) {
             path.display()
         );
     }
-}
-
-/// A byte count a human reads, in powers of ten because that is how disk sizes
-/// are quoted and this number is compared against `du`.
-fn bytes(count: u64) -> String {
-    const UNITS: [(u64, &str); 4] = [
-        (1_000_000_000, "GB"),
-        (1_000_000, "MB"),
-        (1_000, "KB"),
-        (1, "B"),
-    ];
-    for (scale, unit) in UNITS {
-        if count >= scale {
-            if scale == 1 {
-                return format!("{count} {unit}");
-            }
-            // One decimal place: the estimate is not precise enough for two,
-            // and "1.1 GB" is how the measured corpus is quoted.
-            let tenths = count * 10 / scale;
-            return format!("{}.{} {unit}", tenths / 10, tenths % 10);
-        }
-    }
-    format!("{count} B")
 }
 
 /// A duration a human reads, at the resolution the estimate deserves.

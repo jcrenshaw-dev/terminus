@@ -449,7 +449,7 @@ fn purge(data_dir: &Path, yes: bool) -> Result<(), Failure> {
     let bytes = size_bytes(data_dir);
     outln!("  --purge deletes the archive itself. this cannot be undone.");
     outln!("    {}", data_dir.display());
-    outln!("    {bytes} byte(s) ({})", human(bytes));
+    outln!("    {bytes} byte(s) ({})", super::human(bytes));
     outln!();
 
     match answered(data_dir, yes) {
@@ -531,21 +531,6 @@ fn size_bytes(data_dir: &Path) -> u64 {
         }
     }
     total
-}
-
-fn human(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit + 1 < UNITS.len() {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{bytes} {}", UNITS[0])
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
-    }
 }
 
 fn detail(failure: Failure) -> String {
