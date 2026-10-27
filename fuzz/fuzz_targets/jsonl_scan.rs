@@ -10,7 +10,7 @@ fuzz_target!(|data: &[u8]| {
     // The watermark ingest stores comes from here; it can never point past
     // the bytes that were read.
     assert!(scan.resume_offset <= data.len() as u64);
-    let _ = scan.consumed(0);
+    assert_eq!(scan.resume_offset, parse::complete_len(data) as u64);
     let _ = scan.turn_count();
     let _ = scan
         .turns()
