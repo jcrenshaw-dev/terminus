@@ -32,8 +32,8 @@ A diff that breaks one of these is high severity.
 
 Flag any of these in a diff:
 
-- **SQL.** SQL text built with `format!` or `push_str` from anything other than a constant identifier or `?` placeholders. Every value must be bound.
-- **FTS5.** A `MATCH` expression not produced by `Query::parse` and `match_expression` in `core/recall/query.rs`, which split on non-alphanumerics and double-quote each token.
+- **SQL.** SQL text built with `format!` or `push_str` from anything other than a constant identifier or fixed fragment. Every value must be bound, and a list is one parameter read with `json_each`, never a run of `?` per value.
+- **FTS5.** A `MATCH` expression not produced by `Query::parse` and `match_expression` in `core/recall/query.rs`, which split on anything not a letter or digit, drop words the tokenizer cannot index, and double-quote each token.
 - **Subprocesses.**
   - Any new `std::process::Command`.
   - Any shell (`sh -c`).
@@ -43,9 +43,9 @@ Flag any of these in a diff:
 - **Untrusted paths.**
   - A file opened, created or deleted at a path that came from transcript content, hook stdin (`transcript_path`, `cwd`) or MCP arguments.
   - A `session_id` used in a file name without the hex-and-hyphen allow-list (8 to 64 characters).
-- **File modes.** A data-directory file created without `core/owner_only.rs` (0700 directories, 0600 files, set in the creating call). Any use of `std::fs::write` or default `OpenOptions` for a file that holds archive data, prompts or settings.
+- **File modes.** A file or directory created without `core/owner_only.rs` (0700 directories, 0600 files, set in the creating call). Any use of `std::fs::write` or default `OpenOptions` for a file that holds archive data, prompts or settings. A directory inside one this process made must use `owner_only::create_dir`, which makes no parent: making a vanished parent again lets `data move` write half the store into a directory nobody checked.
 - **Unbounded reads.** A new `read_to_end`, `read_until` or `fs::read` on transcripts, sidecar `.meta.json` files, stdin or MCP input with no size cap. The existing uncapped reads are listed in `THREAT-MODEL.md`; do not add more.
-- **Deletion.** `remove_dir_all` or `remove_file` on a path from an environment variable, config or the pointer file, without proving the target belongs to Terminus.
+- **Deletion.** `remove_dir_all` or `remove_file` on a path from an environment variable, config or the pointer file, without proving the target belongs to Terminus. Retention's `delete` must keep checking that the transcript is gone inside the delete's own transaction.
 - **Text reaching the model.**
   - Archived text that reaches `additionalContext` or an MCP result without the redaction filter when `redact_recall` is on.
   - A new field emitted into Claude's context unfiltered.
@@ -57,22 +57,25 @@ Flag any of these in a diff:
   - leaves a file wider than the one it replaces;
   - removes entries Terminus did not create.
 - **Panics.** `panic!`, `unwrap`, `expect`, `assert!` or indexing reachable from transcript content on the hook or ingest path. One bad file must not stop ingest of the rest.
-- **Terminal output.** Archived bytes written to a terminal (`show`, `search`) with no handling of control characters.
+- **Terminal output.** Human output written any way but `outln!`, `out!` or `errln!` (`bin/out.rs`), which escape control characters. The only raw writers are `--json` documents, the hook's document, `show`'s record body and the MCP server's JSON-RPC writer; flag a new one.
 - **Release.** A change to `install.sh` or `scripts/sign-release.sh` that:
   - relaxes the pinned key;
   - reorders verify and download;
   - allows non-https sources;
   - adds sudo;
   - signs anywhere but the maintainer's machine.
+- **CI.** A workflow change that hands `ANTHROPIC_API_KEY` to a job other than `review` and `review-pr` in `fast.yml`, lets `review` run on a fork, a draft or a Dependabot pull request, lets `review-pr` run from a branch other than the default, or puts a signing key in any workflow.
 - **Dependencies.** A new dependency that brings a network stack, an async runtime, or a build script that downloads.
 
 ## Known gaps, not yet fixed
 
 These are recorded in `THREAT-MODEL.md`. Report any diff that widens one.
 
-- Re-injected archived text carries no marker saying it is data, not instructions.
+- Re-injected archived text is framed as quoted history between `terminus-recall` tags, but the frame enforces nothing.
 - `recall_search` with `project: "*"` reads every project that is not excluded.
 - Symlinked transcript files are followed to any target. `terminus ingest <path>` accepts any path.
-- MCP stdin, transcript lines and `recall_get` bodies have no size limit.
+- MCP stdin, transcript lines and `recall_get` bodies have no size limit, and `recall_search`'s `paths` list has no count limit.
+- A planted `parentUuid` links a session to any archived session, with no project or exclusion filter.
 - Reads of the archive check no block hashes; only `verify` does.
-- `data move` removes the old data directory without checking that it holds `terminus.db`.
+- `data move` removes the old data directory without checking that it holds `terminus.db`, and an account that can write the destination's parent can swap the destination after the last check.
+- A Dependabot pull request, a `.sentinel` pin bump included, merges with no model review.
