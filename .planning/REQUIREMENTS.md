@@ -5,31 +5,8 @@
 
 ## Active
 
-Committed scope for mule. Each maps to exactly one roadmap phase and names the issue it comes from.
-
-### Old store code
-
-
-### Planning tags
-
-
-### Test gate
-
-
-### Search
-
-
-### Ingest pass
-
-
-### Archive
-
-
-### Owner-only files and signing
-
-
-### Output
-
+No cycle open. mule's eighteen requirements are under `## Shipped`, labelled
+mule. `/cad-phase add` opens the next cycle.
 
 ## Shipped
 

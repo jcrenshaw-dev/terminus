@@ -28,11 +28,25 @@ The transcript is the record: every session archived losslessly and verifiably, 
 
 ### Active
 
-**mule, opened 2026-10-22.**
+No cycle open.
 
-The bugs open at 1.0.0, plus the cleanup the 2026-10-22 simplify review found in the same code, all filed as issues. Upgrade code for store layouts 1.0.0 can't create comes out (#105), and so do the planning tags in comments, with a test that keeps them out (#106). The macOS Intel hook tests stop failing the merge gate (#75, #104). Search stops returning nothing for an unindexable word and checks dates as dates (#23, #24, #108). One pass driver replaces three, and recovery notes stop reading as errors (#31, #96). Continuation links, retention's delete and the observations query are fixed (#11, #43, #70). Every file Terminus writes is owner-only through one helper, and signing runs no installer code (#73, #99). Every command escapes archived text and answers a `--json` failure with a document, and `uninstall --purge` and the prompt line say what they really do (#72, #107, #95, #94).
+**Shipped: mule, closed 2026-10-27.**
 
-The version is named at the release.
+The bugs open at 1.0.0, plus the cleanup the 2026-10-22 simplify review found in the same code. Upgrade code for store layouts 1.0.0 can't create is gone (#105), and so are the planning tags in comments, with a test that keeps them out (#106). The macOS Intel hook tests no longer fail the merge gate, and a failed timing test says whether the hook blocked or the runner stalled (#75, #104). Search returns the other words' hits past an unindexable word, checks dates as dates, and binds every list as one parameter (#23, #24, #108). One pass driver replaces three, and recovery notes no longer read as errors (#31, #96). Continuation links, retention's delete and the observations query are fixed (#11, #43, #70). Every file Terminus writes is owner-only through one helper set, and signing runs no installer code (#73, #99). Every command escapes archived text and answers a `--json` failure with a document, and `uninstall --purge` and the prompt line say what they really do (#72, #107, #95, #94).
+
+| | |
+|---|---|
+| Phases | 8 (Old store code; Planning tags; Hook tests on macOS Intel; Search; One ingest pass; Archive; Owner-only files and signing; Output) |
+| Requirements | 18, all Complete: SHED-01, TAGS-01, GATE-01..02, SRCH-01..03, PASS-01..02, ARCV-01..03, OWN-01..02, OUT-01..04. Eighteen issues, closed by PR #124 when it merges |
+| Commits | 173 on `mule`, 2026-10-22 to 2026-10-27, excluding merges and this record's own commit |
+| Audit | PASS, 18/18 traced requirement -> phase -> plan -> verified, 0 broken, 0 deferred; 51/51 acceptance criteria covered by a UAT item, 0 breaks |
+| Manifest | 1.0.0 (`Cargo.toml` workspace), not bumped at close. The version is named at the release; mule has no `CHANGELOG.md` entry yet |
+
+Where it lives now: the requirement rows under `## Shipped` in REQUIREMENTS.md, labelled mule; the per-phase deviations, UAT results and context decisions in `.planning/ARCHIVE.md` (113 rows added); the full phase directories under `.planning/_archive-mule/`, since no tag names this close. `ARCHIVE.md` and `_archive-mule/` stay on the maintainer's machine and are not in git.
+
+Carried out of the close: `.planning/risk-carry/` holds 36 `risk_surface` reviews and adjudications from phases 1 to 6 and 8. It is transient, never committed, and the `/cad-land` that confirms the merge deletes it.
+
+Still outstanding: PR #124 is a draft. It is marked ready for its review, and the merge of `mule` to `main` is `/cad-land`'s. No release tag is cut for this close.
 
 ### Out of Scope
 
