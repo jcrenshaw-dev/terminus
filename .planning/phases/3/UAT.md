@@ -3,7 +3,7 @@ status: testing
 phase: 3
 fields_version: 1
 started: 2026-10-23
-updated: 2026-10-23
+updated: 2026-10-27
 ---
 
 ## Items
@@ -35,7 +35,10 @@ evidence: Held stdout: changed spawn_from in crates/terminus/src/cmd/spawn.rs to
 ### 4. The macos-15-intel release job passes the stdout test on the milestone pull request
 expected: The macos-15-intel release job passes the stdout test in every CI run of the milestone's pull request (human-verify: needs GitHub Actions on the milestone pull request)
 criterion: AC4
-status: pending
+status: pass
+first_pass: pass
+evidence: gh run 40580859095 (test, pull request #124, 36208af): test (macos-15-intel, release) success; reading_the_hooks_stdout_to_eof_returns_at_once_while_the_ingest_still_runs ... ok; all eight test jobs success
+reported: yes pass it
 
 ### 5. A forced timing miss in either #104 test names one verdict with its evidence
 expected: With its limit set to 0, each of the two #104 tests prints the longest gap between its polls, how long a /usr/bin/true spawn took, and the hook's own evidence (stdout test: whether the hook had exited; stdin test: whether the hook logged that it stopped waiting on stdin), and names one verdict: the hook was blocked, or the runner stalled. The stdout test can also name a process the hook started holding stdout open.
@@ -56,9 +59,9 @@ evidence: The scope check from ba581ad lists only hook.rs. test.yml diff is quie
 ## Summary
 
 total: 6
-passed: 5
+passed: 6
 failed: 0
-pending: 1
+pending: 0
 skipped: 0
 blocked: 0
 reworked: 0

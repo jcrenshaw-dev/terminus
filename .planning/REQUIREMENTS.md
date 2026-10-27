@@ -66,8 +66,8 @@ Deferred. Tracked as open issues, not in this roadmap: #109 (scope enforced thre
 |-------------|-------|--------|
 | SHED-01 | Phase 1 | Complete |
 | TAGS-01 | Phase 2 | Complete |
-| GATE-01 | Phase 3 | Pending |
-| GATE-02 | Phase 3 | Pending |
+| GATE-01 | Phase 3 | Complete |
+| GATE-02 | Phase 3 | Complete |
 | SRCH-01 | Phase 4 | Complete |
 | SRCH-02 | Phase 4 | Complete |
 | SRCH-03 | Phase 4 | Complete |
