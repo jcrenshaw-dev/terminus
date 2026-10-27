@@ -9,7 +9,6 @@
     "verifier": true,
     "skip_discuss": false,
     "inline_plan_threshold": 3,
-    "max_plan_tasks": 8,
     "test_command": null,
     "lint_command": null
   },
@@ -50,16 +49,16 @@
       },
       "gemini": {
         "tiers": {
-          "flagship": null,
-          "balanced": null,
-          "cheap": null
+          "flagship": "gemini-3.1-pro-preview",
+          "balanced": "gemini-3.8-flash",
+          "cheap": "gemini-3.5-flash-lite"
         }
       },
       "deepseek": {
         "tiers": {
-          "flagship": null,
-          "balanced": null,
-          "cheap": null
+          "flagship": "deepseek-v4-pro",
+          "balanced": "deepseek-v4-pro",
+          "cheap": "deepseek-v4-pro"
         }
       }
     },
@@ -71,6 +70,26 @@
     },
     "decision_review": {
       "tier": "flagship",
+      "effort": "high"
+    },
+    "triggers": {
+      "risk_surface": {
+        "surfaces": [
+          "auth",
+          "migrations",
+          "billing",
+          "concurrency",
+          "destructive",
+          "secrets",
+          "api_contract",
+          "untrusted_input"
+        ]
+      }
+    }
+  },
+  "roles": {
+    "cad-executor": {
+      "model": "sonnet",
       "effort": "high"
     }
   }
