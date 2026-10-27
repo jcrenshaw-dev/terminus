@@ -23,7 +23,7 @@ const COMMAND: &str = "stats";
 pub fn run(json: bool) -> Result<(), Failure> {
     let reader = match read::open()? {
         Opened::Ready(reader) => reader,
-        Opened::Nothing(reason) => return read::empty(document(&Stats::default()), &reason, json),
+        Opened::Nothing(reason) => return read::empty(empty(), &reason, json),
     };
 
     // A decision log missing either table is damage, caught here so the
@@ -69,6 +69,12 @@ pub fn run(json: bool) -> Result<(), Failure> {
     outln!("chars injected    {}", stats.chars_injected);
     outln!("chars referenced  {}", stats.chars_referenced);
     Ok(())
+}
+
+/// The document with every count at zero and no precision. The no-store answer,
+/// and what `main` writes when the command fails.
+pub(crate) fn empty() -> Document {
+    document(&Stats::default())
 }
 
 /// The envelope for this command, with the numbers already in it.

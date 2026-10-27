@@ -17,6 +17,7 @@ mod out;
 mod cmd;
 mod escape;
 
+use cmd::json::Document;
 use cmd::Failure;
 
 const USAGE: &str = "usage: terminus [--version] <command>\n\
@@ -63,28 +64,48 @@ pub fn main() -> ExitCode {
     if cmd::spawn::handed_off() {
         return ExitCode::SUCCESS;
     }
-    match run() {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(Failure::Operational(msg)) => {
-            eprintln!("terminus: {msg}");
+    match parse(&mut lexopt::Parser::from_env()) {
+        Ok(Invocation::Version) => outln!("{}", env!("CARGO_PKG_VERSION")),
+        Ok(Invocation::Usage) => outln!("{USAGE}"),
+        Ok(Invocation::Command(Command { empty, run })) => {
+            if let Err(failure) = run() {
+                return ended(failure, empty);
+            }
+        }
+        Err(failure) => return ended(failure, None),
+    }
+    ExitCode::SUCCESS
+}
+
+/// The exit code for a command that did not succeed, and what it writes first.
+///
+/// `empty` is the command's own empty document, held only when `--json` was
+/// asked for. An operational failure under `--json` is that document with
+/// `ok: false` and the reason, and nothing on stderr, so a caller reading
+/// stdout gets the same shape whether or not the command got far enough to
+/// answer (#107). Misuse writes no document: it is raised in a `parse` fn,
+/// before the command's output mode is known.
+fn ended(failure: Failure, empty: Option<Document>) -> ExitCode {
+    match failure {
+        Failure::Operational(msg) => {
+            match empty {
+                // A stdout that cannot be written still exits 1: the failure is
+                // the answer, and a second write to a dead stdout fails the same
+                // way, so the error has nowhere better to go.
+                Some(document) => {
+                    let _ = document.failed().because(msg).try_emit();
+                }
+                None => eprintln!("terminus: {msg}"),
+            }
             ExitCode::from(1)
         }
-        Err(Failure::Silent) => ExitCode::from(1),
-        Err(Failure::Misuse(msg)) => {
+        Failure::Silent => ExitCode::from(1),
+        Failure::Misuse(msg) => {
             eprintln!("terminus: {msg}");
             eprintln!("{USAGE}");
             ExitCode::from(2)
         }
     }
-}
-
-fn run() -> Result<(), Failure> {
-    match parse(&mut lexopt::Parser::from_env())? {
-        Invocation::Version => outln!("{}", env!("CARGO_PKG_VERSION")),
-        Invocation::Usage => outln!("{USAGE}"),
-        Invocation::Command(command) => return command(),
-    }
-    Ok(())
 }
 
 /// What a command line asks for, parsed and not yet run.
@@ -95,7 +116,13 @@ enum Invocation {
 }
 
 /// A subcommand whose arguments are parsed, waiting to run.
-type Command = Box<dyn FnOnce() -> Result<(), Failure>>;
+struct Command {
+    /// The command's own empty document, built from its parsed arguments
+    /// before `run` takes them. Held only when `--json` was asked for, and
+    /// never for a command that has no `--json`.
+    empty: Option<Document>,
+    run: Box<dyn FnOnce() -> Result<(), Failure>>,
+}
 
 fn parse(parser: &mut lexopt::Parser) -> Result<Invocation, Failure> {
     use lexopt::prelude::*;
@@ -143,19 +170,19 @@ fn command(name: &str, parser: &mut lexopt::Parser) -> Result<Command, Failure> 
         // is what replaced `no_more_arguments` here - the rule that a subcommand
         // rejects every argument it was not written for still holds, and
         // `--json` is now one it was.
-        "verify" => then(cmd::json_flag(parser)?, cmd::verify::run),
-        "reindex" => then(cmd::json_flag(parser)?, cmd::reindex::run),
-        "status" => then(cmd::json_flag(parser)?, cmd::status::run),
+        "verify" => flagged(parser, cmd::verify::empty, cmd::verify::run)?,
+        "reindex" => flagged(parser, cmd::reindex::empty, cmd::reindex::run)?,
+        "status" => flagged(parser, cmd::status::empty, cmd::status::run)?,
         // Reclaims what retention already freed and deletes nothing itself:
         // `VACUUM` then `PRAGMA wal_checkpoint(TRUNCATE)`, under the ingest lock,
         // because a plain `VACUUM` fails outright while a pass holds a write
         // transaction.
-        "compact" => then(cmd::json_flag(parser)?, cmd::compact::run),
+        "compact" => flagged(parser, cmd::compact::empty, cmd::compact::run)?,
         // Two tables that each reconcile to their own total:
         // archived blob bytes by project and by month, and the database file's
         // pages by table. Never one number for both - the file is 2.4x the
         // archive, and the difference is the derived tables.
-        "usage" => then(cmd::json_flag(parser)?, cmd::usage::run),
+        "usage" => flagged(parser, cmd::usage::empty, cmd::usage::run)?,
         // The transcripts as they arrived, one file per session, plus
         // a manifest that states in words that they are unredacted and what is
         // not in them. Redaction is keyed on destination and a directory the
@@ -163,7 +190,7 @@ fn command(name: &str, parser: &mut lexopt::Parser) -> Result<Command, Failure> 
         "export" => then(cmd::export::parse(parser)?, cmd::export::run),
         // A CLI data command and never an MCP tool: every
         // tool description sits in every session's context forever.
-        "stats" => then(cmd::json_flag(parser)?, cmd::stats::run),
+        "stats" => flagged(parser, cmd::stats::empty, cmd::stats::run)?,
         // The facts come off the parser, never off a model: this reads
         // back a row the ingest pass wrote and opens no network connection on
         // any path.
@@ -184,7 +211,7 @@ fn command(name: &str, parser: &mut lexopt::Parser) -> Result<Command, Failure> 
         // Read-only by construction: it opens the store
         // through the read path, never `Store::open`, and creates no file and
         // no directory on any path it takes.
-        "doctor" => then(cmd::json_flag(parser)?, cmd::doctor::run),
+        "doctor" => flagged(parser, cmd::doctor::empty, cmd::doctor::run)?,
         // Human-only and deliberately not a `--json` data command: it
         // prints a receipt for a person to read.
         "install" => then(cmd::install::parse(parser)?, |()| cmd::install::run()),
@@ -204,9 +231,38 @@ fn command(name: &str, parser: &mut lexopt::Parser) -> Result<Command, Failure> 
     })
 }
 
-/// A command's `run`, holding the arguments its `parse` returned.
+/// A command's `run`, holding the arguments its `parse` returned. For a command
+/// with no `--json`.
 fn then<A: 'static>(args: A, run: fn(A) -> Result<(), Failure>) -> Command {
-    Box::new(move || run(args))
+    Command {
+        empty: None,
+        run: Box::new(move || run(args)),
+    }
+}
+
+/// The same for a command that takes `--json`. `empty` builds its empty
+/// document from the arguments, and is called only when `json` is set.
+fn then_json<A: 'static>(
+    args: A,
+    json: bool,
+    empty: impl FnOnce(&A) -> Document,
+    run: fn(A) -> Result<(), Failure>,
+) -> Command {
+    Command {
+        empty: json.then(|| empty(&args)),
+        run: Box::new(move || run(args)),
+    }
+}
+
+/// [`then_json`] for the commands `cmd::json_flag` parses, whose only argument
+/// is the flag itself.
+fn flagged(
+    parser: &mut lexopt::Parser,
+    empty: fn() -> Document,
+    run: fn(bool) -> Result<(), Failure>,
+) -> Result<Command, Failure> {
+    let json = cmd::json_flag(parser)?;
+    Ok(then_json(json, json, |_| empty(), run))
 }
 
 pub(crate) fn unexpected(arg: lexopt::Arg<'_>) -> String {

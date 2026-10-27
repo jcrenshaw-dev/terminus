@@ -47,11 +47,7 @@ pub fn run(json: bool) -> Result<(), Failure> {
             "no terminus store at {}; there is nothing to reclaim",
             data_dir.display()
         );
-        return read::empty(
-            document(Footprint::default(), Footprint::default()),
-            &reason,
-            json,
-        );
+        return read::empty(empty(), &reason, json);
     }
 
     let _guard = match lock::try_acquire(&data_dir)? {
@@ -128,6 +124,13 @@ pub fn run(json: bool) -> Result<(), Failure> {
         human(reclaimed(before, after).max(0) as u64)
     );
     Ok(())
+}
+
+/// The document for a store that was never measured: both footprints at zero.
+/// The no-store answer, and what `main` writes when the command fails before it
+/// has measured anything.
+pub(crate) fn empty() -> Document {
+    document(Footprint::default(), Footprint::default())
 }
 
 /// The envelope for this command.

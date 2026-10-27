@@ -12,9 +12,7 @@ pub fn run(json: bool) -> Result<(), Failure> {
     // filter, so a `terminus.toml` that does not parse must not stop it.
     let reader = match read::open_in(&super::data_dir()?, Config::default())? {
         Opened::Ready(reader) => reader,
-        Opened::Nothing(reason) => {
-            return read::empty(document(&verify::Report::default()), &reason, json)
-        }
+        Opened::Nothing(reason) => return read::empty(empty(), &reason, json),
     };
     let report = verify::verify(reader.store())?;
     // Sessions, not failures: one session can fail several checks.
@@ -59,8 +57,14 @@ pub fn run(json: bool) -> Result<(), Failure> {
     }
 }
 
-/// The `--json` document. With no store it is built from an empty report, which
-/// gives `checked` 0 and no failures.
+/// The document for a store with nothing checked in it: `checked` 0 and no
+/// failures. The no-store answer, and what `main` writes when the command fails
+/// before it has a report.
+pub(crate) fn empty() -> Document {
+    document(&verify::Report::default())
+}
+
+/// The `--json` document.
 fn document(report: &verify::Report) -> Document {
     Document::new("verify")
         .field("checked", report.checked as i64)

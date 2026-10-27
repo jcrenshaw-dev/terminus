@@ -162,12 +162,18 @@ pub fn run(json: bool) -> Result<(), Failure> {
     Err(Failure::Silent)
 }
 
+/// The document with no check in it. `doctor` has no no-store answer, so this is
+/// only what `main` writes if the report itself cannot be written.
+pub(crate) fn empty() -> Envelope {
+    Envelope::new("doctor")
+}
+
 /// One `{command, ok, reason, data}` document, `data` keyed by check name.
 ///
 /// `ok` is the exit code's answer, as the envelope requires: a caller that
 /// parses the document and a caller that checks the code never disagree.
 fn emit(checks: &[Check], problems: &[&str]) -> Result<(), Failure> {
-    let mut document = Envelope::new("doctor");
+    let mut document = empty();
     for check in checks {
         document = document.field(
             &check.name,

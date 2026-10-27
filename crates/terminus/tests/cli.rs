@@ -1495,6 +1495,60 @@ fn an_operational_failure_exits_one_with_ok_false() {
     assert!(value["reason"].is_string(), "{value}");
 }
 
+/// Property 6: a `--json` command that fails operationally answers with its own
+/// empty document, `ok: false` and the reason, and puts nothing on stderr (#107).
+///
+/// The store is a `terminus.db` of bytes that are not a database, which every
+/// one of these commands opens and cannot read. The same run without `--json`
+/// prints `terminus: <reason>` on stderr and nothing on stdout, as it always has.
+#[test]
+fn a_json_command_that_fails_operationally_answers_with_a_document() {
+    let bench = bench();
+    std::fs::create_dir_all(&bench.data_dir).unwrap();
+    std::fs::write(bench.data_dir.join(DB_FILE_NAME), b"not a database at all").unwrap();
+    let dest = sweep_dest(&bench);
+
+    let taking_only_json = ["verify", "reindex", "status", "compact", "usage", "stats"];
+    for (command, args, fields) in DATA_COMMANDS
+        .iter()
+        .filter(|(command, ..)| taking_only_json.contains(command))
+    {
+        let mut argv = sweep_args(command, args, "1", &dest);
+        let plain = bench.run(&argv);
+        assert_eq!(plain.status.code(), Some(1), "`{}`", argv.join(" "));
+        assert_eq!(stdout(&plain), "", "`{}`", argv.join(" "));
+        assert!(
+            stderr(&plain).starts_with("terminus: "),
+            "`{}`: {}",
+            argv.join(" "),
+            stderr(&plain)
+        );
+
+        argv.push("--json");
+        let out = bench.run(&argv);
+        assert_eq!(out.status.code(), Some(1), "`{}`", argv.join(" "));
+        assert_eq!(stderr(&out), "", "`{}`", argv.join(" "));
+        let value = document(&out);
+        assert_eq!(value["command"], *command);
+        assert_eq!(value["ok"], false, "{value}");
+        assert!(
+            value["reason"].as_str().is_some_and(|r| !r.is_empty()),
+            "`{}` gave no reason: {value}",
+            argv.join(" ")
+        );
+        let mut present: Vec<&str> = value["data"]
+            .as_object()
+            .expect("data is an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        present.sort_unstable();
+        let mut documented: Vec<&str> = fields.to_vec();
+        documented.sort_unstable();
+        assert_eq!(present, documented, "`{}`", argv.join(" "));
+    }
+}
+
 /// A reader that closes the pipe changes no exit code and prints no panic.
 ///
 /// `println!` panicked with exit 101 on a closed stdout, so `terminus sessions |

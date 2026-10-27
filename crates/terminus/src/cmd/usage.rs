@@ -44,7 +44,7 @@ const COMMAND: &str = "usage";
 pub fn run(json: bool) -> Result<(), Failure> {
     let reader = match read::open()? {
         Opened::Ready(reader) => reader,
-        Opened::Nothing(reason) => return read::empty(document(&Usage::default()), &reason, json),
+        Opened::Nothing(reason) => return read::empty(empty(), &reason, json),
     };
     let usage = measure(&reader).map_err(op)?;
 
@@ -239,6 +239,12 @@ fn ordered(buckets: BTreeMap<Option<String>, Bucket>) -> Vec<Bucket> {
             .then(a.key.cmp(&b.key))
     });
     out
+}
+
+/// The document for a store with nothing in it. The no-store answer, and what
+/// `main` writes when the command fails.
+pub(crate) fn empty() -> Document {
+    document(&Usage::default())
 }
 
 fn document(usage: &Usage) -> Document {

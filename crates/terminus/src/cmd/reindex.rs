@@ -2,7 +2,7 @@
 
 use serde_json::json;
 use terminus_core::ingest::{lock, Attempt};
-use terminus_core::reindex;
+use terminus_core::reindex::{self, Rebuilt};
 
 use super::json::Document;
 use super::Failure;
@@ -38,14 +38,7 @@ pub fn run(json: bool) -> Result<(), Failure> {
             if json {
                 // A refusal is still an answer, and a `--json` caller that got
                 // an empty stdout could not tell it from a crash.
-                Document::new("reindex")
-                    .failed()
-                    .because(&held)
-                    .field("sessions", 0)
-                    .field("turns", 0)
-                    .field("skipped", Vec::<serde_json::Value>::new())
-                    .field("preserved", 0)
-                    .emit();
+                empty().failed().because(&held).emit();
                 return Err(Failure::Silent);
             }
             return Err(Failure::Operational(held));
@@ -60,18 +53,7 @@ pub fn run(json: bool) -> Result<(), Failure> {
     let rebuilt = reindex::reindex(&mut store)?;
 
     if json {
-        let mut document = Document::new("reindex")
-            .field("sessions", rebuilt.sessions as i64)
-            .field("turns", rebuilt.turns as i64)
-            .field(
-                "skipped",
-                rebuilt
-                    .failed
-                    .iter()
-                    .map(|(session_key, reason)| json!({"session_key": session_key, "reason": reason}))
-                    .collect::<Vec<_>>(),
-            )
-            .field("preserved", rebuilt.preserved as i64);
+        let mut document = document(&rebuilt);
         if !rebuilt.failed.is_empty() {
             document = document.failed().because(format!(
                 "{} session(s) could not be rebuilt and were skipped",
@@ -113,4 +95,26 @@ pub fn run(json: bool) -> Result<(), Failure> {
     // Every undamaged session was still rebuilt; the exit code is what tells a
     // script the store is not whole.
     Err(Failure::Silent)
+}
+
+/// The document with nothing rebuilt: `sessions` 0, `turns` 0, no skipped
+/// session and `preserved` 0. What a held lock answers, and what `main` writes
+/// when the command fails.
+pub(crate) fn empty() -> Document {
+    document(&Rebuilt::default())
+}
+
+fn document(rebuilt: &Rebuilt) -> Document {
+    Document::new("reindex")
+        .field("sessions", rebuilt.sessions as i64)
+        .field("turns", rebuilt.turns as i64)
+        .field(
+            "skipped",
+            rebuilt
+                .failed
+                .iter()
+                .map(|(session_key, reason)| json!({"session_key": session_key, "reason": reason}))
+                .collect::<Vec<_>>(),
+        )
+        .field("preserved", rebuilt.preserved as i64)
 }

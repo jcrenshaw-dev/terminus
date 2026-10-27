@@ -42,8 +42,7 @@ pub fn run(json: bool) -> Result<(), Failure> {
     let reader = match super::read::open()? {
         Opened::Ready(reader) => reader,
         Opened::Nothing(reason) => {
-            let document = document(None, 0, visible::Counts::default(), None, None);
-            return super::read::empty(document, &reason, json);
+            return super::read::empty(empty(), &reason, json);
         }
     };
     let (store, config) = (reader.store(), reader.config());
@@ -126,9 +125,14 @@ pub fn run(json: bool) -> Result<(), Failure> {
     Ok(())
 }
 
-/// The `--json` document. With no store it is called with no path, no
-/// exclusion list and no run, so every field the shape carries is there at zero
-/// or null.
+/// The document with no path, no exclusion list and no run, so every field the
+/// shape carries is there at zero or null. The no-store answer, and what `main`
+/// writes when the command fails.
+pub(crate) fn empty() -> Document {
+    document(None, 0, visible::Counts::default(), None, None)
+}
+
+/// The `--json` document.
 fn document(
     store: Option<String>,
     bytes: u64,
