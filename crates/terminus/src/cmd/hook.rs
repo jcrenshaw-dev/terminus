@@ -342,7 +342,9 @@ fn emit(event: &str, text: &str) {
             "additionalContext": text,
         }
     });
-    outln!("{document}");
+    // Raw (#72): the harness parses this line, and escaping the DEL and C1
+    // serde_json passes would change the context it hands Claude.
+    crate::out::write_raw(format!("{document}\n").as_bytes());
 }
 
 /// Read the one line the harness owes us, but never let the harness

@@ -117,8 +117,11 @@ impl Document {
     ///
     /// One line. Diagnostics go to stderr on every path, which is what lets
     /// `terminus search --json | jq` work while a warning is still printed.
+    ///
+    /// Written raw (#72): serde_json already spells every C0 control, and
+    /// escaping the DEL and C1 it passes would change the document's values.
     pub fn emit(&self) {
-        outln!("{}", self.render());
+        crate::out::write_raw(self.line().as_bytes());
     }
 
     /// The same write, with its failure returned rather than handled.
@@ -128,11 +131,14 @@ impl Document {
     /// failed write as its own result calls this instead and decides what each
     /// failure means to it.
     pub fn try_emit(&self) -> std::io::Result<()> {
-        use std::io::Write;
+        crate::out::try_write_raw(self.line().as_bytes())
+    }
 
-        let mut out = std::io::stdout().lock();
-        writeln!(out, "{}", self.render())?;
-        out.flush()
+    /// The rendered document and its newline, as one write.
+    fn line(&self) -> String {
+        let mut line = self.render();
+        line.push('\n');
+        line
     }
 }
 

@@ -518,3 +518,65 @@ fn no_environment_variable_reaches_past_the_knob_on_the_session_start_brief() {
         "an environment variable unfiltered the brief:\n{context}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The hook's document is the bytes themselves
+
+/// A prompt holding U+009B reaches Claude through the hook's one line unchanged.
+///
+/// The human output of every command escapes archived controls (#72), and this
+/// line is not human output: the harness parses it, and `additionalContext` is
+/// what Claude reads. U+009B is a character serde_json writes raw, so an escaped
+/// document would hold the text `\u009b` where this holds its two UTF-8 bytes.
+#[test]
+fn the_session_start_document_carries_a_c1_control_raw() {
+    let bench = bench();
+    let cwd = bench.root.join("project-c1");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let prompt = "ring the bell\u{9b}twice";
+    let record = serde_json::json!({
+        "parentUuid": null,
+        "isSidechain": false,
+        "cwd": cwd.to_str().unwrap(),
+        "sessionId": "c1-session",
+        "type": "user",
+        "uuid": "c1-0",
+        "timestamp": "2026-10-19T11:59:00.000Z",
+        "message": {"role": "user", "content": [{"type": "text", "text": prompt}]},
+    });
+    let path = bench.work.join("c1-session.jsonl");
+    std::fs::write(&path, format!("{record}\n")).unwrap();
+    let out = bench
+        .command(&["ingest", path.to_str().unwrap()])
+        .output()
+        .expect("spawn the ingest");
+    assert!(
+        out.status.success(),
+        "ingest: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let output = bench.hook("SessionStart", &payload(&cwd));
+    assert!(
+        output.status.success(),
+        "the hook exited {:?}: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let raw = &output.stdout;
+    assert!(
+        raw.windows(2).any(|w| w == [0xC2, 0x9B]),
+        "the document does not carry the raw bytes: {:?}",
+        String::from_utf8_lossy(raw)
+    );
+    assert!(
+        !String::from_utf8_lossy(raw).contains("\\u009b"),
+        "the document was escaped: {:?}",
+        String::from_utf8_lossy(raw)
+    );
+    let document: Value = serde_json::from_slice(raw).unwrap();
+    let context = document["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.contains('\u{9b}'), "{context:?}");
+}
