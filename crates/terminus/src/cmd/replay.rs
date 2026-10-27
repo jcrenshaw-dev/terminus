@@ -29,12 +29,11 @@ use super::Failure;
 const COMMAND: &str = "replay";
 
 pub fn run(args: Args) -> Result<(), Failure> {
-    let empty = document(&args.thresholds, &Replayed::default());
     let reader = match read::open()? {
         Opened::Ready(reader) => reader,
         // A machine that has never ingested has no decisions to replay, which
         // is an answer rather than a failure.
-        Opened::Nothing(reason) => return read::empty(empty, &reason, args.json),
+        Opened::Nothing(reason) => return read::empty(empty(&args), &reason, args.json),
     };
 
     // The same catch `stats` makes, for the same reason: a damaged log is a
@@ -43,7 +42,7 @@ pub fn run(args: Args) -> Result<(), Failure> {
     match read::decision_log(&reader) {
         read::DecisionLog::Present => {}
         read::DecisionLog::Damaged(tables) => {
-            return Err(read::unusable(empty, read::damaged(tables), args.json))
+            return Err(read::unusable(empty(&args), read::damaged(tables), args.json))
         }
     }
 
@@ -104,6 +103,13 @@ fn thresholds_of(thresholds: &Thresholds) -> serde_json::Value {
         "max_turns": thresholds.max_turns,
         "max_candidates": thresholds.max_candidates,
     })
+}
+
+/// The document for a replay that scored nothing, carrying the thresholds in
+/// force, flags included. The no-store answer, and what `main` writes when the
+/// command fails.
+pub(crate) fn empty(args: &Args) -> Document {
+    document(&args.thresholds, &Replayed::default())
 }
 
 /// The parsed command line for `replay`.

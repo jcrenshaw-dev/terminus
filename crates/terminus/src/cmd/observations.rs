@@ -46,14 +46,14 @@ pub fn run(args: Args) -> Result<(), Failure> {
 fn list(args: List) -> Result<(), Failure> {
     let reader = match read::open()? {
         Opened::Ready(reader) => reader,
-        Opened::Nothing(reason) => return read::empty(document(&[]), &reason, args.json),
+        Opened::Nothing(reason) => return read::empty(empty_listing(), &reason, args.json),
     };
     let conn = reader.store().conn();
     let config = reader.config();
 
     let scoped = scope::resolve(conn, config, &read::scope(args.project.as_deref())?)?;
     if let Some(reason) = scoped.reason() {
-        return read::empty(document(&[]), &reason.to_string(), args.json);
+        return read::empty(empty_listing(), &reason.to_string(), args.json);
     }
 
     let mut stored: BTreeMap<String, Row> = {
@@ -322,6 +322,28 @@ fn file_name(session_key: &str) -> &str {
         .rsplit(['/', '\\'])
         .next()
         .unwrap_or(session_key)
+}
+
+/// The empty document for whichever verb was asked for: the listing with no
+/// observation, or the rebuild with nothing selected and `since` echoed. The
+/// no-store answer, and what `main` writes when the command fails.
+pub(crate) fn empty(args: &Args) -> Document {
+    match args {
+        Args::List(_) => empty_listing(),
+        Args::Regenerate(args) => regenerated_document(args, &Regenerated::default()),
+    }
+}
+
+/// Whether `--json` was asked for, on either verb.
+pub(crate) fn json(args: &Args) -> bool {
+    match args {
+        Args::List(args) => args.json,
+        Args::Regenerate(args) => args.json,
+    }
+}
+
+fn empty_listing() -> Document {
+    document(&[])
 }
 
 fn document(observations: &[Value]) -> Document {

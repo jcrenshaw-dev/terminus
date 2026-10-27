@@ -163,9 +163,24 @@ fn command(name: &str, parser: &mut lexopt::Parser) -> Result<Command, Failure> 
         // hand. It writes nothing to stdout and exits 0 once its event name is
         // known, because a hook that fails is a hook that can block a prompt.
         "hook" => then(cmd::hook::parse(parser)?, cmd::hook::run),
-        "search" => then(cmd::search::parse(parser)?, cmd::search::run),
-        "show" => then(cmd::show::parse(parser)?, cmd::show::run),
-        "sessions" => then(cmd::sessions::parse(parser)?, cmd::sessions::run),
+        "search" => then_json(
+            cmd::search::parse(parser)?,
+            |a| a.json,
+            cmd::search::empty,
+            cmd::search::run,
+        ),
+        "show" => then_json(
+            cmd::show::parse(parser)?,
+            |a| a.json,
+            |_| cmd::show::empty(),
+            cmd::show::run,
+        ),
+        "sessions" => then_json(
+            cmd::sessions::parse(parser)?,
+            |a| a.json,
+            |_| cmd::sessions::empty(),
+            cmd::sessions::run,
+        ),
         // These three commands take `--json` and nothing else. `cmd::json_flag`
         // is what replaced `no_more_arguments` here - the rule that a subcommand
         // rejects every argument it was not written for still holds, and
@@ -187,22 +202,42 @@ fn command(name: &str, parser: &mut lexopt::Parser) -> Result<Command, Failure> 
         // a manifest that states in words that they are unredacted and what is
         // not in them. Redaction is keyed on destination and a directory the
         // user named is not egress, so the statement is the answer.
-        "export" => then(cmd::export::parse(parser)?, cmd::export::run),
+        "export" => then_json(
+            cmd::export::parse(parser)?,
+            |a| a.json,
+            cmd::export::empty,
+            cmd::export::run,
+        ),
         // A CLI data command and never an MCP tool: every
         // tool description sits in every session's context forever.
         "stats" => flagged(parser, cmd::stats::empty, cmd::stats::run)?,
         // The facts come off the parser, never off a model: this reads
         // back a row the ingest pass wrote and opens no network connection on
         // any path.
-        "observations" => then(cmd::observations::parse(parser)?, cmd::observations::run),
+        "observations" => then_json(
+            cmd::observations::parse(parser)?,
+            cmd::observations::json,
+            cmd::observations::empty,
+            cmd::observations::run,
+        ),
         // Read-only by construction and the one command whose flags move the
         // injection thresholds - for this report and nothing else: the live
         // path compiles them in.
-        "replay" => then(cmd::replay::parse(parser)?, cmd::replay::run),
+        "replay" => then_json(
+            cmd::replay::parse(parser)?,
+            |a| a.json,
+            cmd::replay::empty,
+            cmd::replay::run,
+        ),
         // A report and never an action: retention acts inside the ingest pass
         // and nowhere else, so this shares that one
         // evaluation function and applies nothing it names.
-        "retention" => then(cmd::retention::parse(parser)?, cmd::retention::run),
+        "retention" => then_json(
+            cmd::retention::parse(parser)?,
+            |a| a.json,
+            |_| cmd::retention::empty(),
+            cmd::retention::run,
+        ),
         // The MCP server is this binary, not a second artifact to place
         // and keep in version lockstep. It takes no arguments - a client spawns
         // it, nobody types it - and it writes JSON-RPC on stdout rather than
@@ -240,16 +275,17 @@ fn then<A: 'static>(args: A, run: fn(A) -> Result<(), Failure>) -> Command {
     }
 }
 
-/// The same for a command that takes `--json`. `empty` builds its empty
-/// document from the arguments, and is called only when `json` is set.
+/// The same for a command that takes `--json`. `json` reads the flag off the
+/// parsed arguments, and `empty` builds the command's empty document from them.
+/// `empty` is called only when the flag is set.
 fn then_json<A: 'static>(
     args: A,
-    json: bool,
+    json: fn(&A) -> bool,
     empty: impl FnOnce(&A) -> Document,
     run: fn(A) -> Result<(), Failure>,
 ) -> Command {
     Command {
-        empty: json.then(|| empty(&args)),
+        empty: json(&args).then(|| empty(&args)),
         run: Box::new(move || run(args)),
     }
 }
@@ -262,7 +298,7 @@ fn flagged(
     run: fn(bool) -> Result<(), Failure>,
 ) -> Result<Command, Failure> {
     let json = cmd::json_flag(parser)?;
-    Ok(then_json(json, json, |_| empty(), run))
+    Ok(then_json(json, |json| *json, |_| empty(), run))
 }
 
 pub(crate) fn unexpected(arg: lexopt::Arg<'_>) -> String {

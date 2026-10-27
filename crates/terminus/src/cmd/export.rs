@@ -70,11 +70,7 @@ pub fn run(args: Args) -> Result<(), Failure> {
         // Before the destination is touched: a machine that has never ingested
         // must not acquire an empty export directory by being asked a question.
         Opened::Nothing(reason) => {
-            return read::empty(
-                document(&args.destination, &Written::default()),
-                &reason,
-                args.json,
-            )
+            return read::empty(empty(&args), &reason, args.json)
         }
     };
 
@@ -337,6 +333,13 @@ fn op(error: terminus_core::Error) -> Failure {
 /// A missing destination is misuse and not a default. There is no sensible
 /// place to put an unredacted copy of every transcript that a user did not
 /// name.
+/// The document for an export that wrote nothing, naming the destination it was
+/// given. The no-store answer, and what `main` writes when the command fails,
+/// a destination that already holds something included.
+pub(crate) fn empty(args: &Args) -> Document {
+    document(&args.destination, &Written::default())
+}
+
 pub fn parse(parser: &mut lexopt::Parser) -> Result<Args, Failure> {
     use lexopt::prelude::*;
 

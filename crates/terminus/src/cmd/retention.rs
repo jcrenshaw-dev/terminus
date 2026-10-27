@@ -55,7 +55,7 @@ pub fn run(args: Args) -> Result<(), Failure> {
     let reader = match read::open()? {
         Opened::Ready(reader) => reader,
         Opened::Nothing(reason) => {
-            return read::empty(document(&Selection::default()), &reason, args.json)
+            return read::empty(empty(), &reason, args.json)
         }
     };
     let conn = reader.store().conn();
@@ -153,6 +153,12 @@ fn op(error: terminus_core::Error) -> Failure {
 /// documented spelling of it. Accepting it silently is what lets
 /// the documented command line keep working if a second verb is ever added
 /// here; rejecting every OTHER flag is the rule that stays.
+/// The document for a selection that names nothing. The no-store answer, and
+/// what `main` writes when the command fails.
+pub(crate) fn empty() -> Document {
+    document(&Selection::default())
+}
+
 pub fn parse(parser: &mut lexopt::Parser) -> Result<Args, Failure> {
     use lexopt::prelude::*;
 

@@ -27,14 +27,14 @@ const COMMAND: &str = "sessions";
 pub fn run(args: Args) -> Result<(), Failure> {
     let reader = match read::open()? {
         Opened::Ready(reader) => reader,
-        Opened::Nothing(reason) => return read::empty(document(&[]), &reason, args.json),
+        Opened::Nothing(reason) => return read::empty(empty(), &reason, args.json),
     };
     let conn = reader.store().conn();
     let config = reader.config();
 
     let scoped = scope::resolve(conn, config, &read::scope(args.project.as_deref())?)?;
     if let Some(reason) = scoped.reason() {
-        return read::empty(document(&[]), &reason.to_string(), args.json);
+        return read::empty(empty(), &reason.to_string(), args.json);
     }
 
     // Inlined rather than a helper taking a connection: `rusqlite` is
@@ -221,6 +221,12 @@ fn file_name(session_key: &str) -> &str {
         .rsplit(['/', '\\'])
         .next()
         .unwrap_or(session_key)
+}
+
+/// The document with no session. The no-store answer, and what `main` writes
+/// when the command fails.
+pub(crate) fn empty() -> Document {
+    document(&[])
 }
 
 /// The parsed command line for `sessions`.

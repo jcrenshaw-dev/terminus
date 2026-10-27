@@ -498,6 +498,12 @@ fn misuse_exits_two_with_an_empty_stdout() {
         vec!["reindex", "extra"],
         vec!["status", "-x"],
         vec!["no-such-command"],
+        // Misuse writes no document under `--json` either: it is raised in a
+        // `parse` fn, before the command's output mode is known (#107).
+        vec!["search", "--json"],
+        vec!["replay", "--json", "--ranked", "x"],
+        vec!["observations", "--json", "regenerate"],
+        vec!["status", "--json", "-x"],
     ] {
         let out = bench.run(&args);
         assert_eq!(
@@ -1508,12 +1514,14 @@ fn a_json_command_that_fails_operationally_answers_with_a_document() {
     std::fs::write(bench.data_dir.join(DB_FILE_NAME), b"not a database at all").unwrap();
     let dest = sweep_dest(&bench);
 
-    let taking_only_json = ["verify", "reindex", "status", "compact", "usage", "stats"];
-    for (command, args, fields) in DATA_COMMANDS
-        .iter()
-        .filter(|(command, ..)| taking_only_json.contains(command))
-    {
+    for (command, args, fields) in DATA_COMMANDS {
         let mut argv = sweep_args(command, args, "1", &dest);
+        // The fields an empty document takes from the arguments it was given.
+        match *command {
+            "replay" => argv.extend(["--ranked", "7"]),
+            "observations regenerate" => argv.extend(["--since", "2026-01-01"]),
+            _ => {}
+        }
         let plain = bench.run(&argv);
         assert_eq!(plain.status.code(), Some(1), "`{}`", argv.join(" "));
         assert_eq!(stdout(&plain), "", "`{}`", argv.join(" "));
@@ -1546,6 +1554,21 @@ fn a_json_command_that_fails_operationally_answers_with_a_document() {
         let mut documented: Vec<&str> = fields.to_vec();
         documented.sort_unstable();
         assert_eq!(present, documented, "`{}`", argv.join(" "));
+
+        match *command {
+            "replay" => assert_eq!(value["data"]["thresholds"]["ranked"], 7, "{value}"),
+            "observations regenerate" => assert!(
+                value["data"]["since"]
+                    .as_str()
+                    .is_some_and(|since| since.starts_with("2026-01-01")),
+                "{value}"
+            ),
+            "export" => {
+                assert_eq!(value["data"]["destination"], dest.as_str(), "{value}");
+                assert!(!std::path::Path::new(&dest).exists(), "{dest} was created");
+            }
+            _ => {}
+        }
     }
 }
 

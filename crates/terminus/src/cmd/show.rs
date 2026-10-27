@@ -47,7 +47,7 @@ const COMMAND: &str = "show";
 pub fn run(args: Args) -> Result<(), Failure> {
     let reader = match read::open()? {
         Opened::Ready(reader) => reader,
-        Opened::Nothing(reason) => return read::empty(document(&[], &[]), &reason, args.json),
+        Opened::Nothing(reason) => return read::empty(empty(), &reason, args.json),
     };
     let conn = reader.store().conn();
     // `--raw` changes which config the query layer reads and nothing else about
@@ -263,6 +263,12 @@ fn file_name(session_key: &str) -> &str {
         .rsplit(['/', '\\'])
         .next()
         .unwrap_or(session_key)
+}
+
+/// The document with no record and no absent id. The no-store answer, and what
+/// `main` writes when the command fails.
+pub(crate) fn empty() -> Document {
+    document(&[], &[])
 }
 
 /// The parsed command line for `show`.

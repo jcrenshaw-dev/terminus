@@ -50,7 +50,7 @@ pub fn run(args: Args) -> Result<(), Failure> {
     let reader = match read::open()? {
         Opened::Ready(reader) => reader,
         Opened::Nothing(reason) => {
-            return read::empty(document(&args.query, &[], truncated), &reason, args.json)
+            return read::empty(empty(&args), &reason, args.json)
         }
     };
 
@@ -181,6 +181,12 @@ fn session_of(session_key: &str) -> &str {
         .rsplit(['/', '\\'])
         .next()
         .unwrap_or(session_key)
+}
+
+/// The document with no hit, carrying the query as typed and whether it was cut.
+/// The no-store answer, and what `main` writes when the command fails.
+pub(crate) fn empty(args: &Args) -> Document {
+    document(&args.query, &[], Query::parse(&args.query).truncated())
 }
 
 /// The parsed command line for `search`.
