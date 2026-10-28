@@ -1,5 +1,1 @@
 /target
-# sentinel audit output - never committed
-/audit/
-# Claude Security scan output - unfixed vulnerability reports, never committed
-CLAUDE-SECURITY-*/

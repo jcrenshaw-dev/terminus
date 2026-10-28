@@ -40,7 +40,7 @@ A local build is not checked against any signature.
 
 **Using it:** [Installing, updating and uninstalling](docs/install.md) · [Commands](docs/commands.md) · [Settings](docs/configuration.md) · [JSON output](docs/json-shapes.md)
 
-**How it is built:** [Design](docs/design/README.md) · [Threat model](THREAT-MODEL.md) · [How a release is built, signed and checked](docs/release.md)
+**How it is built:** [Design](docs/design/README.md) · [How a release is built, signed and checked](docs/release.md)
 
 **Project:** [Changelog](CHANGELOG.md) · [Security policy](SECURITY.md) · [Trust](TRUST.md)
 
@@ -126,7 +126,7 @@ Terminus collects nothing about you and sends no telemetry. The platforms it sup
 
 **What leaves your machine.** Install and update fetch `install.sh` from `raw.githubusercontent.com`, then the manifest, its signature and the binary from this repository's GitHub releases, or from the `https://` source you pass. The archived turns Terminus hands Claude Code go to Claude's model with the rest of the session. Nothing else.
 
-Releases are signed on the maintainer's machine, never in CI, and `install.sh` checks the signature before it installs anything. How these claims are checked, on every pull request and before every release, is in [SECURITY.md](SECURITY.md). The checks come from [sentinel](https://github.com/jcrenshaw-dev/sentinel), the audit kit this repository carries as a submodule.
+Releases are signed on the maintainer's machine, never in CI, and `install.sh` checks the signature before it installs anything. How these claims are checked is in [SECURITY.md](SECURITY.md).
 
 ## Current state
 
@@ -136,7 +136,7 @@ Every open bug is in the [issues](https://github.com/jcrenshaw-dev/terminus/issu
 
 Issues are welcome: bugs, questions, and reports of anything in the docs that is wrong. Pull requests are by invitation only; open an issue first. Security problems go through [SECURITY.md](SECURITY.md), not a public issue.
 
-The tests run with `cargo test --workspace --all-features`. CI runs them on every push and pull request, on the debug and the release build, on Linux and macOS, on x86_64 and aarch64. `main` takes changes only through pull requests with signed commits, and only once the tests and sentinel's checks pass.
+The tests run with `cargo test --workspace --all-features`. CI runs them on every push and pull request, on the debug and the release build, on Linux and macOS, on x86_64 and aarch64. `main` takes changes only through pull requests with signed commits, and only once the tests pass.
 
 ## Sponsoring
 

@@ -1,5 +1,5 @@
-# cargo-deny config for Terminus, copied from sentinel's mechanical/deny.toml
-# with the license list cut to what Terminus's dependencies actually need.
+# cargo-deny config for Terminus. The license list holds what Terminus's
+# dependencies actually need.
 
 [advisories]
 # Vulnerability advisories always fail; cargo-deny no longer allows turning
