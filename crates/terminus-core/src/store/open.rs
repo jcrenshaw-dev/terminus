@@ -160,8 +160,8 @@ impl Store {
             // open never leaves a declared column absent.
             missing: Vec::new(),
             // The same sentence, one level up: `bring_forward`'s missing-table
-            // arm creates a table this build declares and the store lacks, which
-            // is how `decisions` and `labels` reach an existing store with no
+            // arm creates a table this build declares and the store lacks, so a
+            // table added in a later release reaches an existing store with no
             // `DERIVED_SCHEMA` bump.
             missing_tables: Vec::new(),
         };
@@ -396,7 +396,7 @@ impl Store {
     }
 }
 
-/// Narrow a store an earlier build left readable by group or world.
+/// Narrow a store something left readable by group or world.
 ///
 /// Runs on every [`Store::open`] and on NO read-only open: `doctor`,
 /// `search`, `show` and `replay` report on a store, and reporting on something
