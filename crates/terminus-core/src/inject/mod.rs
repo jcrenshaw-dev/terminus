@@ -167,7 +167,7 @@ pub(crate) fn clip(text: &str, budget: usize) -> String {
 /// break the brief's byte identity (INJ-02) and the prompt arm's same-bytes
 /// property, and a model does not check a hash. Unlike Claude Code's own
 /// `system-reminder` pair, which wraps the whole of a hook's context around
-/// this one (`THREAT-MODEL.md`, the Hooks bullet).
+/// this one.
 pub const OPEN_TAG: &str = "<terminus-recall>";
 
 /// The tag that closes the block. It appears once per injection, as its last
