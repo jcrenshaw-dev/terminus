@@ -41,7 +41,6 @@ What every check refuses, and the release steps one at a time, are already in [r
 | [`.github/workflows/release.yml`](../../.github/workflows/release.yml) | On a version tag: four builds, one per platform on its own runner, then one draft holding exactly the eight files. |
 | [`.github/workflows/release-check.yml`](../../.github/workflows/release-check.yml) | On a published release: installs it with the public one-line command on the same four runners and checks the installed version. |
 | [`.github/workflows/test.yml`](../../.github/workflows/test.yml) | On every push and pull request: the whole suite on the four runners, in a debug and a release build each. |
-| [`.github/workflows/fast.yml`](../../.github/workflows/fast.yml) | On every pull request and every push to main: sentinel's fast check, copied from sentinel and run from its submodule at `.sentinel`. A push to main runs only its mechanical job. |
 | [`scripts/sign-release.sh`](../../scripts/sign-release.sh) | Run by the owner on his own machine: checks a draft, signs its four manifests, verifies each signature the way `install.sh` will, uploads them and publishes the release as latest. |
 
 The boundaries:
@@ -115,7 +114,6 @@ Options are in [commands.md](../commands.md#setup), and `doctor`'s `--json` fiel
 
 - **`release-check.yml`**, on `release: published`. On `ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-15-intel` and `macos-15`, it puts a stand-in `claude` that exits 0 on `PATH`, runs `curl -fsSL https://raw.githubusercontent.com/jcrenshaw-dev/terminus/main/install.sh | sh` with pipefail, and checks that `~/.local/bin/terminus --version` is the release's version.
 - **`test.yml`**, on every push and pull request. On the same four runners, in a debug and a release build each, eight jobs, it runs `cargo test --workspace --all-features --locked`, with a 15-minute limit on the test step that prints the processes and their open files before it stops a hung run. It reads no secret. Three timing tests of a hook spawn's p99 are skipped on every runner, and three budgets on a single spawn on the two macOS runners, because a hosted VM's timing measures the VM.
-- **`fast.yml`**, on every pull request and every push to main. Sentinel's fast check: a mechanical job that installs sentinel's gating tools and runs its checks, and on a GitHub pull request a security review of the diff, posted as a pull request comment. A push to main runs only the mechanical job. The review job reads the `ANTHROPIC_API_KEY` secret and is skipped for Dependabot. This is the repository's CI. The binary calls no model and reads no key.
 
 ## 6. States and workflows
 

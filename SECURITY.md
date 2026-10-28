@@ -18,15 +18,14 @@ Reports about Terminus on the `main` branch and about any published release are 
 
 ## How Terminus is checked
 
-Terminus is audited with [sentinel](https://github.com/jcrenshaw-dev/sentinel), which this repo carries as a git submodule at `.sentinel`, pinned to the version Terminus runs. [THREAT-MODEL.md](THREAT-MODEL.md) lists what Terminus reads, writes and runs, and where untrusted data enters, and every review works from it.
+- **Every push and pull request** runs the whole test suite through `.github/workflows/test.yml`: `cargo test --workspace --all-features --locked`, on the debug and the release build, on Linux and macOS, on x86_64 and aarch64. If any test fails in any of the eight jobs, the run fails. It reads no secret.
+- **Fuzzing.** `fuzz/` holds a cargo-fuzz target for every parser that reads input from outside Terminus: transcripts, `terminus.toml`, the command line, hook input, MCP messages and Claude Code's settings files. `cargo +nightly fuzz build` builds them all, and `cargo +nightly fuzz run <target>` runs one. CI does not run them.
+- **Miri.** Terminus has one `unsafe` block, the volatile read of the install marker in `crates/terminus/src/cmd/install/binary.rs`. The two tests that exercise it without touching the filesystem run under Miri:
 
-Every pull request and every push to `main` runs sentinel's mechanical checks through `.github/workflows/fast.yml`. The gates among them fail the run; the rest report. On a pull request from this repository to `main` that is not a draft, a second job has Claude Code review the diff against THREAT-MODEL.md, reading only the repository's files. The review is encrypted to the maintainer's key and kept with the run, and the comment on the pull request shows only the count of findings by severity, so an open finding stays private until it is fixed. Findings do not fail that job; a review that did not run does. The kit's `README.md` in `.sentinel` lists every check and says which ones gate.
-
-Every pull request and every push to `main` also runs the whole test suite through `.github/workflows/test.yml`: `cargo test --workspace --all-features --locked`, on the debug and the release build, on Linux and macOS, on x86_64 and aarch64. If any test fails in any of the eight jobs, the run fails. It reads no secret.
-
-`fuzz/` holds a cargo-fuzz target for every parser that reads input from outside Terminus: transcripts, `terminus.toml`, the command line, hook input, MCP messages and Claude Code's settings files. The audit runs them; CI does not.
-
-The full audit runs by hand on the maintainer's machine, never in CI. [SENTINEL.md](SENTINEL.md) at the repo root is the record of the last one: what ran, how each step went, and the open findings as counts by severity. It never names a finding or where it is; an open finding stays private until it is fixed. The release workflow fails any release from a commit the last audit did not cover. The audit finds and records: it fixes nothing, writes no tests and commits nothing.
+  ```sh
+  rustup +nightly component add miri
+  cargo +nightly miri test -p terminus --lib -- a_marker_split_across_two_reads_is_still_found a_file_without_the_marker_is_foreign
+  ```
 
 ## Fixed findings
 
