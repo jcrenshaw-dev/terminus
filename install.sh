@@ -18,7 +18,7 @@ export LC_ALL
 marker='terminus-stable-binary:8f3d1a6c-72b4-4e59-9c0d-5a1e7b34f082'
 
 # The public half of the crenshawdev release key, the only key a release may be signed with.
-release_key='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDRKdhQ8g59SckbR4oYy0JQlObLTSwfVjGa9UqwoPo4q'
+release_key='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMsYk5LI8lVbJqw1+hALUBas7hJP32dwNJOjPwQQ+prd'
 
 fail() {
     printf 'terminus: %s\n' "$*" >&2

@@ -26,7 +26,7 @@ const TOOLS: [&str; 4] = ["mktemp", "rm", "grep", "sha256sum"];
 
 /// The release key's public line, as `install.sh` pins it.
 const PINNED_KEY: &str =
-    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDRKdhQ8g59SckbR4oYy0JQlObLTSwfVjGa9UqwoPo4q";
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMsYk5LI8lVbJqw1+hALUBas7hJP32dwNJOjPwQQ+prd";
 
 const PLATFORMS: [&str; 4] = [
     "linux-x86_64",

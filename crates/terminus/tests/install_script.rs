@@ -59,7 +59,7 @@ const TOOLS: [&str; 13] = [
 
 /// The release key's public line, as `install.sh` pins it.
 const PINNED_KEY: &str =
-    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDRKdhQ8g59SckbR4oYy0JQlObLTSwfVjGa9UqwoPo4q";
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMsYk5LI8lVbJqw1+hALUBas7hJP32dwNJOjPwQQ+prd";
 
 /// The events install writes an entry for, as `tests/install.rs` spells them.
 const EVENTS: [&str; 4] = [

@@ -69,10 +69,10 @@ The script's body is one brace group, which the shell reads in full before runni
 ## The pinned key
 
 ```
-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDRKdhQ8g59SckbR4oYy0JQlObLTSwfVjGa9UqwoPo4q
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMsYk5LI8lVbJqw1+hALUBas7hJP32dwNJOjPwQQ+prd
 ```
 
-Identity `crenshawdev-release`, namespace `terminus-release`, fingerprint `SHA256:lc7mLR529Q+SbY9+3Y4H0YX0qwsouWSzSlbzo2IpCuk`. This is `install.sh`'s `release_key` line, and the only key a release may be signed with. The script never fetches it, and no argument, setting or environment variable changes it.
+Identity `crenshawdev-release`, namespace `terminus-release`, fingerprint `SHA256:LjJFym0RMrQjeUVyDBsZk0P0vxahenqGV3x/MQmnG0U`. This is `install.sh`'s `release_key` line, and the only key a release may be signed with. The script never fetches it, and no argument, setting or environment variable changes it.
 
 ## What the signature protects
 
@@ -105,7 +105,7 @@ This repeats `install.sh`'s own check. `<os>` is `linux` or `macos`, and `<arch>
 2. Write an allowed-signers file holding this one line, with the full key:
 
    ```
-   crenshawdev-release ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDRKdhQ8g59SckbR4oYy0JQlObLTSwfVjGa9UqwoPo4q
+   crenshawdev-release ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMsYk5LI8lVbJqw1+hALUBas7hJP32dwNJOjPwQQ+prd
    ```
 
 3. Verify the manifest, with `<file>` the allowed-signers file:
@@ -114,7 +114,7 @@ This repeats `install.sh`'s own check. `<os>` is `linux` or `macos`, and `<arch>
    ssh-keygen -Y verify -f <file> -I crenshawdev-release -n terminus-release -s terminus-<os>-<arch>.manifest.sig < terminus-<os>-<arch>.manifest
    ```
 
-   A pass prints `Good "terminus-release" signature for crenshawdev-release with ED25519 key SHA256:lc7mLR529Q+SbY9+3Y4H0YX0qwsouWSzSlbzo2IpCuk` and exits 0.
+   A pass prints `Good "terminus-release" signature for crenshawdev-release with ED25519 key SHA256:LjJFym0RMrQjeUVyDBsZk0P0vxahenqGV3x/MQmnG0U` and exits 0.
 
 4. Compare the binary's SHA-256 with the hex on the manifest's second line:
 
