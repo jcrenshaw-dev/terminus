@@ -1,7 +1,7 @@
 # Synthetic transcript fixtures
 
-Real Claude Code transcripts are private and never enter this repository
-(`DESIGN-BRIEF.md:500`). These files are synthetic, deterministic, and shaped
+Real Claude Code transcripts are private and never enter this repository.
+These files are synthetic, deterministic, and shaped
 to facts measured against a real corpus.
 They are the CI corpus; the private real-corpus fixture is reached by env var.
 
@@ -20,10 +20,11 @@ by hand without re-deriving the others will fail
 | `session-recall.jsonl` | Search expansion and entities: a `SearchManager` turn, an `src/worker/S.ts` turn, and the structured-versus-prose pair - a `Read` `tool_use` naming a file against an assistant turn naming that same file in prose |
 | `session-edits.jsonl` | Prompt injection: an `Edit` `tool_use` storing an **absolute** path beneath the fixture root, the spelling the real corpus almost always uses, with symbols beside it so one turn carries two independent entities - and a prose turn naming the same file structurally invisibly |
 | `session-envelope.jsonl` | A session whose **last** `user` record is a `<task-notification>` envelope and whose second-to-last is a `tool_result`, so the resume brief has to pass over both to quote the last prompt a person typed |
-| `session-secrets.jsonl` | One turn for each of the seven credential shapes the egress filter must catch on the remote provider path - an `Authorization: Bearer` header, a JSON `"password"` pair, a space-separated `--token` flag, a mid-line `Cookie` with prose after it, a bare JWT, a GitHub token and a connection URL carrying userinfo |
+| `session-secrets.jsonl` | One turn for each of the seven credential shapes the egress filter must catch on their way into the model's context - an `Authorization: Bearer` header, a JSON `"password"` pair, a space-separated `--token` flag, a mid-line `Cookie` with prose after it, a bare JWT, a GitHub token and a connection URL carrying userinfo - and two more holding the header and the `Cookie` inside a quoted curl `-H` argument |
 | `session-redaction.jsonl` | One turn per redaction shape `session-secrets.jsonl` does not hold - a PEM private key, a bare `sk-` key in prose, a secret-named key in a `tool_use` input, in a `toolUseResult` and in an attachment - and one `tool_use` turn holding `café=1`, `Größe=10` and `“token=abc”` |
 | `session-errors-a.jsonl` | Error entities: `tool_result` blocks with `is_error` and a `toolUseResult` carrying `stdout`/`stderr`/`interrupted`, holding the a-half of both stderr pairs |
 | `session-errors-b.jsonl` | The b-half of the error pairs: one stderr differing from a's only in the parts normalization strips, one differing only in a bare integer it must not |
+| `session-capture.jsonl` | Capture modes: a `toolUseResult` and an `attachment` each above and below the `lean` threshold, beside a plain prompt and a plain assistant turn |
 | `subagents/agent-alpha.jsonl` | A sidecar reporting its *parent's* `sessionId`, which is why a session is keyed on its file |
 | `subagents/agent-echo.jsonl` | Search ranking: a sidechain turn whose message text is byte-identical to a top-level turn, so "sorts below at equal score" has two genuinely equal scores to compare |
 | `subagents/workflows/wf_demo/agent-deep.jsonl` | A sidecar two directories deeper than the usual one, which only an unbounded walk reaches |
@@ -54,17 +55,14 @@ anyway, so code that starts reading another one meets a fixture read off the
 schema rather than one invented against the code that consumes it.
 
 `hooks/session-start-compact.json` is the fifth, and the only one of the five
-that is a *recording* rather than a reading of the schema. The injection after
-a compaction is triggered by a `SessionStart` whose `source` is `"compact"`,
-and until 2026-08-20 nothing here had seen one: the enum was verified present
-in bundle 2.1.237 but the emit site was never located. It was then captured
-live - a temporary matcher-less `SessionStart` entry appending its stdin to a
-file, a fresh session, then `/compact` - and **a compaction does fire a
+that is a *recording* rather than a reading of the schema. It was captured
+live - a matcher-less `SessionStart` entry appending its stdin to a file, a
+fresh session, then `/compact` - and it shows that **a compaction fires a
 `SessionStart`, with `hook_event_name` `SessionStart` and `source`
 `"compact"`**, after the compaction completes and under the same `session_id`
-as the `"startup"` line that opened the session. So this is the affirmative
-case, and the trigger needs no fallback that reads the boundary row at
-`UserPromptSubmit`.
+as the `"startup"` line that opened the session. That event is what triggers
+the injection after a compaction, so the trigger needs no fallback that reads
+the boundary row at `UserPromptSubmit`.
 
 The capture is those bytes with the identifying fields replaced, because this
 repository is public and a real transcript never enters it: `session_id`,
@@ -73,12 +71,12 @@ repository is public and a real transcript never enters it: `session_id`,
 than the build-specific name the live session reported. `hook_event_name` and
 `source` are exactly as captured, and they are the two fields anything reads.
 
-Two things that capture contradicts about the paragraph above it, left standing
-because nothing yet reads the fields involved. The live `"compact"` line carries
-`prompt_id` and the live `"startup"` line does not, so `prompt_id` is not an
-unconditional base field; and neither live line carried `permission_mode`,
-`agent_type` or `session_title` at all. Code that starts reading one of those
-three should re-observe it rather than trust the four older fixtures.
+The recording differs from the schema reading above in fields nothing reads.
+The live `"compact"` line carries `prompt_id` and the live `"startup"` line
+does not, so `prompt_id` is not an unconditional base field; and neither live
+line carries `permission_mode`, `agent_type` or `session_title` at all. Code
+that starts reading one of those three should observe a live payload rather
+than trust the other four fixtures.
 
 Each is one line with a trailing newline, matching `stdin.write(payload + "\n")`.
 
@@ -116,13 +114,15 @@ straddles a fifth block and the block-count assertions change.
 **`session-continuation.jsonl`** distinguishes the two lineage signals ingest
 keeps separate. `sessionId` (camelCase) is this file's own session; `session_id`
 (snake_case) names `session-basic.jsonl`'s session, and that is the file-level
-signal `session_meta.continues_from` is populated from. `parentUuid` stays
-message-level threading and is not a substitute.
+signal `session_meta.continues_from` reads first. `parentUuid` is
+message-level threading, and ingest falls back to it only when no record names
+a foreign `session_id`: the transcript's first turn's `parentUuid`, resolved
+through `turns` to the session holding that record.
 
 **`session-truncated.jsonl`** is `session-basic.jsonl` cut inside record ten,
 with no trailing newline: nine complete records plus a partial one. It is the
 "transcript still being written" case. The resume offset is the byte just past
-its last `\n` (2,995), strictly less than the file length. Appending the rest of
+its last `\n` (2,977), strictly less than the file length. Appending the rest of
 the cut line and the remaining records must produce a store identical to
 ingesting the complete file in one pass.
 
@@ -139,10 +139,10 @@ The metadata reproduces the measured numbers: `preTokens` 45,500, `postTokens`
 7,436, `cumulativeDroppedTokens` 38,064, and a `preservedMessages` whose `uuids`
 list is a *proper* subset of its `allUuids` list. That subset relation is the
 fact the dropped-turn set rests on: the uuid lists describe the preserved
-segment and cannot enumerate the ~38k dropped tokens, which contradicts
-`DESIGN-BRIEF.md:140`. Ingest therefore stores the bytes verbatim and interprets
-none of them, and injection derives the dropped turns at query time as the
-archived turns `preservedMessages.uuids` does not name.
+segment and cannot enumerate the ~38k dropped tokens, so the boundary record
+does not say which turns fell out. Ingest therefore stores the bytes verbatim
+and interprets none of them, and injection derives the dropped turns at query
+time as the archived turns `preservedMessages.uuids` does not name.
 
 The boundary is the **last** line of the file, so a test can append that one
 record to an already-ingested transcript and watch a boundary row appear under a
@@ -241,10 +241,14 @@ The `Edit` turn opens with a short prose block naming `lanternFlicker`, ahead of
 the `tool_use`, so the excerpt window reaches the asserted text whatever the
 length of the temp directory's path. Moving it behind the path brings back #46.
 
-**`session-secrets.jsonl`** is the egress fixture: ten turns
-that exist to be *sent*, not to be found. Each of the seven shapes the widened
-egress rule set is asked to catch sits in a turn of its own, so a wire test can
-assert on one sentinel at a time and attribute the catch to one rule.
+**`session-secrets.jsonl`** is the egress fixture: twelve turns
+that exist to be *sent*, not to be found. Each of the seven shapes the egress
+rule set is asked to catch sits in a turn of its own, so a wire test can
+assert on one sentinel at a time and attribute the catch to one rule. Two more
+turns hold the header and the `Cookie` the way curl spells them, inside a
+double-quoted `-H` argument: `-H "Authorization: Bearer sk-VBEGRESS-curlz-5e6"`
+and `-H "Cookie: sid-VBEGRESS-qcrumb-1f9"`. The first two turns and the last
+carry no credential.
 
 Four of the seven - the bare JWT, the GitHub token, the connection URL's
 userinfo and the space-separated `--token` value - sit with **no name-keyed text
@@ -347,6 +351,20 @@ whose `pattern` input emits no entity beyond the tool itself, so no entity count
 anywhere moves either. And its vocabulary shares nothing with the corpus's
 counted tokens - no `brillig`, no `SearchManager`, no `cargo`, none of the
 paths the entity tests match on.
+
+**`session-capture.jsonl`** is the capture-mode fixture: six records in one
+session. In order - a typed `user` prompt, a `tool_result` whose top-level
+`toolUseResult` serializes to 14,081 bytes, one whose `toolUseResult` is 77
+bytes, an `attachment` of 12,112 bytes, one of 68 bytes, and a plain
+`assistant` turn. The large two sit over the 8,192-byte `lean` threshold and
+the small two under it, and the prompt and the assistant turn carry neither
+key. So `lean` elides two subtrees and `minimal` elides all four, which is what
+makes "the stored bytes strictly decrease from `full` to `lean` to `minimal`" a
+measurement rather than a tautology.
+
+It is not in `TRANSCRIPT_FIXTURES`, because the tests that ingest that set
+count its sessions, turns and bytes. `tests/capture.rs` and `tests/pass.rs`
+read it by name.
 
 ## The rooted `cwd`
 

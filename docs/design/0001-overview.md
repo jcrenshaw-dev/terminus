@@ -48,8 +48,8 @@ The archived session is the record. Each session's transcript is stored as compr
 | [`crates/terminus/src/main.rs`](../../crates/terminus/src/main.rs) | The entry point, which calls into `lib.rs`. |
 | [`crates/terminus/src/cmd/`](../../crates/terminus/src/cmd/) | One module per command, plus `spawn.rs`, which starts the detached ingest, and `read.rs`, the read-only open every read command shares. |
 | [`crates/terminus/src/cmd/json.rs`](../../crates/terminus/src/cmd/json.rs) | The one `--json` envelope, `{command, ok, reason, data}`, built with `serde_json` and never by hand. Its fields and the exit codes are in [json-shapes.md](../json-shapes.md). |
-| [`crates/terminus/src/out.rs`](../../crates/terminus/src/out.rs) | Every write to stdout, so a reader that closes the pipe early does not make the binary panic. |
-| [`crates/terminus/src/escape.rs`](../../crates/terminus/src/escape.rs) | Spells every control character other than tab and newline as `\u00XX` in the human output of `search`, `show` and `observations`, so archived text cannot drive the reader's terminal. The store, `--json` and the record body `show` prints are left as they are. |
+| [`crates/terminus/src/out.rs`](../../crates/terminus/src/out.rs) | Every write to stdout and stderr, through `outln!`, `out!` and `errln!`, so a reader that closes either stream early does not make the binary panic. Each of those writes is escaped through `escape.rs` by default. `write_raw` and `try_write_raw` write their bytes unchanged, and only the sites that must stay byte for byte call them: `Document::emit` and `try_emit`, the hook's `hookSpecificOutput` object, and the record body `show` prints. |
+| [`crates/terminus/src/escape.rs`](../../crates/terminus/src/escape.rs) | Spells every control character other than tab and newline as `\u00XX` in every command's human output, on stdout and on stderr, so archived text cannot drive the reader's terminal. The store, `--json`, the hook's `hookSpecificOutput` object and the record body `show` prints are left as they are. |
 
 ### `crates/terminus-core`, the library
 

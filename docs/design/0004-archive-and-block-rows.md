@@ -95,7 +95,7 @@ The truth. They are never dropped, never rebuilt and never converted.
 | `is_evicted` | `INTEGER` | 1 once retention has deleted the session's block rows. |
 | `parent_session_key` | `TEXT` | For a sidecar, the session key of the transcript it belongs to, in the same form, such as `<sessionId>.jsonl`, read from the sidecar's path. |
 | `agent_meta` | `BLOB` | A sidecar's `agent-*.meta.json`, stored as bytes and never parsed into columns. |
-| `transcript_diverged` | `INTEGER` | 1 when the transcript on disk is shorter than what was archived or does not match it. `terminus verify` reports it. |
+| `transcript_diverged` | `INTEGER` | 1 once the transcript on disk is shorter than its watermark. A flagged session's file is compared against the archived prefix on every pass, and the flag clears only when the two match. Null when not flagged. `terminus verify` reports it. |
 | `project_pre_worktree` | `TEXT` | The project key before a worktree was folded into its repository. |
 | `capture_mode` | `TEXT` | `full`, `lean` or `minimal`. Null means `full`. |
 
@@ -119,7 +119,7 @@ They hold what happened at prompt time, or facts read from block rows that reten
 | `injected` | `TEXT` | JSON: the turns injected and the characters each spent. |
 | `suppressed` | `TEXT` | JSON: the turns refused, with the reason. |
 | `thresholds` | `TEXT` | JSON: the thresholds in force. |
-| `compacted` | `INTEGER` | 1 when the prompt used the pool for the first prompt after a compaction, 0 when not. Null for a decision logged before the column existed. |
+| `compacted` | `INTEGER` | 1 when the prompt used the pool for the first prompt after a compaction, 0 when not. |
 | `dropped` | `TEXT` | JSON: the turn ids the compaction dropped. |
 
 `labels`, what each decision turned out to be worth:
@@ -429,7 +429,7 @@ erDiagram
 ```mermaid
 stateDiagram-v2
   [*] --> Probe: Store open
-  Probe --> Fresh: no file, or a zero-length one
+  Probe --> Fresh: no file, a zero-length one, or one with no tables
   Fresh --> Current: create every table, set archive_format 2 and derived_schema 5
   Probe --> Gate: a store exists
   Gate --> Refused: archive_format is not 2

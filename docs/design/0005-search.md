@@ -101,20 +101,20 @@ Options are in [commands.md](../commands.md#reading-the-archive), and the `--jso
 ### `terminus search <words>`
 
 - **Inputs:** the words, the scope, and the filters `--tool`, `--kind`, `--path`, `--since` and `--until`, with `--limit`, which defaults to 10 here and is cut to `MAX_RESULTS`, 50.
-- **Outputs:** the hits, ranked as in Figure 1, each with its turn id, session, record type, time, project, whether it is a sidechain, and its excerpt. With `[privacy] redact_recall` on, the excerpts are filtered, and `--raw` prints them unfiltered for that one run. When a query is cut at 32 tokens, stderr says so.
-- **Refusals:** a string with nothing searchable in it, such as pure punctuation, is an empty result with a reason. `--limit 0` exits 2.
+- **Outputs:** the hits, ranked as in Figure 1, each with its turn id, session, record type, time, project, whether it is a sidechain, and its excerpt. With `[privacy] redact_recall` on, the excerpts are filtered, and `--raw` prints them unfiltered for that one run. When a query is cut at 32 tokens, stderr says so. The human output writes every control character other than tab and newline as its JSON escape, such as `\u001b`, so archived text cannot drive the terminal, and an excerpt holding one prints longer than 246 characters. `--json` is not escaped.
+- **Refusals:** a string with nothing searchable in it, such as pure punctuation, is an empty result with a reason. `--limit 0` exits 2, and so does a `--since` or `--until` that is not a real date or time, written `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SS.mmmZ`.
 
 ### `terminus show <id>...`
 
 - **Inputs:** one or more turn ids, the scope, and `--before` and `--after`, at most `MAX_CONTEXT_SIDE`, 25, each.
-- **Outputs:** each turn's record, its archived bytes written to stdout as stored, through `recall::get::records`. With `--before` or `--after`, the turns around it from the same session, through `recall::context::window`, which stops at the session's ends and says which end it reached. An evicted session's record is marked as such. With `[privacy] redact_recall` on, the bytes are filtered, and `--raw` prints them unfiltered.
+- **Outputs:** each turn's record, its archived bytes written to stdout as stored, through `recall::get::records`. With `--before` or `--after`, the turns around it from the same session, through `recall::context::window`, which stops at the session's ends and says which end it reached. An evicted session's record is marked as such. With `[privacy] redact_recall` on, the bytes are filtered, and `--raw` prints them unfiltered. The header line and the window lines escape control characters as `search` does, and the record's bytes are written unescaped.
 - **Refusals:** an id outside the scope is named on stderr. A word that is not a number exits 2.
 
 ### `terminus sessions`
 
 - **Inputs:** the scope, `--since`, `--until` and `--limit`.
-- **Outputs:** every session the scope can see, through `config::visible::sessions`, the listing every read path uses, so a session archived before its project was excluded is hidden too.
-- **Refusals:** `--limit 0` exits 2.
+- **Outputs:** every session the scope can see, through `config::visible::sessions`, the listing every read path uses, so a session archived before its project was excluded is hidden too. Control characters in the listing are escaped as `search` does.
+- **Refusals:** `--limit 0` exits 2, and so does a `--since` or `--until` that `search` would refuse.
 
 ## 6. States and workflows
 

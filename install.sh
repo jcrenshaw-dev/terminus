@@ -128,7 +128,7 @@ in_versions_folder() {
 # Whatever carries the marker is a terminus build and may be replaced, as
 # terminus install decides it. A link to $versions/<version>/terminus is this
 # script's own layout and is replaced without that check, whether or not its
-# file is still there: 0.1.0's aarch64 builds lack the marker.
+# file is still there.
 check_stable_path() {
     if [ -d "$stable" ]; then
         fail "$stable: a folder is there, or a symbolic link to one"

@@ -52,8 +52,8 @@ disagree. `verify --json` on a damaged store writes its document **and** exits
 Under `--json`, every operational failure writes the command's own empty
 document with `ok: false` and the reason. It is the document the command's
 no-store answer carries, with the arguments echoed where the shape echoes them:
-`replay`'s `thresholds`, `observations regenerate`'s `since` and `export`'s
-`destination`. The failure puts nothing on stderr. Warnings still go there, such
+`search`'s `query` and `truncated`, `replay`'s `thresholds`,
+`observations regenerate`'s `since` and `export`'s `destination`. The failure puts nothing on stderr. Warnings still go there, such
 as a store older than this build.
 
 Four failure documents carry real data instead of the empty one: `verify` with
@@ -110,7 +110,10 @@ file it points at, and a path outside those two shapes, such as a file under no
 - `truncated` is true when the query carried more than `MAX_QUERY_TOKENS`
   distinct tokens. The search still ran; the tokens are conjoined, so a
   truncated query is broader than the one asked for rather than wrong in a
-  direction the caller cannot see.
+  direction the caller cannot see. A word made only of letters the index makes
+  no token from is dropped before the count, so it never sets `truncated`.
+- A query with no token left to search has empty `hits` and the `reason` "the
+  query has no words that can be searched".
 - `hits` are ordered by `relevance`, highest first, then turns with `sidechain`
   false before subagent turns, then newer `ts` first with a null `ts` last, then
   lower `turn_id` first.
@@ -177,12 +180,16 @@ file it points at, and a path outside those two shapes, such as a file under no
   turn's text, cut the way a search `excerpt` is but from the start of the turn
   rather than around a match, and put through the egress filter under
   `redact_recall` the way `body` is. It is empty when the archive would not give
-  the bytes up. `continues_from` is a Claude Code session id, the `sessionId`
-  the transcript names, and not a `session_key`; zero, one or many archived
-  sessions can carry that id. It is null when the session names no session it
-  continues from, or has no `session_meta` row. `reason` is null unless the
-  window came back empty for a reason, and then it says why in the words
-  `absent` uses.
+  the bytes up. `continues_from` is a Claude Code session id and not a
+  `session_key`: the other session's id that a record in the transcript names,
+  or else the session id of the archived file holding the message the first
+  turn's `parentUuid` points to. Zero, one or many archived sessions can carry
+  that id. It is null when the session names no session it continues from, when
+  the session its `parentUuid` points to is not archived yet, or when the
+  session has no `session_meta` row. An ingest pass over the whole tree fills
+  that second kind of null once the predecessor is archived. `reason` is null
+  unless the window came back empty for a reason, and then it says why in the
+  words `absent` uses.
 - `absent` carries every requested id that named no record this caller may see:
   an unknown id, a turn of an excluded project, or a turn outside the scope.
 
@@ -355,7 +362,7 @@ and unchanged.
                   "tools": ["Bash", "Edit"],
                   "commands": ["cargo test -p terminus-core --features testkit"],
                   "errors": ["..."], "commits": ["wire the observation step up"],
-                  "branch": "phase-7", "turns": 47,
+                  "branch": "main", "turns": 47,
                   "first_turn_at": "...", "last_turn_at": "...",
                   "duration_seconds": 5421, "compactions": 1, "truncated": []}}]}
 ```
@@ -380,7 +387,8 @@ and unchanged.
   for a session with no `session_meta` row.
 - `session_id` is null when the session's `session_meta` row holds none.
   `generated_at` and `mechanical` are null only when their column is; the ingest
-  step writes both.
+  step writes both. A `mechanical` column that is not valid JSON comes back as
+  its stored text, a string, rather than an object.
 
 ### `observations regenerate`
 

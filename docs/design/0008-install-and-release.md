@@ -4,7 +4,7 @@
 
 This part puts Terminus on a machine and wires it into Claude Code, and it builds, signs and checks the releases it installs from. It has two workflows, and both meet at `install.sh`: the release workflow reads its marker, the signing script reads its key, and the release check runs it. A release is built in CI from a version tag, signed on the owner's machine with a key CI never holds, and published. `install.sh` downloads a published release, checks its signature and its SHA-256, stores the binary under its version, points `~/.local/bin/terminus` at it, and runs `terminus install`, which writes Claude Code's wiring. An update is the same command run again.
 
-It also covers `terminus uninstall`, which takes out what install put in, `terminus doctor`, which reports what is wired up and changes nothing, and the CI that tests every push.
+It also covers `terminus uninstall`, which takes out what install put in, `terminus doctor`, which reports what is wired up and changes nothing, and the CI that tests every pull request and every push to `main`.
 
 It does not cover what the wiring then does. The four hook entries it writes are the hooks in [0002: Hooks](0002-hooks.md). The MCP entry it registers is the server in [0006: Recall through MCP](0006-recall-through-mcp.md). The backfill it starts last is the one in [0003: Ingest](0003-ingest.md). `terminus uninstall --purge` deletes the data directory the [0001: Overview](0001-overview.md) describes.
 
@@ -26,7 +26,7 @@ What every check refuses, and the release steps one at a time, are already in [r
 
 ## 3. Crate, modules and boundaries
 
-`install.sh` and the release scripts are POSIX shell. `terminus install`, `uninstall` and `doctor` live in the binary crate, `crates/terminus`, under `cmd/`.
+`install.sh` and the signing script are POSIX shell. `terminus install`, `uninstall` and `doctor` live in the binary crate, `crates/terminus`, under `cmd/`.
 
 | Module | What it does |
 |---|---|
@@ -34,13 +34,13 @@ What every check refuses, and the release steps one at a time, are already in [r
 | [`crates/terminus/src/cmd/install/mod.rs`](../../crates/terminus/src/cmd/install/mod.rs) | `terminus install`: every refusal before the first write, then the binary, the hook entries, the MCP registration, the advice on two Claude Code settings, the receipt, and the detached backfill last. |
 | [`crates/terminus/src/cmd/install/binary.rs`](../../crates/terminus/src/cmd/install/binary.rs) | The stable path, the versions folder, the marker and the scan for it, and storing the running binary under its version and moving the link onto it. |
 | [`crates/terminus/src/cmd/install/claude.rs`](../../crates/terminus/src/cmd/install/claude.rs) | Runs `claude` found on `PATH`, by absolute path, with no shell, stdin and stdout at null, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` set, and `DEADLINE`, 30 s. Reads only the exit status and the first line of stderr. |
-| [`crates/terminus/src/cmd/install/json_file.rs`](../../crates/terminus/src/cmd/install/json_file.rs) | Reads and writes one Claude Code settings file, keeping every key in its order and every scalar as the text it was. A file already in the two-space form it writes has no other byte changed; any other file is rewritten in full in that form, with the original in the one-time backup. The one-time `.terminus-backup`. Re-reads the file immediately before writing and writes through a temporary and a rename. |
+| [`crates/terminus/src/cmd/install/json_file.rs`](../../crates/terminus/src/cmd/install/json_file.rs) | Reads and writes one Claude Code settings file, keeping every key in its order and every scalar as the text it was. A file already in the two-space form it writes has no other byte changed; any other file is rewritten in full in that form, with the original in the one-time `.terminus-backup`. Re-reads the file immediately before writing and writes through a temporary and a rename. |
 | [`crates/terminus/src/cmd/install/targets.rs`](../../crates/terminus/src/cmd/install/targets.rs) | Where `settings.json` and `.claude.json` are, the exact hook entry and MCP entry, the merge rule, and the `claude mcp` commands that finish a registration by hand. |
 | [`crates/terminus/src/cmd/uninstall.rs`](../../crates/terminus/src/cmd/uninstall.rs) | `terminus uninstall [--purge] [-y]`: removes the hook entries, the MCP entry and the link, restores the backup when only Terminus's entries changed, and with `--purge` deletes the data directory under `LOCK`. |
 | [`crates/terminus/src/cmd/doctor.rs`](../../crates/terminus/src/cmd/doctor.rs) | `terminus doctor`: 14 checks, each with a state, a one-line finding and, where there is one, the command that fixes it. Writes nothing on any path. |
 | [`.github/workflows/release.yml`](../../.github/workflows/release.yml) | On a version tag: four builds, one per platform on its own runner, then one draft holding exactly the eight files. |
 | [`.github/workflows/release-check.yml`](../../.github/workflows/release-check.yml) | On a published release: installs it with the public one-line command on the same four runners and checks the installed version. |
-| [`.github/workflows/test.yml`](../../.github/workflows/test.yml) | On every push and pull request: the whole suite on the four runners, in a debug and a release build each. |
+| [`.github/workflows/test.yml`](../../.github/workflows/test.yml) | On every pull request and every push to `main`: the whole suite on the four runners, in a debug and a release build each. |
 | [`scripts/sign-release.sh`](../../scripts/sign-release.sh) | Run by the owner on his own machine: checks a draft, signs its four manifests, verifies each signature the way `install.sh` will, uploads them and publishes the release as latest. |
 
 The boundaries:
@@ -89,8 +89,8 @@ Options are in [commands.md](../commands.md#setup), and `doctor`'s `--json` fiel
 ### `terminus uninstall`
 
 - **Inputs:** `--purge` and `-y` or `--yes`.
-- **Outputs:** every hook entry whose `command` is the stable path is removed from `settings.json`, under every event key, with any group left empty. An event key left empty is removed only when the backup shows it was not there before install. Then the file is compared with the backup as values: when they are equal, the backup's bytes go back and the backup is deleted, and when the user has edited the file since, the edited file and the backup both stay. The MCP entry is removed with `claude mcp remove --scope user terminus`, only when `.claude.json` holds one. The stable link is removed. The versions folder and the data directory stay, and both paths are printed. With `--purge`, it shows the data directory's path and size, asks once with no as the default, takes `LOCK`, and deletes the directory. `-y` answers yes, and does nothing without `--purge`.
-- **Refusals:** a step that cannot be done is reported and the rest still happen, then it exits 1. With `--purge`, no answer to read, or an ingest pass holding `LOCK`, deletes nothing and exits 1. An old `.claude.json.terminus-backup` is left and its path printed, because restoring it would roll back Claude Code's own state. `--json` exits 2.
+- **Outputs:** every hook entry whose `command` is the stable path is removed from `settings.json`, under every event key, with any group left empty. An event key left empty is removed only when the backup shows it was not there before install. Then the file is compared with the backup as values: when they are equal, the backup's bytes go back and the backup is deleted, and when the user has edited the file since, the edited file and the backup both stay. The MCP entry is removed with `claude mcp remove --scope user terminus`, only when `.claude.json` holds one. The stable link is removed. The versions folder and the data directory stay, and both paths are printed. With `--purge` and no `terminus.db` in the data directory, it prints that there is nothing to purge and deletes nothing. Otherwise `--purge` shows the data directory's path and size, asks once with no as the default, takes `LOCK`, and deletes the directory. `-y` answers yes, and does nothing without `--purge`.
+- **Refusals:** a step that cannot be done is reported and the rest still happen, then it exits 1. With `--purge`, no answer to read, a store it cannot read, or an ingest pass holding `LOCK` deletes nothing and exits 1. A `.claude.json.terminus-backup`, when one is there, is left and its path printed, because restoring it would roll back Claude Code's own state. `--json` exits 2.
 
 ### `terminus doctor`
 
@@ -113,7 +113,7 @@ Options are in [commands.md](../commands.md#setup), and `doctor`'s `--json` fiel
 ### The CI runs
 
 - **`release-check.yml`**, on `release: published`. On `ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-15-intel` and `macos-15`, it puts a stand-in `claude` that exits 0 on `PATH`, runs `curl -fsSL https://raw.githubusercontent.com/jcrenshaw-dev/terminus/main/install.sh | sh` with pipefail, and checks that `~/.local/bin/terminus --version` is the release's version.
-- **`test.yml`**, on every push and pull request. On the same four runners, in a debug and a release build each, eight jobs, it runs `cargo test --workspace --all-features --locked`, with a 15-minute limit on the test step that prints the processes and their open files before it stops a hung run. It reads no secret. Three timing tests of a hook spawn's p99 are skipped on every runner, and three budgets on a single spawn on the two macOS runners, because a hosted VM's timing measures the VM.
+- **`test.yml`**, on every pull request and every push to `main`. On the same four runners, in a debug and a release build each, eight jobs, it runs `cargo test --workspace --all-features --locked`, with a 15-minute limit on the test step that prints the processes and their open files before it stops a hung run. It reads no secret. Three timing tests of a hook spawn's p99 are skipped on every runner, and three budgets on a single spawn on the two macOS runners, because a hosted VM's timing measures the VM.
 
 ## 6. States and workflows
 

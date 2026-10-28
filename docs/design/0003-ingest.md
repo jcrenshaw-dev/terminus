@@ -2,7 +2,7 @@
 
 ## 1. Purpose and scope
 
-Ingest copies what Claude Code has appended to its transcripts into the archive, and derives everything else in the store from those bytes. One run of it is a pass: take the ingest lock, recover, drain the decision log, find every transcript, read every archived session's row in one query, archive each transcript's new bytes in a transaction of its own, then close idle sessions, label their injections, record their observations, apply retention, write one `runs` row, and after the lock is released, take a rolling snapshot when one is due.
+Ingest copies what Claude Code has appended to its transcripts into the archive, and derives everything else in the store from those bytes. One run of it is a pass: take the ingest lock, recover, drain the decision log, find every transcript, read every archived session's row in one query, archive each transcript's new bytes in a transaction of its own, then fill the continuation links still missing, close idle sessions, label their injections, record their observations, apply retention, write one `runs` row, and after the lock is released, take a rolling snapshot when one is due.
 
 A pass reads each transcript from where the last pass stopped, so a steady-state pass reads only what is new. It does not loop, has no wall-clock bound, and does not compact the database. A pass that finds `LOCK` already held exits 0 at once, having written nothing.
 
@@ -20,7 +20,7 @@ It takes work from the hook in [0002: Hooks](0002-hooks.md), which starts `termi
 | Capture mode | How much of each record the archive stores, from `[capture] mode`: `full`, `lean` or `minimal`. Only `full` stores the transcript byte for byte. |
 | Elision | What `lean` and `minimal` do to a record: the top-level `toolUseResult` or `attachment` value is replaced with a `terminusElided` mark giving its size. Nothing else in the record changes. |
 | Final | A session whose last turn is more than `IDLE_HOURS`, 6 hours, old. `feedback::outcomes` sets `session_meta.is_final`, and a final session gets its labels and its observation. |
-| Divergence flag | `session_meta.transcript_diverged`, set when a transcript is shorter than its watermark or does not match what was archived. `terminus verify` reports it. |
+| Divergence flag | `session_meta.transcript_diverged`, set when a transcript is shorter than its watermark. A flagged session's file is compared against the archived prefix on every pass, and the flag clears only when the two match. `terminus verify` reports it. |
 
 ## 3. Crate, modules and boundaries
 
@@ -28,7 +28,7 @@ The pass and every step in it live in the library crate, `crates/terminus-core`.
 
 | Module | What it does |
 |---|---|
-| [`crates/terminus-core/src/ingest/mod.rs`](../../crates/terminus-core/src/ingest/mod.rs) | One transcript: reads the session's stored state, prepares the new bytes outside any transaction, then applies them in one transaction. Also `terminus ingest <path.jsonl>`. |
+| [`crates/terminus-core/src/ingest/mod.rs`](../../crates/terminus-core/src/ingest/mod.rs) | One transcript: reads the session's stored state, prepares the new bytes outside any transaction, then applies them in one transaction. Also `terminus ingest <path.jsonl>`, and `fill_continuations`, the tree pass's sweep that links a session to a `parentUuid` predecessor archived after it. |
 | [`crates/terminus-core/src/ingest/pass.rs`](../../crates/terminus-core/src/ingest/pass.rs) | The pass over the whole tree, in the order in section 6, and the snapshot step. |
 | [`crates/terminus-core/src/ingest/driver.rs`](../../crates/terminus-core/src/ingest/driver.rs) | The one driver every ingest runs through: it takes `LOCK`, runs recovery, reads the rows, runs the walk it is handed, records each file's failure, and writes the `runs` row. A tree pass, a backfill and `terminus ingest <path.jsonl>` each hand it a walk of their own. |
 | [`crates/terminus-core/src/ingest/runs.rs`](../../crates/terminus-core/src/ingest/runs.rs) | The `runs` row's insert, and the reader of the last row that `terminus status` and `terminus doctor` share. |
@@ -44,10 +44,10 @@ The pass and every step in it live in the library crate, `crates/terminus-core`.
 | [`crates/terminus-core/src/derive.rs`](../../crates/terminus-core/src/derive.rs) | The one place a derived row is written: `derive_turn` for a turn's rows and `derive_boundary` for a compaction boundary that is not a turn. `terminus reindex` calls the same functions. |
 | [`crates/terminus-core/src/feedback/mod.rs`](../../crates/terminus-core/src/feedback/mod.rs) | `feedback::drain`, which moves the decision files into `decisions`, and `feedback::outcomes`, which closes idle sessions and labels their decisions. |
 | [`crates/terminus-core/src/feedback/finalize.rs`](../../crates/terminus-core/src/feedback/finalize.rs) | Marks a session final once its last turn is more than `IDLE_HOURS` old, in one `UPDATE`. A final session is never made not final. |
-| [`crates/terminus-core/src/retention/mod.rs`](../../crates/terminus-core/src/retention/mod.rs) | `retention::retain`: evaluates the `[retention]` rule against one reading of the clock, then applies it. With retention off it runs no query. |
-| [`crates/terminus-core/src/retention/apply.rs`](../../crates/terminus-core/src/retention/apply.rs) | Evicts or deletes the sessions the evaluation named, one transaction per session. |
+| [`crates/terminus-core/src/retention/mod.rs`](../../crates/terminus-core/src/retention/mod.rs) | `retention::retain`: evaluates the `[retention]` rule against one reading of the clock, then applies it. With retention off it runs no query. The evaluation names a session for deletion only when a stat of its stored `transcript_path` fails with not-found. |
+| [`crates/terminus-core/src/retention/apply.rs`](../../crates/terminus-core/src/retention/apply.rs) | Evicts or deletes the sessions the evaluation named, one transaction per session. Before each delete it reads the session's `transcript_path` again inside that delete's transaction, and a session whose transcript is back on disk is kept and counted in a line in `runs.notes`. |
 | [`crates/terminus-core/src/observe/mod.rs`](../../crates/terminus-core/src/observe/mod.rs) | `observe::observe_new`, which writes one observation for each newly final session, at most `MAX_PER_PASS`, 100, per pass, and the unbounded `regenerate`. |
-| [`crates/terminus-core/src/observe/mechanical.rs`](../../crates/terminus-core/src/observe/mechanical.rs) | The facts in an observation, read off the parsed transcript: files modified and read, tools, commands, errors and commit subjects. No model is called. |
+| [`crates/terminus-core/src/observe/mechanical.rs`](../../crates/terminus-core/src/observe/mechanical.rs) | The facts in an observation. Files read and modified come from the session's `paths` rows joined to `turns.tool_name`, tools and errors from the `entities` rows of the session's own turns, the branch, the first and last turn time and the duration from `session_meta`, and the turn and compaction counts from `turns` and `compactions`. Commands with their arguments and commit subjects come from one decompression and rescan of the session stream. No model is called. |
 | [`crates/terminus-core/src/store/snapshot.rs`](../../crates/terminus-core/src/store/snapshot.rs) | Takes a snapshot with `VACUUM INTO` into a temporary name, renames it into `snapshots/`, and prunes the oldest past `keep`. |
 | [`crates/terminus/src/cmd/ingest.rs`](../../crates/terminus/src/cmd/ingest.rs) | `terminus ingest` and `terminus ingest <path.jsonl>`. Prints skipped files and snapshot notes on stderr. |
 | [`crates/terminus/src/cmd/backfill.rs`](../../crates/terminus/src/cmd/backfill.rs) | `terminus backfill`: the estimate, then a detached `terminus backfill --work` that runs the pass across `WORKERS`, 4, workers. |
@@ -72,7 +72,7 @@ What the pass writes, and where. The columns of every table are in [0004: The ar
 | `sessions`, `blocks`, `session_meta` | Archive tables | One row per transcript, its compressed block rows, and what the pass learned about it: project, lineage, capture mode, checksum, length, block size, first and last turn time, and the final, evicted and divergence flags. |
 | `turns`, `turns_fts`, `entities`, `paths`, `compactions` | Derived tables | One `turns` row per turn, its full-text row, its entities and paths, and one `compactions` row per compaction boundary. |
 | `watermarks` | Operational table | One row per session key: the byte offset the next pass reads from. |
-| `runs` | Operational table | One row per run that takes `LOCK`, whether a pass, a backfill or a named file, written whatever happened: the start and finish, the files walked, committed and failed, the bytes read, the turns added, and two text fields, `error` for what went wrong and `notes` for what a healthy pass did worth saying. There is no log file, and `terminus status` reads this row. |
+| `runs` | Operational table | One row per run that takes `LOCK` and gets past recovery, whether a pass, a backfill or a named file, written whatever happened after recovery. A run whose recovery fails, such as one whose store cannot be opened, writes none. The row holds the start and finish, the files walked, committed and failed, the bytes read, the turns added, and two text fields, `error` for what went wrong and `notes` for what a healthy pass did worth saying. There is no log file, and `terminus status` reads this row. |
 | `decisions/*.json` | Files in the data directory | The decision files the prompt injection wrote. The drain inserts each into `decisions` and deletes the file. |
 | `decisions`, `labels` | Kept tables | The drained decisions, and the labels `feedback::outcomes` writes for the decisions of final sessions. |
 | `observations` | Kept table | One row per final session, inserted by `observe::observe_new` and never overwritten by a pass. `terminus reindex` does not rebuild it, and `terminus observations regenerate` is the only way to. |
@@ -91,14 +91,14 @@ Options are in [commands.md](../commands.md#archiving), and the `--json` fields 
 ### `terminus ingest <path.jsonl>`
 
 - **Inputs:** one transcript path.
-- **Outputs:** canonicalizes the path, takes `LOCK`, runs `recover::recover`, and archives that one file in one transaction. Then it writes one `runs` row, whether the file was committed, already up to date or failed: recovery's lines go in its `notes`, and a file that failed is named under `error`. The command exits 1 on such a file and does not flag it diverged. It does not drain decisions, close sessions, label, observe, apply retention or take a snapshot. Those are steps of the whole-tree pass.
+- **Outputs:** canonicalizes the path, takes `LOCK`, runs `recover::recover`, and archives that one file in one transaction. Then it writes one `runs` row, whether the file was committed, already up to date or failed: recovery's lines go in its `notes`, and a file that failed is named under `error`. The command exits 1 on such a file and does not flag it diverged. It does not drain decisions, fill continuation links, close sessions, label, observe, apply retention or take a snapshot. Those are steps of the whole-tree pass.
 - **Refusals:** a file inside an excluded project is not opened. The command names the project on stderr and exits 0. A held `LOCK` exits 0.
 
 ### `terminus backfill`
 
 - **Inputs:** the same roots, transcripts and store as a pass.
 - **Outputs:** first an estimate, read-only and without creating a store: how many transcripts there are, how many bytes sit past their watermarks, and a time at a measured rate for `WORKERS`, 4, workers. Then it starts `terminus backfill --work` detached through the double fork in [0002: Hooks](0002-hooks.md) and returns. `terminus install` starts it the same way, from the stable path.
-- **The work:** the detached process takes `LOCK`, runs `recover::recover` and `discover::discover`, then walks the transcripts in rounds of `QUEUE_PER_WORKER`, 2, files per worker. The `std::thread` workers each read a file past its watermark, scan it, elide it and compress it into block rows. The one writer thread owns the SQLite connection, applies each prepared file in discovery order, one transaction per file, and writes the one `runs` row, the row a tree pass writes, `notes` included. A backfill and a sequential pass over the same tree reach the same archive: the same rows, checksums and watermarks, and the same bytes in every block. Only the `runs` row each writes differs. A backfill does not drain decisions, label, observe, apply retention or take a snapshot; the next pass a hook starts does.
+- **The work:** the detached process takes `LOCK`, runs `recover::recover` and `discover::discover`, then walks the transcripts in rounds of `QUEUE_PER_WORKER`, 2, files per worker. The `std::thread` workers each read a file past its watermark, scan it, elide it and compress it into block rows. The one writer thread owns the SQLite connection, applies each prepared file in discovery order, one transaction per file, and writes the one `runs` row, the row a tree pass writes, `notes` included. A backfill and a sequential pass over the same tree archive the same `sessions` rows, block rows, checksums and watermarks, and the same bytes in every block. Their `session_meta` rows match except in two columns that only the tree pass's steps after the walk write: `is_final`, which `feedback::outcomes` sets, and `continues_from` for a session archived before its `parentUuid` predecessor, which the continuation sweep fills. Their `runs` rows differ too. A backfill does not drain decisions, fill continuation links, label, observe, apply retention or take a snapshot; the next pass a hook starts does.
 - **Refusals:** a held `LOCK` exits the working process 0. A hook that fires during a backfill finds `LOCK` held and exits 0. `--work` is left out of the usage text, and typing it runs the pass in the foreground.
 
 ### `terminus retention --dry-run`
@@ -136,13 +136,14 @@ The pass in [`crates/terminus-core/src/ingest/pass.rs`](../../crates/terminus-co
 3. **`feedback::drain`.** First deletes `.decision-*.tmp` files under `decisions/` and `.inject-*.tmp` files under `injection/` that are more than 10 minutes old, which are writes the hook abandoned at its deadline. Then reads every `decisions/*.json`, inserts the decisions in one transaction, and deletes the files. An empty `.json` less than 10 minutes old is a write still in flight and is left for the next pass.
 4. **`discover::discover`.** Walks the `projects` folder of each root, in the configured order, at any depth and including names that start with a dot. It accepts `<uuid>.jsonl` directly inside a project directory and `agent-*.jsonl` at any depth below one, which is where the `subagents/agent-*.jsonl` sidecars sit, and nothing else, by name alone. A project directory whose path is in `exclude` is never listed, so none of its files is opened. A transcript that is a symlink is resolved: one whose target sits in an excluded project is dropped and reported with the excluded projects, and one that does not resolve is reported as unreadable.
 5. **The walk.** First `ingest::read_rows` reads every archived session's row in one query, as "One file in the walk" below describes. Then each transcript, in sorted order, in a transaction of its own. Before a file is read, `ingest::claim` resolves a link to the file it points at and takes that file's session key. Another path to a file the walk already took is skipped. A different file whose key an earlier file of this walk took, or whose key an archived session holds while the file that session was read from is still there, is recorded as a failure and never opened. Figure 2 shows one file. A file that fails is recorded with its path and skipped, and the walk goes on, so one damaged transcript cannot stop the rest.
-6. **`feedback::outcomes`.** Marks final every session whose last turn is more than 6 hours old, then labels the decisions of final sessions. It runs after the walk, because a decision is judged by the turns that followed it.
-7. **`observe::observe_new`.** Writes the observation of each final session that has none yet, oldest first, at most 100 per pass. The rest wait for the next pass.
-8. **`retention::retain`.** With a `[retention]` rule set, evicts or deletes the final sessions it names, at most 100 per action per pass. It runs after the observations, which read the block rows an eviction removes.
-9. **The `runs` row.** One row, whatever happened, holding every failure and note the steps above produced.
-10. **The snapshot.** Inside the lock, after the `runs` row has committed, the pass asks its own store whether a snapshot is due: `[snapshot] enabled`, and `last_snapshot_at` in `meta` missing or at least `interval_hours` old by SQLite's clock. Then `LOCK` is released. Only when one is due does the pass open the store again, copy it with `VACUUM INTO`, prune to `keep`, then record `last_snapshot_at`. The copy runs outside the lock, so a snapshot that fails, or a check that could not be answered, is a note on stderr and never a failed pass.
+6. **`ingest::fill_continuations`.** Ingest resolves a session's `continues_from` when its first turn is written, so a session archived before the session holding its first turn's `parentUuid` is left with a null link. This step selects every `session_meta` row whose `continues_from` is null and whose first turn carries a `parentUuid`, resolves that `parentUuid` by the rule ingest uses, and writes the predecessor's session id into a link that is still null, never over one already set. It runs on every tree pass, whatever the walk committed, because the predecessor may have come from a backfill or a named file, neither of which runs it.
+7. **`feedback::outcomes`.** Marks final every session whose last turn is more than 6 hours old, then labels the decisions of final sessions. It runs after the walk, because a decision is judged by the turns that followed it.
+8. **`observe::observe_new`.** Writes the observation of each final session that has none yet, oldest first, at most 100 per pass. The rest wait for the next pass.
+9. **`retention::retain`.** With a `[retention]` rule set, evicts or deletes the final sessions it names, at most 100 per action per pass. A session is named for deletion only when a stat of its stored `transcript_path` fails with not-found, because a transcript still on disk would be found and archived again by the next pass. Each delete then reads `transcript_path` again inside its own transaction, and a session whose transcript is back on disk by then is kept and counted in a line in `notes`. That narrows the window between the evaluation and the delete without closing it, because `LOCK` guards the store and not the transcript tree. The step runs after the observations, which read the block rows an eviction removes.
+10. **The `runs` row.** One row, whatever happened after recovery, holding every failure and note the steps above produced. A run whose recovery fails writes no row, because the store it would write to could not be opened or brought up to date.
+11. **The snapshot.** Inside the lock, after the `runs` row has committed, the pass asks its own store whether a snapshot is due: `[snapshot] enabled`, and `last_snapshot_at` in `meta` missing or at least `interval_hours` old by SQLite's clock. Then `LOCK` is released. Only when one is due does the pass open the store again, copy it with `VACUUM INTO`, prune to `keep`, then record `last_snapshot_at`. The copy runs outside the lock, so a snapshot that fails, or a check that could not be answered, is a note on stderr and never a failed pass.
 
-Steps 3 and 6 to 8 never fail the pass: what they could not do becomes a line in the `runs` row's `error` or `notes`.
+Steps 3 and 6 to 9 never fail the pass: what they could not do becomes a line in the `runs` row's `error` or `notes`.
 
 ```mermaid
 flowchart TD
@@ -153,7 +154,8 @@ flowchart TD
   D --> F["discover::discover: every transcript, excluded projects never opened"]
   F --> RR["ingest::read_rows: every archived session's row in one query"]
   RR --> W["the walk: one transaction per file"]
-  W --> O["feedback::outcomes: close idle sessions, write labels"]
+  W --> C["ingest::fill_continuations: fill continuation links still null"]
+  C --> O["feedback::outcomes: close idle sessions, write labels"]
   O --> B["observe::observe_new: at most 100 observations"]
   B --> T["retention::retain: off unless configured"]
   T --> N["the runs row"]
@@ -227,7 +229,7 @@ Reads happen outside the transaction and the file's archive writes inside it. Th
 
 An append is checked before anything is cut: the stored block hashes against the session checksum, and the last block row against its hash, so a growing session cannot gain a fresh checksum over damaged bytes. A session keeps the block size it was first cut at.
 
-A transcript shorter than its watermark, or one whose archived bytes do not match the file, fails that file and sets `transcript_diverged` in its own small transaction, so `terminus verify` can report it. The flag clears on a later pass only once the file's prefix matches the archived bytes again.
+A transcript shorter than its watermark fails that file and sets `transcript_diverged` in its own small transaction, so `terminus verify` can report it. That length test is the only check an unflagged session's file gets: a file no shorter than its watermark is read from the watermark on, and its earlier bytes are not compared with the archive. A flagged session's file is read whole on every pass and its first watermark bytes are compared with the archived stream. While they differ the file fails again and the flag stays set, and once they match the flag clears and the tail is appended. A session not captured under `full` never matches, because elision makes its archived stream differ from the file, so its flag stays set. A file standing in for a session whose stored file is gone gets the same comparison, and a mismatch there fails the file without setting the flag.
 
 ### Where the watermark goes
 
@@ -238,8 +240,9 @@ stateDiagram-v2
   Current --> Current: new complete records, the next transaction moves it on
   Current --> Behind: recovery finds it past the archived length
   Behind --> Current: the next pass reads the gap again
-  Current --> Diverged: the file is shorter than the watermark or rewritten
-  Diverged --> Current: the file matches the archive again
+  Current --> Diverged: the file is shorter than the watermark
+  Diverged --> Diverged: the prefix of the file still differs from the archive
+  Diverged --> Current: the prefix of the file matches the archive again
   Current --> Frozen: retention evicts the session
   Current --> [*]: retention deletes the session and its watermark
   Current --> [*]: recovery finds no archived session for it and removes it
@@ -258,7 +261,7 @@ Each key below is read once per pass. Its default and full effect are in [config
 | [`roots`](../configuration.md#roots) | Which Claude Code config directories' `projects` folders discovery walks. Empty by default, which means `$CLAUDE_CONFIG_DIR`, then `~/.claude`. |
 | [`exclude`](../configuration.md#exclude) | Project directories discovery never lists, and `terminus ingest <path.jsonl>` refuses. The observation and retention steps pass over excluded sessions too. |
 | [`[capture] mode`](../configuration.md#capture) | `full` by default. `lean` and `minimal` elide as records are archived, and records already stored keep what they have. |
-| [`[retention]`](../configuration.md#retention) and [`[retention.project."<path>"]`](../configuration.md#retentionprojectpath) | What step 8 evicts or deletes. Off by default: nothing happens unless `action` is not `keep` and `age_days` is above 0. |
-| [`[snapshot]`](../configuration.md#snapshot) | Whether step 10 runs, and when: `enabled` defaults to `true`, `interval_hours` to 24, and `keep` to 3. |
+| [`[retention]`](../configuration.md#retention) and [`[retention.project."<path>"]`](../configuration.md#retentionprojectpath) | What step 9 evicts or deletes. Off by default: nothing happens unless `action` is not `keep` and `age_days` is above 0. |
+| [`[snapshot]`](../configuration.md#snapshot) | Whether step 11 runs, and when: `enabled` defaults to `true`, `interval_hours` to 24, and `keep` to 3. |
 
 No key changes the order of the steps, the per-pass limits of 100, the 6-hour idle rule or the worker count.
