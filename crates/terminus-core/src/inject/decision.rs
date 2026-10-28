@@ -16,9 +16,9 @@
 //! **Every prompt writes one, including the ones that inject nothing.**
 //! A prompt that named no path and no identifier-shaped token never opens the
 //! store at all, and it still leaves a record: non-fires are where the miss data
-//! lives (`DESIGN-BRIEF.md:272`), and precision computed only over the prompts
-//! that fired has no denominator. Measured growth is bounded - median 2 user
-//! prompts per session, p90 10, max 50 over 150 sampled transcripts.
+//! lives, and precision computed only over the prompts that fired has no
+//! denominator. Measured growth is bounded - median 2 user prompts per session,
+//! p90 10, max 50 over 150 sampled transcripts.
 //!
 //! **Not [`super::state`].** That file is one session's disposable scratch,
 //! capped, overwritten every prompt and thrown away; this one is durable, one

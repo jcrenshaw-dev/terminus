@@ -10,10 +10,9 @@ use crate::error::{Error, Result};
 /// The archive format this build writes and understands.
 ///
 /// Bumped only when the archived bytes change meaning. The archive tables never
-/// migrate (`DESIGN-BRIEF.md:94`) and there is no conversion, so a store
-/// written in an older format is refused ([`Error::ArchiveFormatTooOld`]) rather
-/// than rebuilt: a rebuild would read the old bytes as the new format and fail
-/// every session.
+/// migrate and there is no conversion, so a store written in an older format is
+/// refused ([`Error::ArchiveFormatTooOld`]) rather than rebuilt: a rebuild
+/// would read the old bytes as the new format and fail every session.
 ///
 /// Format 2 is numbered block rows in `blocks`, each with its compressed
 /// bytes and a BLAKE3 hash of its uncompressed bytes, and `session_meta` holds
@@ -492,7 +491,7 @@ fn narrow(path: &Path, mode: u32, wanted: fn(&std::fs::FileType) -> bool) {
 /// table lacks. It drops nothing, renames nothing and rewrites nothing, which
 /// is what makes it safe to run on a read command's open. `sessions` and
 /// `session_meta` are archive tables and an added column is the only change
-/// either is ever allowed (`DESIGN-BRIEF.md:94`).
+/// either is ever allowed.
 ///
 /// Nothing is written when nothing is missing - the common case is three read
 /// queries and no transaction at all - so a plain reopen of an up-to-date store
@@ -832,7 +831,7 @@ pub fn write_location_pointer(destination: &Path) -> Result<()> {
 }
 
 /// The data directory, resolved once at startup and passed down explicitly
-/// afterwards, never re-derived (`DESIGN-BRIEF.md:404`).
+/// afterwards, never re-derived.
 ///
 /// Three sources, in this order and no other:
 ///

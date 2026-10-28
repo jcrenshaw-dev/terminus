@@ -2,10 +2,10 @@
 //!
 //! Two groups, and the split is the whole architecture. `sessions`, `blocks`
 //! and `session_meta` are the archive: the block rows are truth and the archive
-//! tables never migrate (`DESIGN-BRIEF.md:94`). `turns`, `turns_fts`,
-//! `entities`, `paths` are derived and rebuildable from the block rows alone,
-//! which is what lets a derived-schema bump rebuild rather than migrate.
-//! `watermarks`, `runs` and `meta` are operational state.
+//! tables never migrate. `turns`, `turns_fts`, `entities`, `paths` are derived
+//! and rebuildable from the block rows alone, which is what lets a
+//! derived-schema bump rebuild rather than migrate. `watermarks`, `runs` and
+//! `meta` are operational state.
 //!
 //! `decisions` and `labels` belong to the archive group: a logged injection
 //! decision is prompt-time state the archive does not contain, so it is kept
@@ -165,8 +165,7 @@ CREATE INDEX IF NOT EXISTS idx_session_meta_project
 -- what the prompt named, what the index answered, which thresholds were in
 -- force, what was suppressed - that no archive replay can reconstruct, so a
 -- `reindex` that dropped it would silently delete the entire history that
--- `terminus replay` diffs and `terminus stats` computes precision over (a
--- recorded divergence from `DESIGN-BRIEF.md:92`).
+-- `terminus replay` diffs and `terminus stats` computes precision over.
 --
 -- The row is drained out of a per-prompt file by a later ingest pass and never
 -- written by the hook itself: a SQLite write on the prompt path sits behind
@@ -440,6 +439,5 @@ pub const DERIVED_TABLES: &[&str] = &["turns", "compactions", "turns_fts", "enti
 ///
 /// Only additive changes belong here. Adding a column is safe on any opener;
 /// dropping, renaming or rewriting one is not, and the archive tables
-/// (`sessions`, `session_meta`) never migrate beyond an added column
-/// (`DESIGN-BRIEF.md:94`).
+/// (`sessions`, `session_meta`) never migrate beyond an added column.
 pub const BRING_FORWARD_COLUMNS: &[(&str, &[(&str, &str)])] = &[];

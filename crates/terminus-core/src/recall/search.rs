@@ -229,7 +229,7 @@ pub struct Hit {
     /// [`Hit::entity_score`] cannot carry - a scalar built from an IDF times a
     /// weight cannot say which of the two produced it, and the injection's
     /// structural threshold is written on the kind rather than on a score
-    /// cutoff, which `DESIGN-BRIEF.md:245` forbids outright.
+    /// cutoff, since bm25 scores are not comparable across queries.
     pub entity_match: Option<EntityMatch>,
     /// How many DISTINCT `(kind, value_norm)` pairs on this turn the query
     /// matched.

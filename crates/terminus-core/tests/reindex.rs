@@ -331,7 +331,7 @@ fn the_version_integers_move_with_the_rebuild() {
 /// and named no session. Worse, `open_up_to_date` runs on the ingest path, so
 /// once `DERIVED_SCHEMA` was bumped a single corrupt session stopped every
 /// future ingest of every other transcript, with no repair path.
-/// `DESIGN-BRIEF.md:98`: "this session is damaged", never "the store is gone".
+/// One damaged session is "this session is damaged", never "the store is gone".
 #[test]
 fn a_corrupt_blob_is_skipped_and_named_rather_than_stopping_the_rebuild() {
     let bench = bench();

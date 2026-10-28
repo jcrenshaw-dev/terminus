@@ -101,7 +101,7 @@ impl From<terminus_core::Error> for Failure {
 /// The data directory every command works against.
 ///
 /// Resolved once, here, and passed down explicitly afterwards rather than
-/// re-derived at each use (`DESIGN-BRIEF.md:404`).
+/// re-derived at each use.
 pub fn data_dir() -> Result<PathBuf, Failure> {
     Ok(terminus_core::data_dir()?)
 }

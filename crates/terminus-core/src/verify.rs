@@ -96,8 +96,8 @@ impl Report {
 ///
 /// A session that fails is a failure for *that* session and never an abort: a
 /// second corrupt session must still be reported, which is the whole
-/// difference between "these two sessions are damaged" and "the store is gone"
-/// (`DESIGN-BRIEF.md:98`).
+/// difference between "these two sessions are damaged" and "the store is
+/// gone".
 pub fn verify(store: &Store) -> Result<Report> {
     walk(store.conn())
 }

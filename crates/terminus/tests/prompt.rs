@@ -266,7 +266,7 @@ fn a_prompt_that_matches_only_free_text_writes_nothing() {
 ///
 /// Written to `terminus.toml` and asserted on the spawned binary's own stdout,
 /// because "settings must actually reach the query" is the requirement rather
-/// than a detail (`DESIGN-BRIEF.md:239`).
+/// than a detail.
 ///
 /// 300 is room for the frame, which is 239 characters, and one turn line cut
 /// short.

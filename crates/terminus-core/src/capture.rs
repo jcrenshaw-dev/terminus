@@ -86,11 +86,10 @@ pub const ELIDED_FIELDS: [&str; 2] = ["toolUseResult", "attachment"];
 /// elides it.
 ///
 /// 8 KB, which is where the phase CONTEXT measured the corpus splitting -
-/// records over 8 KB are 52.0% of the stream bytes - and which is the reading of
-/// `DESIGN-BRIEF.md:163`'s "elide LARGE tool-result and attachment bodies". It
-/// is also what makes `minimal` strictly smaller than `lean` on any transcript
-/// holding a small tool result: without a threshold the two modes would store
-/// the same bytes.
+/// records over 8 KB are 52.0% of the stream bytes - and which is how `lean`
+/// reads "elide large tool-result and attachment bodies". It is also what makes
+/// `minimal` strictly smaller than `lean` on any transcript holding a small
+/// tool result: without a threshold the two modes would store the same bytes.
 pub const LEAN_THRESHOLD_BYTES: usize = 8_192;
 
 /// The bytes to store for one record's line, under one mode.
@@ -147,8 +146,8 @@ fn elide_fields(object: &mut Map<String, Value>, mode: CaptureMode) -> bool {
         };
         let elide_this = match mode {
             CaptureMode::Full => false,
-            // `DESIGN-BRIEF.md:163`: the LARGE bodies only. Measured on the
-            // compact serialization, which is what a transcript writes.
+            // The large bodies only. Measured on the compact serialization,
+            // which is what a transcript writes.
             CaptureMode::Lean => serialized.len() > LEAN_THRESHOLD_BYTES,
             CaptureMode::Minimal => true,
         };

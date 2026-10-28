@@ -4,7 +4,7 @@
 //! derived and rebuildable from it. This crate
 //! owns the store, the zstd block rows the archive is kept in and the ingest
 //! path. It links no async runtime and no thread-pool crate: the hook path must
-//! not pay for a runtime it does not use (`DESIGN-BRIEF.md:39`).
+//! not pay for a runtime it does not use.
 //!
 //! It does start threads, in exactly one place, and the exception is worth
 //! naming precisely rather than leaving the sentence above to quietly become

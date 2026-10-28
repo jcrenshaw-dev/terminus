@@ -13,7 +13,7 @@
 //! nothing can change the store between the read and the write. Reading inside
 //! the transaction instead would hold it open across compression, and a write
 //! transaction held for a whole pass stops MCP readers - the reason redb was
-//! rejected (`DESIGN-BRIEF.md:83`).
+//! rejected.
 
 pub mod backfill;
 mod driver;
@@ -110,8 +110,8 @@ pub fn run_with(
     config: &crate::config::Config,
 ) -> Result<Outcome> {
     // Before anything else, and resolving symlinks: `~/.claude` is a symlink
-    // chain on the development machine (`DESIGN-BRIEF.md:406`), so the same
-    // transcript reached by two paths would otherwise get two archive rows.
+    // chain on the development machine, so the same transcript reached by two
+    // paths would otherwise get two archive rows.
     let canonical = transcript
         .canonicalize()
         .map_err(|e| Error::io(transcript, e))?;
@@ -1437,13 +1437,12 @@ fn open_at_least(path: &Path, watermark: u64) -> Result<(std::fs::File, u64)> {
     let file = crate::discover::open_transcript(path).map_err(|e| Error::io(path, e))?;
     let len = file.metadata().map_err(|e| Error::io(path, e))?.len();
     if len < watermark {
-        // A transcript never shrinks: compaction appends to the same file
-        // (`DESIGN-BRIEF.md:114`). A shorter file is a different file at the
-        // same path, and guessing which bytes are still ours would corrupt the
-        // archive - so the refusal stands and there is deliberately no fallback
-        // to offset 0, which would overwrite archived bytes on the strength of
-        // an append-only property observed over one 25-day corpus rather than
-        // documented anywhere.
+        // A transcript never shrinks: compaction appends to the same file. A
+        // shorter file is a different file at the same path, and guessing which
+        // bytes are still ours would corrupt the archive - so the refusal
+        // stands and there is deliberately no fallback to offset 0, which would
+        // overwrite archived bytes on the strength of an append-only property
+        // observed over one 25-day corpus rather than documented anywhere.
         //
         // What this adds is not a recovery but a signal: this variant is the
         // one the pass matches on to flag the session, so `terminus verify` can

@@ -380,9 +380,9 @@ fn the_brief_names_the_last_session_of_the_project_and_nothing_of_the_earlier_on
     );
 }
 
-/// A subagent sidecar is not a session the brief may name, however recent it is
-/// (`DESIGN-BRIEF.md:239`). Its `parent_session_key` is what excludes it, and
-/// that column comes from the sidecar's path.
+/// A subagent sidecar is not a session the brief may name, however recent it
+/// is. Its `parent_session_key` is what excludes it, and that column comes from
+/// the sidecar's path.
 #[test]
 fn a_later_subagent_sidecar_does_not_become_the_named_session() {
     let bench = bench();

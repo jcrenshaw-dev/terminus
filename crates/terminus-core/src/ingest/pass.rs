@@ -4,11 +4,10 @@
 //! for the whole walk, and writes the pass's one `runs` row after it. The
 //! **transactions** are still per-file, and on purpose rather than as an
 //! optimization: a write transaction held across the walk stops MCP readers,
-//! which is the reason redb was rejected (`DESIGN-BRIEF.md:83`), and per-file
-//! commits are the granularity the crash harness
-//! (`crates/terminus/tests/crash.rs`) proves atomic. They also bound what a
-//! kill can lose to one file, and real files are p50 290 KB, p90 1.03 MB, p99
-//! 3.1 MB.
+//! which is the reason redb was rejected, and per-file commits are the
+//! granularity the crash harness (`crates/terminus/tests/crash.rs`) proves
+//! atomic. They also bound what a kill can lose to one file, and real files are
+//! p50 290 KB, p90 1.03 MB, p99 3.1 MB.
 //!
 //! A per-file failure is recorded against that file's path and skipped, never
 //! propagated. Two hard-error paths in ingest reach this loop -

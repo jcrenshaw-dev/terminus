@@ -76,8 +76,8 @@ pub fn dropped(conn: &Connection, session_key: &str) -> Option<BTreeSet<i64>> {
                 Some(uuid) => !preserved.contains(uuid),
                 // A turn the transcript gave no uuid cannot be shown to have
                 // been dropped, only to be absent from a list it could never
-                // appear in. Injection is precision-first
-                // (`DESIGN-BRIEF.md:245`), so the unprovable case is left out.
+                // appear in. Injection is precision-first, so the unprovable
+                // case is left out.
                 None => false,
             })
             .map(|(id, _)| id)

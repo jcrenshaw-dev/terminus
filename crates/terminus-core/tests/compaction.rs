@@ -2,12 +2,11 @@
 //!
 //! The shape of a real compaction is what makes this worth a test file of its
 //! own. Compaction is **append-only**: Claude Code writes the boundary into the
-//! same transcript, at the end, under the same session id
-//! (`DESIGN-BRIEF.md:114`). So the case is not "ingest a file with a boundary in
-//! it" - it is "a session that has already been archived, whose block rows and turn
-//! rows are already committed, grows one more record", and the archive must
-//! come out of that with the boundary recorded and *nothing that was already
-//! there* disturbed.
+//! same transcript, at the end, under the same session id. So the case is not
+//! "ingest a file with a boundary in it" - it is "a session that has already
+//! been archived, whose block rows and turn rows are already committed, grows
+//! one more record", and the archive must come out of that with the boundary
+//! recorded and *nothing that was already there* disturbed.
 //!
 //! Byte-identity is asserted per block row rather than on the session as a
 //! whole, because those are different claims. An append rewrites the partial

@@ -24,13 +24,13 @@
 //! the budget before reading a useful row.
 //!
 //! **The working-state delta is the branch and nothing else.**
-//! `session_meta.branch` is the only git fact the archive holds, and
-//! `DESIGN-BRIEF.md:230` asks for HEAD-then-versus-now and a dirty-file list as
-//! well. Both need `git`, whose 10-30 ms process spawn is the whole budget
-//! several times over - `project::Resolver` is already kept off the
-//! cold-start path for the same reason. So no `std::process::Command` appears
-//! anywhere in this module; the model can check live git itself in one cheap
-//! tool call, and this brief tells it what the archive knew.
+//! `session_meta.branch` is the only git fact the archive holds. A fuller delta
+//! would add HEAD-then-versus-now and a dirty-file list, and both need `git`,
+//! whose 10-30 ms process spawn is the whole budget several times over -
+//! `project::Resolver` is already kept off the cold-start path for the same
+//! reason. So no `std::process::Command` appears anywhere in this module; the
+//! model can check live git itself in one cheap tool call, and this brief tells
+//! it what the archive knew.
 //!
 //! **Nothing here reads a clock.** No `SystemTime`, no `Instant`, no
 //! elapsed-time or "as of" phrasing, and no count that depends on when the read
@@ -473,7 +473,7 @@ fn last_session(
 /// `NNNN-NN-NNTNN:NN:NN.NNNZ`, which sorts lexicographically, so
 /// no parsing happens on the stored side. And it does not consider sidecars: a
 /// session with a `parent_session_key` is a subagent transcript, and the brief
-/// carries no subagent turns (`DESIGN-BRIEF.md:239`).
+/// carries no subagent turns.
 ///
 /// The tie-break on `session_key` is the brief's own, not SQL's: two sessions
 /// whose last turn carries the same timestamp must not be ordered by whatever
@@ -541,12 +541,11 @@ fn day(ts: &str) -> &str {
 ///
 /// The text is cut through [`excerpt::of_record_with`] under the caller's
 /// redaction, which is the same projection under the same filter that ingest
-/// indexed these turns with and the search path reads them through -
-/// `DESIGN-BRIEF.md:230` asks for the last prompt and the last assistant turn
-/// "truncated", and a second definition of what a turn said would be a second
-/// thing to keep true. The query is empty because there is no query here: the
-/// window then falls back to the head of the turn, which is what the turn
-/// opened with.
+/// indexed these turns with and the search path reads them through - the brief
+/// carries the last prompt and the last assistant turn truncated, and a second
+/// definition of what a turn said would be a second thing to keep true. The
+/// query is empty because there is no query here: the window then falls back to
+/// the head of the turn, which is what the turn opened with.
 fn last_exchange(
     conn: &Connection,
     session_key: &str,

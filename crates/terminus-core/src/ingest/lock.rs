@@ -4,10 +4,9 @@
 //! created by the process itself, and never `BEGIN EXCLUSIVE`: a second process
 //! blocking on SQLite's busy handler would blow the 50 ms budget a contended
 //! run has, and a write transaction held open for a whole pass stops MCP
-//! readers, which is the reason redb was rejected (`DESIGN-BRIEF.md:83`). And
-//! the lock is an **OS** lock rather than a PID file, so it is released by
-//! process death as well as by drop - no stale-lock wedging, no orphan to reap
-//! (`DESIGN-BRIEF.md:135`).
+//! readers, which is the reason redb was rejected. And the lock is an **OS**
+//! lock rather than a PID file, so it is released by process death as well as
+//! by drop - no stale-lock wedging, no orphan to reap.
 //!
 //! [`std::fs::File::try_lock`] is the whole implementation and pulls in no
 //! dependency: it is `flock(2)` with `LOCK_EX | LOCK_NB`, an exclusive lock

@@ -156,8 +156,8 @@ fn a_contended_ingest_exits_inside_the_budget() {
 /// kills nothing.
 ///
 /// The lock is an OS lock and not a PID file because it dies with the process
-/// holding it, so a killed ingest leaves no wedge (`DESIGN-BRIEF.md:135`). Real
-/// ingest processes are killed, and the next ingest still runs, in
+/// holding it, so a killed ingest leaves no wedge. Real ingest processes are
+/// killed, and the next ingest still runs, in
 /// `killing_ingest_anywhere_leaves_a_store_that_converges` in
 /// `crates/terminus/tests/crash.rs`.
 #[test]

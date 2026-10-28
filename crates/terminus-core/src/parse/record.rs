@@ -87,10 +87,10 @@ pub struct Record {
     /// versus `preservedSegment` are unsettled: exactly one `compact_boundary`
     /// record exists in 300,556 measured records, and its own token counts
     /// (`preTokens` 45,500, `cumulativeDroppedTokens` 38,064 against 6 preserved
-    /// uuids of 8) contradict `DESIGN-BRIEF.md:140`'s reading of it. Keeping the
-    /// bytes is what makes a wrong reading fixable at query time without a
-    /// reingest, so nothing here interprets them and nothing computes a
-    /// dropped-turn set.
+    /// uuids of 8) contradict the reading that it names exactly which turns
+    /// fell out of the model's context. Keeping the bytes is what makes a wrong
+    /// reading fixable at query time without a reingest, so nothing here
+    /// interprets them and nothing computes a dropped-turn set.
     pub compact_metadata: Option<Vec<u8>>,
     /// `Some` exactly when the classification rule makes this record a turn.
     pub turn: Option<Turn>,

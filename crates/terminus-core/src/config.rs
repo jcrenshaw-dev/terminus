@@ -235,10 +235,10 @@ pub const DEFAULT_PROMPT_CHARS: usize = 4_000;
 /// How long a store waits between rolling snapshots when nothing configures
 /// it.
 ///
-/// Hours, and 24 of them, which is `DESIGN-BRIEF.md:100`'s whole specification.
-/// The number is what makes "on by default" affordable: the hook spawn is the
-/// scheduler and fires on every prompt, so the interval - not a flag - is what
-/// stands between the default and an archive-sized file per prompt.
+/// Hours, and 24 of them. The number is what makes "on by default" affordable:
+/// the hook spawn is the scheduler and fires on every prompt, so the interval -
+/// not a flag - is what stands between the default and an archive-sized file
+/// per prompt.
 pub const DEFAULT_SNAPSHOT_INTERVAL_HOURS: u64 = 24;
 
 /// How many rolling snapshots are kept when nothing configures it.
@@ -280,11 +280,10 @@ pub enum CaptureMode {
     #[default]
     Full,
     /// Elide a `toolUseResult` or `attachment` subtree only when it is LARGE -
-    /// over [`crate::capture::LEAN_THRESHOLD_BYTES`] serialized
-    /// (`DESIGN-BRIEF.md:163`).
+    /// over [`crate::capture::LEAN_THRESHOLD_BYTES`] serialized.
     Lean,
     /// Elide both subtrees unconditionally, keeping prompts, assistant text,
-    /// tool names and tool arguments (`DESIGN-BRIEF.md:163`).
+    /// tool names and tool arguments.
     Minimal,
 }
 

@@ -16,10 +16,10 @@ pub use block::{append, write, Block, BlockReader, Written};
 
 /// Uncompressed bytes per block for a new session.
 ///
-/// From `DESIGN-BRIEF.md:73`, and still unmeasured against the real turn-size
-/// distribution (p50 726 bytes, p90 4,860). Each session records the size it
-/// was cut at in `session_meta.block_size`, so changing this applies to new
-/// sessions only and needs no rewrite.
+/// Still unmeasured against the real turn-size distribution (p50 726 bytes,
+/// p90 4,860). Each session records the size it was cut at in
+/// `session_meta.block_size`, so changing this applies to new sessions only
+/// and needs no rewrite.
 pub const BLOCK_SIZE: usize = 65536;
 
 /// zstd compression level.

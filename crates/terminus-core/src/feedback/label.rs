@@ -12,9 +12,9 @@
 //! in the same session names one of the same things that turn named, the model
 //! used what it was given. Measured 2026-08-20 over 150 transcripts: 41.1% of a
 //! prompt's path mentions recur later in the same session, so the proxy
-//! separates the two populations. `DESIGN-BRIEF.md:298` calls it a weak proxy
-//! and it is one - which is exactly why the auto-tuner is gated behind evidence
-//! from these labels rather than shipped on top of them.
+//! separates the two populations. It is still a weak proxy, which is exactly
+//! why the auto-tuner is gated behind evidence from these labels rather than
+//! shipped on top of them.
 //!
 //! **Incremental by construction.** Every statement carries its own "and there
 //! is no such row yet" clause, so a second pass over the same store writes

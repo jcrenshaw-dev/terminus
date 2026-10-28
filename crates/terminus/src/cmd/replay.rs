@@ -14,8 +14,8 @@
 //! **The overrides stop here.** Every threshold flag below reaches
 //! [`terminus_core::inject::prompt::Thresholds`] for this one read-only report
 //! and nothing else: the live injection path constructs `Thresholds::default()`
-//! inline, there is no config key and no environment variable, and
-//! `DESIGN-BRIEF.md:245` keeps the precision-first defaults non-detunable.
+//! inline, there is no config key and no environment variable, and the
+//! precision-first defaults are not detunable.
 //! Sweeping variants is what one build is for; shipping one is a code change.
 
 use terminus_core::feedback::replay::{self, Replayed};

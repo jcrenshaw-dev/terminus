@@ -2,11 +2,10 @@
 //!
 //! A decision can only be labelled against the turns that followed it, so
 //! something has to say "no more turns are coming". There is no event that says
-//! it: `SessionEnd` does not fire on a crash (`DESIGN-BRIEF.md:116`), and the
-//! hook starts the pass as a bare `terminus ingest` with no session id, so a
-//! spawned pass cannot know which session just ended anyway. So the rule is
-//! idleness, evaluated at ingest, and it covers the crash and the clean exit
-//! with one mechanism.
+//! it: `SessionEnd` does not fire on a crash, and the hook starts the pass as a
+//! bare `terminus ingest` with no session id, so a spawned pass cannot know
+//! which session just ended anyway. So the rule is idleness, evaluated at
+//! ingest, and it covers the crash and the clean exit with one mechanism.
 //!
 //! **One UPDATE and no un-finalize arm.** A session that goes quiet for longer
 //! than the threshold and then resumes is finalized early, and its later turns

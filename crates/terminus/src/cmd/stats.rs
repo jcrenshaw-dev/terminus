@@ -2,8 +2,8 @@
 //!
 //! A CLI data command and never an MCP tool. Every tool description sits
 //! in every session's context forever, and the model does not need to know how
-//! its own recall is scoring - the three recall tools are the whole surface
-//! `DESIGN-BRIEF.md:187` allows.
+//! its own recall is scoring - the three recall tools are the whole MCP
+//! surface.
 //!
 //! It reads through the shared read path, so a machine that has never ingested
 //! gets an empty answer with a reason and exit 0 rather than a store created as

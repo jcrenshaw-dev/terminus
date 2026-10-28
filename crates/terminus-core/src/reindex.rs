@@ -12,7 +12,7 @@
 //! tables is written once.
 //!
 //! `sessions` and `session_meta` are never touched by `reindex` itself. The
-//! archive table never migrates (`DESIGN-BRIEF.md:94`): a derived-schema change rebuilds derived
+//! archive table never migrates: a derived-schema change rebuilds derived
 //! tables *only*, and a store in an older archive format is refused at open
 //! and never reaches a rebuild.
 //!
@@ -68,14 +68,13 @@ pub struct Rebuilt {
     pub turns: usize,
     /// Sessions whose blob would not decompress, and why.
     ///
-    /// Skipped rather than fatal, and that distinction is the whole of
-    /// `DESIGN-BRIEF.md:98`: one damaged session means "this session is
-    /// damaged", never "the store is gone". A `?` here aborted the entire
-    /// rebuild on the first bad blob, named no session, and - because
-    /// [`open_up_to_date`] runs on the ingest path - stopped every future
-    /// ingest of every other transcript the moment `DERIVED_SCHEMA` was
-    /// bumped. The archive is truth and a corrupt blob is not recoverable
-    /// here, so the rebuild carries on and reports.
+    /// Skipped rather than fatal, and that distinction is the whole point: one
+    /// damaged session means "this session is damaged", never "the store is
+    /// gone". A `?` here aborted the entire rebuild on the first bad blob,
+    /// named no session, and - because [`open_up_to_date`] runs on the ingest
+    /// path - stopped every future ingest of every other transcript the moment
+    /// `DERIVED_SCHEMA` was bumped. The archive is truth and a corrupt blob is
+    /// not recoverable here, so the rebuild carries on and reports.
     pub failed: Vec<(String, String)>,
     /// Evicted sessions whose derived rows were carried across rather than
     /// rebuilt.

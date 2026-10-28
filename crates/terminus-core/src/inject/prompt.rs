@@ -1,10 +1,10 @@
 //! The `UserPromptSubmit` relevance injection.
 //!
 //! Silence is the answer this arm gives most of the time and the one it is
-//! built to protect: three near-misses are worse than nothing at all
-//! (`DESIGN-BRIEF.md:245`), so a turn is injected only on a structural match -
-//! a rank-1-to-3 exact entity, or two independent entities co-occurring - and
-//! never on a BM25 score, which is not comparable across queries.
+//! built to protect: three near-misses are worse than nothing at all, so a turn
+//! is injected only on a structural match - a rank-1-to-3 exact entity, or two
+//! independent entities co-occurring - and never on a BM25 score, which is not
+//! comparable across queries.
 //!
 //! **What has already been given is never given again.** Three
 //! suppressions, applied to the turns that passed the threshold and BEFORE the
@@ -20,7 +20,7 @@
 //! anything a person would actually type. The candidates come from the
 //! spellings a prompt names - its paths, resolved against the payload's `cwd`,
 //! and its identifier-shaped tokens - each conjoined within itself and
-//! disjoined across, which is `DESIGN-BRIEF.md`'s own signal hierarchy: exact
+//! disjoined across, which is the signal hierarchy injection ranks by: exact
 //! matches on rare tokens, never a sentence-level similarity. A prompt naming
 //! none of those never opens the store at all.
 //!
@@ -29,9 +29,9 @@
 //! AND sits in the top three of the ranked order, or when two independent
 //! entities co-occur on it wherever it ranks. A hit the query reached only
 //! through its text is never eligible, whatever its relevance - a score cutoff
-//! is exactly the approximation `DESIGN-BRIEF.md:245` forbids, since bm25
-//! scores are not comparable across queries, and free text is the weakest
-//! signal in the hierarchy and the one that fires the most false positives.
+//! is ruled out because bm25 scores are not comparable across queries, and free
+//! text is the weakest signal in the hierarchy and the one that fires the most
+//! false positives.
 //!
 //! **The one prompt after a compaction asks a different pool.** A
 //! `SessionStart` whose `source` is `compact` leaves a flag in the session's
@@ -120,8 +120,8 @@ pub const MAX_CANDIDATES: usize = 8;
 ///
 /// **The live path constructs [`Thresholds::default`] and nothing else**, which
 /// is exactly the six constants above: no [`Config`] field reaches it, no flag
-/// detunes it and no `terminus.toml` key names it, because
-/// `DESIGN-BRIEF.md:245` keeps the precision-first defaults non-detunable.
+/// detunes it and no `terminus.toml` key names it, because the precision-first
+/// defaults are not detunable.
 /// Three near-misses are worse than silence, and a threshold a user can
 /// lower is a threshold a user lowers once and never raises.
 ///
@@ -807,7 +807,7 @@ fn current_session(payload: &Payload) -> Option<String> {
 /// A path counts twice: as the absolute spelling the archive almost certainly
 /// stored and as the relative one the user typed, because the two are
 /// different token sets and the second is what a turn quoting the short form
-/// carries. An identifier-shaped token is `DESIGN-BRIEF.md`'s third signal and
+/// carries. An identifier-shaped token is the hierarchy's third signal and
 /// is judged by exactly the rule the extractor judges a `Grep` pattern by, so a
 /// prompt cannot ask about `the` or `should`.
 ///

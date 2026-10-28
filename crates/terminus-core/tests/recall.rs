@@ -1357,8 +1357,7 @@ fn read_hit<'a>(conn: &Connection, hits: &'a [Hit]) -> &'a Hit {
 /// The kind is what injection's structural threshold reads. `entity_score`
 /// collapses it - an IDF times a weight cannot say which of the two weights
 /// produced it - and approximating the threshold with a score cutoff instead is
-/// what `DESIGN-BRIEF.md:245` forbids outright, since bm25 scores are not
-/// comparable across queries.
+/// ruled out, since bm25 scores are not comparable across queries.
 #[test]
 fn a_hit_reports_whether_the_query_asked_for_the_whole_stored_value() {
     let bench = bench();
@@ -1448,7 +1447,7 @@ fn a_hit_counts_distinct_matched_entities_and_not_repeats() {
 
 /// A turn the query reached only through its text reports no kind and no count.
 ///
-/// This is the weakest signal in `DESIGN-BRIEF.md`'s hierarchy and the one
+/// This is the weakest signal in injection's hierarchy and the one
 /// injection never fires on, so it has to be distinguishable from a weak entity
 /// match rather than a small `entity_score`.
 #[test]

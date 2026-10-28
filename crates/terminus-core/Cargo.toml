@@ -25,9 +25,9 @@ toml.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
-# Real temp directories for real SQLite databases; never a mock
-# (DESIGN-BRIEF.md:504). A dev-dependency rather than a `testkit` dependency so
-# tests that need a temp dir but no fixture need no cargo feature.
+# Real temp directories for real SQLite databases; never a mock. A
+# dev-dependency rather than a `testkit` dependency so tests that need a temp
+# dir but no fixture need no cargo feature.
 tempfile = "3"
 
 # Test files gated as a whole on `testkit`. Declaring them makes
