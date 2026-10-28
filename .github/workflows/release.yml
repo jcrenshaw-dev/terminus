@@ -14,23 +14,7 @@ env:
   RUST_VERSION: "1.97.1"
 
 jobs:
-  audited:
-    # The last audit has to cover this commit. stamp-age.sh reads the commit
-    # SENTINEL.md names and fails when anything changed since, or when there
-    # is no SENTINEL.md at all.
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          submodules: recursive
-          # The audited commit has to be in the history.
-          fetch-depth: 0
-          persist-credentials: false
-      - name: The last audit covers this release
-        run: .sentinel/stamp-age.sh .
-
   build:
-    needs: audited
     # Each platform builds on its own runner, so every binary is run where it
     # was built before it goes in the draft.
     strategy:

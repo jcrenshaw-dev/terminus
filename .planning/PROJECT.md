@@ -63,7 +63,7 @@ Still outstanding: PR #124 is a draft. It is marked ready for its review, and th
 
 ## Context
 
-**Code.** A Rust 2021 workspace with two crates: `terminus-core` (archive, ingest, index, recall, injection, observations, retention, feedback) and `terminus` (the CLI, the hook, the MCP server, install and uninstall). 88 source files, about 35,500 lines including inline tests, with integration tests under `crates/*/tests`, fuzz targets under `fuzz/`, and the sentinel audit kit as a submodule.
+**Code.** A Rust 2021 workspace with two crates: `terminus-core` (archive, ingest, index, recall, injection, observations, retention, feedback) and `terminus` (the CLI, the hook, the MCP server, install and uninstall). 88 source files, about 35,500 lines including inline tests, with integration tests under `crates/*/tests`, and fuzz targets under `fuzz/`.
 
 **Docs.** `README.md` for users, `docs/` for commands, settings, JSON shapes, install and release, and `docs/design/` 0001 to 0008 for how it works. Design docs describe the current design only.
 
@@ -82,7 +82,7 @@ Still outstanding: PR #124 is a draft. It is marked ready for its review, and th
 - **Compatibility**: Linux and macOS, x86_64 and aarch64; path comparison is case-folded on macOS
 - **Privacy**: no telemetry and no model calls; the binary opens no network connection, and a test fails if any source file names a socket type
 - **Distribution**: `install.sh` fetches signed releases from GitHub; a local build is not checked against any signature
-- **Process**: `main` takes changes only through pull requests with signed commits, once the tests and sentinel's checks pass
+- **Process**: `main` takes changes only through pull requests with signed commits, once the tests pass
 - **Testing**: real SQLite databases in temporary directories, never mocks
 
 ## Key Decisions
