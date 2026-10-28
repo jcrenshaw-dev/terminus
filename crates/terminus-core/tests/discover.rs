@@ -1,9 +1,10 @@
 //! Discovery over a tree built to the real layout.
 //!
-//! Every case here is one of D-16's measured facts: the two filename rules, the
-//! depth-6 sidecar a bounded walk drops, and the four kinds of `.jsonl`-adjacent
-//! file that must never become a session. Plus D-22's pre-open exclusion, whose
-//! whole claim is that an excluded project is not even listed.
+//! Every case here is one of the measured facts of the real layout: the two
+//! filename rules, the depth-6 sidecar a bounded walk drops, and the four
+//! kinds of `.jsonl`-adjacent file that must never become a session. Plus the
+//! pre-open exclusion, whose whole claim is that an excluded project is not
+//! even listed.
 
 use std::path::{Path, PathBuf};
 
@@ -81,7 +82,8 @@ fn expected() -> Vec<String> {
     want
 }
 
-/// D-16 in full: both filename rules, the depth-6 sidecar, and nothing else.
+/// The layout in full: both filename rules, the depth-6 sidecar, and nothing
+/// else.
 #[test]
 fn discovery_returns_both_transcript_shapes_and_no_other_file() {
     let (_dir, root) = tree();
@@ -131,7 +133,7 @@ fn two_walks_of_one_tree_return_the_same_order() {
     assert_eq!(first, second);
 }
 
-/// D-17. The root is canonicalized once and every entry is joined onto it, so a
+/// The root is canonicalized once and every entry is joined onto it, so a
 /// root reached through a symlink still yields canonical paths. Those are files
 /// to read, not session keys: ingest keys a session on its path below the
 /// project folder.
@@ -159,8 +161,9 @@ fn every_path_begins_with_the_canonical_root_even_through_a_symlink() {
     }
 }
 
-/// D-22 and D-09 together: the excluded project yields nothing, and the sibling
-/// whose encoded name merely extends it is walked in full.
+/// The pre-open exclusion and the segment boundary together: the excluded
+/// project yields nothing, and the sibling whose encoded name merely extends it
+/// is walked in full.
 ///
 /// The excluded repository is built for real, because the pre-open test
 /// resolves an extension of an excluded name against the filesystem: with no
@@ -210,7 +213,7 @@ fn an_excluded_project_yields_nothing_while_its_hyphenated_sibling_is_walked() {
         !names
             .iter()
             .any(|n| n.starts_with(&format!("{worktree_name}/"))),
-        "D-06 folds a worktree into its repo, so excluding the repo excludes it: {names:?}"
+        "a worktree folds into its repo, so excluding the repo excludes it: {names:?}"
     );
 
     let sibling: Vec<String> = names
@@ -274,8 +277,8 @@ fn an_unreadable_directory_is_reported_and_the_rest_is_still_walked() {
     );
 }
 
-/// The counted-open helper records the path, which is what makes AC5's "zero
-/// opens under that directory" attributable rather than aggregate.
+/// The counted-open helper records the path, which is what makes "zero opens
+/// under that directory" attributable rather than aggregate.
 #[cfg(feature = "testkit")]
 #[test]
 fn opening_a_transcript_records_its_path() {
@@ -288,7 +291,7 @@ fn opening_a_transcript_records_its_path() {
     discover::open_transcript(&path).expect("the fixture opens");
     assert_eq!(discover::opened::under(&root), vec![path.clone()]);
 
-    // A failed open still counts: AC5 is about what terminus reaches for.
+    // A failed open still counts: exclusion is about what terminus reaches for.
     let missing = root.join(PROJECT).join("no-such-file.jsonl");
     assert!(discover::open_transcript(&missing).is_err());
     assert_eq!(discover::opened::under(&root), vec![path, missing]);
@@ -382,8 +385,8 @@ fn a_transcript_directly_in_an_excluded_root_is_still_refused() {
 ///
 /// The encoded tests only ever see a project directory name, and an excluded
 /// project's own path - `/data/projects/cadence/archive/keep.jsonl` - is not
-/// one. The exact test is the one that answers where a real path is available
-/// (D-23), which is exactly the situation a resolved link is in.
+/// one. The exact test is the one that answers where a real path is available,
+/// which is exactly the situation a resolved link is in.
 #[test]
 fn a_symlink_into_the_excluded_projects_own_directory_is_not_yielded() {
     let dir = tempdir();

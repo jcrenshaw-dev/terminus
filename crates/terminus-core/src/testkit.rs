@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 /// The transcript fixtures, relative to [`fixture_dir`].
 ///
 /// `subagents/workflows/wf_demo/journal.jsonl` is deliberately absent: it is
-/// not a transcript (D-12) and lives at [`NON_TRANSCRIPT_FIXTURE`].
+/// not a transcript and lives at [`NON_TRANSCRIPT_FIXTURE`].
 pub const TRANSCRIPT_FIXTURES: &[&str] = &[
     "session-basic.jsonl",
     "session-large-record.jsonl",
@@ -33,7 +33,7 @@ pub const TRANSCRIPT_FIXTURES: &[&str] = &[
 /// The token the rooted fixtures carry where a real transcript carries an
 /// absolute `cwd`.
 ///
-/// The phase 1 and 2 fixtures hardcode `/data/code/verbatim`, which makes any
+/// The unrooted fixtures hardcode `/data/code/verbatim`, which makes any
 /// project-scoped assertion over them true only on a checkout at that literal
 /// path - and, worse, true for the wrong reason on this one, since `git
 /// rev-parse` answers for a directory that really is there. The rooted fixtures
@@ -48,12 +48,12 @@ pub const FIXTURE_ROOT_TOKEN: &str = "{{ROOT}}";
 /// something to be both true and false about.
 ///
 /// `project-gamma` has exactly one member and that is deliberate.
-/// `session-envelope.jsonl` is that member: its last `user` record is
-/// a harness envelope rather than a typed prompt, so the brief's quoted turn
-/// moves under INJ-07's rule and a test at the process boundary can watch it
-/// move. Every project-scoped assertion in the repository is written against
-/// `project-alpha` or `project-beta`, so a third key is what keeps this fixture
-/// inert for all of them.
+/// `session-envelope.jsonl` is that member: its last `user` record is a harness
+/// envelope rather than a typed prompt, so the brief's quoted turn moves under
+/// the rule that only a typed prompt is quoted, and a test at the process
+/// boundary can watch it move. Every project-scoped assertion in the repository
+/// is written against `project-alpha` or `project-beta`, so a third key is what
+/// keeps this fixture inert for all of them.
 ///
 /// `project-delta` has exactly one member for that same reason.
 /// `session-secrets.jsonl` is that member: its turns carry the seven
@@ -63,7 +63,7 @@ pub const FIXTURE_ROOT_TOKEN: &str = "{{ROOT}}";
 /// assertion moves when it joins the set.
 ///
 /// `project-epsilon` has exactly one member for that same reason.
-/// `session-redaction.jsonl` is the hardin phase 2 one: a PEM private key, a
+/// `session-redaction.jsonl` holds the redaction shapes: a PEM private key, a
 /// bare `sk-` key in prose, a secret-named key in a `tool_use` input, in a
 /// `toolUseResult` and in an attachment, and one `tool_use` turn holding
 /// `café=1`, `Größe=10` and `“token=abc”`. Each shape sits in a turn of its own
@@ -71,13 +71,13 @@ pub const FIXTURE_ROOT_TOKEN: &str = "{{ROOT}}";
 /// It is last in [`TRANSCRIPT_FIXTURES`] because turn ids follow ingest order,
 /// and anywhere earlier would move the ids the recall golden pins.
 ///
-/// `session-edits.jsonl` is the phase 5 one, and it needs the root for a second
-/// reason the others do not: the path its `Edit` call stores is ABSOLUTE
+/// `session-edits.jsonl` is the injection fixture, and it needs the root for a
+/// second reason the others do not: the path its `Edit` call stores is ABSOLUTE
 /// beneath that same root, which is how the real corpus spells a path (1,029
-/// absolute against 2 relative over 120 sampled transcripts, D-05). A fixture
-/// that hardcoded an absolute path would name a directory this machine does not
-/// own, and one that stored a relative path would be the spelling the archive
-/// almost never holds.
+/// absolute against 2 relative over 120 sampled transcripts). A fixture that
+/// hardcoded an absolute path would name a directory this machine does not own,
+/// and one that stored a relative path would be the spelling the archive almost
+/// never holds.
 pub const ROOTED_FIXTURES: &[(&str, &str)] = &[
     ("session-recall.jsonl", "project-alpha"),
     ("subagents/agent-echo.jsonl", "project-alpha"),
@@ -144,11 +144,12 @@ pub fn copy_rooted_fixture_into(name: &str, dir: &Path, root: &Path) -> PathBuf 
     dest
 }
 
-/// The fixture whose **last** line is a compaction boundary (D-21).
+/// The fixture whose **last** line is a compaction boundary.
 ///
-/// Named rather than spelled at each site because two phases' tests append that
-/// one line to another transcript to make a boundary appear under an
-/// already-archived session, which is what AC4 asks about.
+/// Named rather than spelled at each site because tests in more than one file
+/// append that one line to another transcript to make a boundary appear under
+/// an already-archived session, which is the case a late compaction has to
+/// handle.
 pub const COMPACTED_FIXTURE: &str = "session-compacted.jsonl";
 
 /// The last line of [`COMPACTED_FIXTURE`], without its newline: one whole
@@ -163,10 +164,10 @@ pub fn boundary_line() -> Vec<u8> {
     bytes[start..bytes.len() - 1].to_vec()
 }
 
-/// A `.jsonl` file in the transcript tree that is not a transcript (D-12).
+/// A `.jsonl` file in the transcript tree that is not a transcript.
 pub const NON_TRANSCRIPT_FIXTURE: &str = "subagents/workflows/wf_demo/journal.jsonl";
 
-/// The `agent-*.meta.json` beside `subagents/agent-alpha.jsonl` (D-04).
+/// The `agent-*.meta.json` beside `subagents/agent-alpha.jsonl`.
 ///
 /// Deliberately NOT in [`TRANSCRIPT_FIXTURES`]: it is one JSON object rather
 /// than JSONL, discovery's filename filter must keep excluding it, and it must
@@ -177,8 +178,7 @@ pub const AGENT_META_FIXTURE: &str = "subagents/agent-alpha.meta.json";
 /// The one fixture with no trailing newline: a transcript still being written.
 pub const TRUNCATED_FIXTURE: &str = "session-truncated.jsonl";
 
-/// The capture-mode fixture (ING-07, phase 8 D-05): six records covering every
-/// arm the elision has.
+/// The capture-mode fixture: six records covering every arm the elision has.
 ///
 /// One `toolUseResult` well over [`crate::capture::LEAN_THRESHOLD_BYTES`] and
 /// one well under it, one `attachment` over and one under, and a plain user
@@ -255,7 +255,7 @@ pub fn corpus_dir() -> Option<PathBuf> {
 pub struct LineSurvey {
     pub lines: usize,
     /// Top-level `type` values and how many lines carried each. Counted and
-    /// never asserted as a closed set (D-25): 16 distinct types were measured,
+    /// never asserted as a closed set: 16 distinct types were measured,
     /// the set grows upstream, and an exact assertion fails on correct data.
     pub types: std::collections::BTreeMap<String, usize>,
     /// Lines with no `type` at all. Not a failure - the schema is upstream's.
@@ -336,21 +336,22 @@ pub fn temp_root() -> PathBuf {
         .unwrap_or_else(|e| panic!("resolve the temp directory {}: {e}", dir.display()))
 }
 
-/// The fixed query set AC4 compares before and after a rebuild.
+/// The fixed query set a rebuild is compared over, before and after.
 ///
 /// Every one of these matches at least one fixture turn, and `brillig` matches
 /// exactly one across the whole corpus. A query that matched nothing would make
 /// the comparison pass on an empty index, which is the failure this set exists
 /// to catch.
 ///
-/// Three of the five entries changed in phase 3, and the reason is the point:
-/// `assistant`, `attachment` and `restart` matched `"type":"assistant"`,
-/// `"attachment":{...}` and `"gitBranch":"restart"` - JSON keys and field values
-/// no user would ever search for - so the comparison had been running over hits
-/// that existed only because the raw line was indexed (D-01). Each entry now
-/// reaches through a different arm of the projection: a message text block, a
-/// `system` record's top-level `content` and a `Bash` tool input, an
-/// `attachment` object's string leaf, and a `toolUseResult.stderr`.
+/// No entry is a word only JSON scaffolding carries, and the reason is the
+/// point: `assistant`, `attachment` and `restart` would match
+/// `"type":"assistant"`, `"attachment":{...}` and `"gitBranch":"restart"` -
+/// JSON keys and field values no user would ever search for - so a comparison
+/// over them would run over hits that exist only if the raw line is indexed.
+/// Each entry instead reaches through a different arm of the projection: a
+/// message text block, a `system` record's top-level `content` and a `Bash`
+/// tool input, an `attachment` object's string leaf, and a
+/// `toolUseResult.stderr`.
 pub const FIXED_QUERIES: &[&str] = &["brillig", "cargo", "BRIEF", "SearchManager", "panicked"];
 
 /// Run [`FIXED_QUERIES`] plus a turn range and a turn-id lookup, and read back
@@ -359,13 +360,14 @@ pub const FIXED_QUERIES: &[&str] = &["brillig", "cargo", "BRIEF", "SearchManager
 ///
 /// The rows carry `turns.id` and each hit's coordinates, not just a count: a
 /// rebuild that renumbered turns would return the same number of hits pointing
-/// at different records, which is the exact failure D-10 exists to prevent.
+/// at different records, which is the exact failure this output exists to
+/// catch.
 ///
-/// The exact-match tables are in here for the same reason. AC3 compares this
-/// output across a rebuild, and until phase 3 it covered only `turns_fts` and
-/// the turn rows - so an extractor that rebuilt `entities` to different values,
-/// or to none at all, would have left the comparison byte-identical and the
-/// criterion asserting nothing about the tables it names.
+/// The exact-match tables are in here for the same reason. The rebuild test
+/// compares this output across a rebuild, and without them it would cover only
+/// `turns_fts` and the turn rows - so an extractor that rebuilt `entities` to
+/// different values, or to none at all, would leave the comparison
+/// byte-identical and the test asserting nothing about those tables.
 pub fn query_set_json(conn: &rusqlite::Connection) -> String {
     let mut out = String::from("{\n");
 
@@ -424,10 +426,10 @@ pub fn query_set_json(conn: &rusqlite::Connection) -> String {
     out.push_str(&rows.join(",\n"));
     out.push_str("\n  ],\n");
 
-    // The exact-match half of recall (RCL-02, RCL-03). Ordered by the columns
-    // themselves rather than by rowid: two rebuilds have to agree on the VALUES,
-    // and an ordering that leaned on insertion order would hide a re-derive that
-    // emitted the same set in a different sequence.
+    // The exact-match half of recall. Ordered by the columns themselves rather
+    // than by rowid: two rebuilds have to agree on the VALUES, and an ordering
+    // that leaned on insertion order would hide a re-derive that emitted the
+    // same set in a different sequence.
     out.push_str("  \"entities\": [\n");
     let rows: Vec<String> = conn
         .prepare(
@@ -505,7 +507,7 @@ pub fn archive_digest(conn: &rusqlite::Connection) -> String {
 /// Read one turn's bytes out of its session, reporting how many blocks
 /// had to be decompressed to do it.
 ///
-/// The block count is AC1's instrument and STOR-01's whole claim: "reading a
+/// The block count is the instrument for the archive's whole claim: "reading a
 /// single turn decompresses only the blocks that turn occupies" is a statement
 /// about a number, so the number is measured rather than argued from the code.
 ///
@@ -650,7 +652,7 @@ pub fn damage(conn: &rusqlite::Connection, session_key: &str) {
 
 /// How many distinct block rows the turns' `stream_offset` and `byte_len`
 /// cover, at each session's recorded block size: the most a read of exactly
-/// those turns may fetch (D-13). A repeated id counts once.
+/// those turns may fetch. A repeated id counts once.
 pub fn covered_blocks(conn: &rusqlite::Connection, turn_ids: &[i64]) -> usize {
     let mut covered = std::collections::BTreeSet::new();
     for id in turn_ids {
@@ -765,42 +767,6 @@ pub fn plant_session(
         )
         .unwrap_or_else(|e| panic!("plant a block for {session_key}: {e}"));
     }
-}
-
-/// Move one session to `to`, the way a build before phase 4 keyed it: on an
-/// absolute path, with `transcript_path` the same text.
-///
-/// Every table holding the key moves in one transaction with foreign keys
-/// deferred, so the store stays consistent.
-pub fn plant_old_key(conn: &mut rusqlite::Connection, from: &str, to: &str) {
-    let tx = conn.transaction().expect("begin");
-    tx.execute_batch("PRAGMA defer_foreign_keys = ON")
-        .expect("defer foreign keys");
-    for table in [
-        "sessions",
-        "session_meta",
-        "turns",
-        "compactions",
-        "observations",
-    ] {
-        tx.execute(
-            &format!("UPDATE {table} SET session_key = ?2 WHERE session_key = ?1"),
-            [from, to],
-        )
-        .unwrap_or_else(|e| panic!("move {from} in {table}: {e}"));
-    }
-    tx.execute(
-        "UPDATE watermarks SET transcript_path = ?2 WHERE transcript_path = ?1",
-        [from, to],
-    )
-    .unwrap_or_else(|e| panic!("move the watermark of {from}: {e}"));
-    tx.execute(
-        "UPDATE session_meta SET transcript_path = ?1 WHERE session_key = ?1",
-        [to],
-    )
-    .unwrap_or_else(|e| panic!("set the transcript path of {to}: {e}"));
-    tx.commit()
-        .unwrap_or_else(|e| panic!("move {from} to {to}: {e}"));
 }
 
 /// Cut one session's stream again at `block_size`, recording the new size and
@@ -1026,9 +992,8 @@ pub fn schema(path: &std::path::Path) -> Vec<String> {
     rows
 }
 
-/// A format-2 store an older build wrote: `derived_schema` one behind, and
-/// `decisions` without the two columns that arrived after it. A writable open
-/// would add them back.
+/// Put the store one `derived_schema` behind this build's, so it reads as older
+/// than the binary.
 pub fn age(path: &std::path::Path) {
     let conn = rusqlite::Connection::open(path).unwrap();
     conn.execute(
@@ -1037,11 +1002,6 @@ pub fn age(path: &std::path::Path) {
             (crate::DERIVED_SCHEMA - 1).to_string(),
             crate::store::META_DERIVED_SCHEMA.to_owned(),
         ],
-    )
-    .unwrap();
-    conn.execute_batch(
-        "ALTER TABLE decisions DROP COLUMN compacted;
-         ALTER TABLE decisions DROP COLUMN dropped;",
     )
     .unwrap();
 }

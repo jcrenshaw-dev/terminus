@@ -1,4 +1,4 @@
-//! Context injection: what the model is told before it is asked (INJ-01..INJ-06).
+//! Context injection: what the model is told before it is asked.
 //!
 //! Two events out of the four Claude Code fires can carry text back, and each
 //! has an arm here: [`brief::session_start`] renders the resume brief and
@@ -6,32 +6,32 @@
 //! the data directory, the loaded [`Config`] and all five payload fields, and
 //! both return the text to inject or nothing at all. Nothing in this module
 //! knows what the wire format is - the binary owns stdout, the exit code and
-//! the JSON envelope (D-01) - and nothing in the binary knows what a turn is.
+//! the JSON envelope - and nothing in the binary knows what a turn is.
 //!
 //! **Every failure is silence.** These functions return an `Option`, never a
-//! `Result`, and that is the requirement rather than a convenience: INJ-06 says
-//! a missing store, an unreadable store, a busy store, a store older than this
-//! build and a query error all leave the hook writing nothing and exiting 0. A
-//! `Result` here would put a rendering decision - which errors are worth a
-//! prompt - at every call site instead of once.
+//! `Result`, and that is the requirement rather than a convenience: a missing
+//! store, an unreadable store, a busy store, a store older than this build and
+//! a query error all leave the hook writing nothing and exiting 0. A `Result`
+//! here would put a rendering decision - which errors are worth a prompt - at
+//! every call site instead of once.
 //!
-//! **Nothing here writes to the store, creates one or locks one.** It is
-//! opened with [`Store::open_read_only`] and never `Store::open`, which would
+//! **Nothing here writes to the store, creates one or locks one.** It is opened
+//! with [`Store::open_read_only`] and never `Store::open`, which would
 //! `create_dir_all`, initialize a fresh database, run the additive column
 //! bring-forward and set two pragmas: a hook must not leave a store behind as
 //! the side effect of a question, and the ingest lock belongs to the pass the
 //! hook already spawned. What injection does write is two kinds of FILE beside
-//! the store and never inside it: [`state`], one session's disposable scratch
-//! (D-06), and [`decision`], one durable record per prompt that a later ingest
-//! pass drains into the store (phase 6 D-01). A write on the prompt path is
-//! exactly what INJ-06 cannot tolerate, and a blocked writer behind a 49-second
-//! backfill is strictly worse than a blocked reader.
+//! the store and never inside it: [`state`], one session's disposable scratch,
+//! and [`decision`], one durable record per prompt that a later ingest pass
+//! drains into the store. A write on the prompt path is exactly what the
+//! deadline cannot tolerate, and a blocked writer behind a 49-second backfill
+//! is strictly worse than a blocked reader.
 //!
-//! **The scope comes off the payload (D-12).** [`Scope::Directory`] built from
-//! the payload's `cwd`, never [`Scope::current_directory`]: the working
-//! directory Claude Code chose for a hook may be a plugin root, a worktree or
-//! `/`, and resolving it here would scope the most history-laden sessions to
-//! the wrong project or to `Reason::UnknownProject`.
+//! **The scope comes off the payload.** [`Scope::Directory`] built from the
+//! payload's `cwd`, never [`Scope::current_directory`]: the working directory
+//! Claude Code chose for a hook may be a plugin root, a worktree or `/`, and
+//! resolving it here would scope the most history-laden sessions to the wrong
+//! project or to `Reason::UnknownProject`.
 
 pub mod brief;
 pub mod compaction;
@@ -48,6 +48,36 @@ use crate::error::Result;
 use crate::recall::scope::{self, Scope, Scoped};
 use crate::store::Store;
 
+/// The shortest and longest a `session_id` may be and still name a file.
+///
+/// A Claude Code `session_id` is a 36-character uuid. The window is wider than
+/// that on both sides so a harness that changes its id format does not silently
+/// lose suppression, and narrow enough that nothing pathological gets near a
+/// filesystem call.
+const MIN_NAME: usize = 8;
+const MAX_NAME: usize = 64;
+
+/// The `session_id`, when it is fit to be part of a file name, or nothing.
+///
+/// ASCII hex digits and dashes at a plausible uuid length, and nothing else: an
+/// allow-list rather than a scan for the dangerous spellings, because the list
+/// of dangerous spellings is per-platform and open-ended (`..`, `/`, `\`, `:`,
+/// a NUL, a trailing dot, `CON`) while the list of characters a session id is
+/// made of is closed. Byte length is character length here because every
+/// admitted byte is ASCII.
+///
+/// A `session_id` arrives on an untrusted payload and becomes a file name, so
+/// the check runs before any path is built: a value that fails it must reach no
+/// filesystem call at all - not a `join` that gets checked afterwards, which is
+/// the shape that keeps being wrong on the platform nobody tested.
+fn checked_session_id(session_id: &str) -> Option<&str> {
+    let plausible = (MIN_NAME..=MAX_NAME).contains(&session_id.len());
+    let shaped = session_id
+        .bytes()
+        .all(|b| b.is_ascii_hexdigit() || b == b'-');
+    (plausible && shaped).then_some(session_id)
+}
+
 /// The hook payload fields injection reads, borrowed from whoever parsed them.
 ///
 /// All five travel together even where an arm ignores one, so that the seam
@@ -60,7 +90,7 @@ pub struct Payload<'a> {
     pub session_id: Option<&'a str>,
     /// The transcript file Claude Code is appending to.
     pub transcript_path: Option<&'a str>,
-    /// The session's working directory, which is what scopes both arms (D-12).
+    /// The session's working directory, which is what scopes both arms.
     pub cwd: Option<&'a str>,
     /// The text the user just submitted. `UserPromptSubmit` only.
     pub prompt: Option<&'a str>,
@@ -68,14 +98,14 @@ pub struct Payload<'a> {
     pub source: Option<&'a str>,
 }
 
-/// The `SessionStart` `source` a compaction fires under (D-08).
+/// The `SessionStart` `source` a compaction fires under.
 ///
 /// Observed rather than inferred: a temporary matcher-less `SessionStart` entry
 /// appending its stdin to a file produced `source` `"startup"` at session start
 /// and `source` `"compact"` once a `/compact` finished, under one `session_id`
-/// (`crates/terminus/src/cmd/hook.rs`, PLAN-1 task 5). That is what makes
-/// INJ-05's trigger the event rather than D-08's fallback of reading the
-/// boundary row at every prompt and racing the ingest for it.
+/// (`crates/terminus/src/cmd/hook.rs`). That is what makes the event the
+/// compacted pool's trigger, rather than a fallback that reads the boundary row
+/// at every prompt and races the ingest for it.
 pub const COMPACT_SOURCE: &str = "compact";
 
 /// How long an injection read waits behind a writer before giving up.
@@ -97,13 +127,13 @@ const BUSY_TIMEOUT_MS: u64 = 3;
 ///
 /// The version gate is the least obvious of those and the most necessary. A
 /// read command answers a store that predates this build by saying so on stderr
-/// and querying the old-shape index anyway (D-18); a hook has no such channel -
-/// its stderr is not shown and its stdout is a validated protocol - so a
-/// degraded brief would be an assertion about the archive that nothing could
-/// qualify. For an older derived schema the next ingest rebuilds the derived
-/// tables and the brief comes back. An older archive format is refused by the
-/// open itself and stays refused: no ingest converts it, and only a clean
-/// install brings the brief back.
+/// and querying the old-shape index anyway; a hook has no such channel - its
+/// stderr is not shown and its stdout is a validated protocol - so a degraded
+/// brief would be an assertion about the archive that nothing could qualify.
+/// For an older derived schema the next ingest rebuilds the derived tables and
+/// the brief comes back. An older archive format is refused by the open itself
+/// and stays refused: no ingest converts it, and only a clean install brings
+/// the brief back.
 pub(crate) fn open(data_dir: &Path) -> Option<Store> {
     let store = Store::open_read_only(data_dir).ok()?;
     store
@@ -132,8 +162,7 @@ pub(crate) fn scoped(conn: &Connection, config: &Config, payload: &Payload) -> O
     Some(scoped)
 }
 
-/// How many characters a string is, which is what an injection budget counts
-/// (D-16).
+/// How many characters a string is, which is what an injection budget counts.
 ///
 /// Characters and not bytes and not tokens: the workspace has no tokenizer and
 /// will not grow one on the cold-start path, and bytes would under-count the
@@ -161,11 +190,11 @@ pub(crate) fn clip(text: &str, budget: usize) -> String {
     out
 }
 
-/// The tag that opens the block both arms quote the archive inside (D-02).
+/// The tag that opens the block both arms quote the archive inside.
 ///
 /// One fixed pair, the same bytes on every render: a per-render nonce would
-/// break the brief's byte identity (INJ-02) and the prompt arm's same-bytes
-/// property, and a model does not check a hash. Unlike Claude Code's own
+/// break the brief's byte identity and the prompt arm's same-bytes property,
+/// and a model does not check a hash. Unlike Claude Code's own
 /// `system-reminder` pair, which wraps the whole of a hook's context around
 /// this one.
 pub const OPEN_TAG: &str = "<terminus-recall>";
@@ -181,7 +210,7 @@ pub const CLOSE_TAG: &str = "</terminus-recall>";
 const TAG_NAME: &str = "terminus-recall";
 
 /// What both arms say about the block, after their own one-line description of
-/// it (D-07).
+/// it.
 ///
 /// Claude Code 2.1.302 hands hook context to the model as a meta user-role
 /// message, under `<event> hook additional context: `, so this says where the
@@ -199,7 +228,7 @@ pub const QUOTED_HISTORY: &str = "The text between the terminus-recall tags is q
 pub const NEUTRALIZED: &str = "[closing tag removed]";
 
 /// `text` with every span that reads as [`CLOSE_TAG`] replaced by
-/// [`NEUTRALIZED`] (D-02, D-05).
+/// [`NEUTRALIZED`].
 ///
 /// Run on every archived string either arm puts inside the frame, after
 /// redaction and before the budget is spent. A span reads as the closer when,
@@ -404,7 +433,7 @@ fn is_ignorable(c: char) -> bool {
 }
 
 /// What the frame costs before anything is quoted in it: the header line, both
-/// tags and the line breaks between them (D-06).
+/// tags and the line breaks between them.
 ///
 /// Measured off the frame itself rather than added up, so it cannot drift from
 /// what [`frame`] writes.
@@ -422,7 +451,7 @@ pub(crate) fn frame_fits(description: &str, budget: usize) -> bool {
 }
 
 /// `body` inside the frame, within `budget`, or nothing when the frame does not
-/// fit (D-06).
+/// fit.
 ///
 /// The header line is the arm's own `description` followed by
 /// [`QUOTED_HISTORY`], then the opening tag on its own line, the body, and the
@@ -459,7 +488,8 @@ mod tests {
 
     use rusqlite::OpenFlags;
 
-    /// The three stores INJ-06 names, as directories a test can point an arm at.
+    /// The three stores injection must answer with silence, as directories a
+    /// test can point an arm at.
     ///
     /// Every one of them is a way a real machine arrives here: nothing ingested
     /// yet, a pass or a backfill holding the file, and a `terminus.db` that is
@@ -530,15 +560,15 @@ mod tests {
     ///
     /// **This test takes five seconds and the five seconds are the finding.**
     /// `Store::open_read_only` sets its own timeout and queries `sqlite_master`
-    /// before it returns, so the busy timeout [`BUSY_TIMEOUT_MS`] lowers arrives
-    /// too late to bound the open - and a holder in the same process is the
-    /// shape that makes SQLite's busy handler wait the whole five seconds
+    /// before it returns, so the busy timeout [`BUSY_TIMEOUT_MS`] lowers
+    /// arrives too late to bound the open - and a holder in the same process is
+    /// the shape that makes SQLite's busy handler wait the whole five seconds
     /// (measured: 5,011 ms here against about 6 ms for the same lock held by
-    /// another process). The arms still say nothing, which is all INJ-06 asks
-    /// of this library. Bounding the WAIT is the hook's watchdog, D-03's other
-    /// mechanism, and `crates/terminus/tests/inject.rs` is where that is
-    /// asserted against a wall clock. Do not delete this test to make the
-    /// suite faster: its cost IS the measurement.
+    /// another process). The arms still say nothing, which is all the silence
+    /// rule asks of this library. Bounding the WAIT is the hook's watchdog, the
+    /// deadline's other mechanism, and `crates/terminus/tests/inject.rs` is
+    /// where that is asserted against a wall clock. Do not delete this test to
+    /// make the suite faster: its cost IS the measurement.
     #[test]
     fn a_store_held_by_an_exclusive_writer_is_nothing() {
         let dir = data_dir();

@@ -30,13 +30,15 @@ Every hook Claude Code fires starts this pass in the background, so running it b
 
 Archives one transcript file. A file inside an excluded project is not read, and the command says so on stderr and exits 0. It does not close sessions, apply retention or take a snapshot. Those are steps of the whole-tree pass above.
 
+Each run that holds the ingest lock leaves one row, which `terminus status` shows as the last run, whether the file was archived, already up to date, or failed. A file that cannot be archived is named under `error` there, and the command exits 1. When another pass holds the lock, it exits 0 having done nothing.
+
 ### `terminus backfill`
 
 Archives every transcript already on disk without holding the terminal. It prints how many transcripts there are, how many bytes are not yet archived, and an estimate of the time at the rate measured for its 4 workers. Then it starts the work in a detached process and returns. When it finds no transcripts, it prints the zero counts and starts nothing. A folder under a root that cannot be listed is printed as a problem, and nothing under it is counted or archived.
 
 There is no log file. `terminus status` shows the pass under "last run" once it finishes. A backfill that is stopped part way picks up where it left off the next time a pass runs, because each file keeps its own position. `terminus install` runs a backfill as its last step.
 
-Takes no options.
+Takes no options. `--work` is the flag the detached worker runs under, and it is not meant to be typed.
 
 ## Reading the archive
 
@@ -52,17 +54,17 @@ An excluded project is never shown, with `*` too, including sessions archived be
 
 ### Time bounds
 
-`--since` and `--until` take a UTC time as `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SS.mmmZ`. A bare date in `--since` means the start of that day and in `--until` the end of it, so `--since 2026-10-01 --until 2026-10-01` covers the whole day. Both bounds are inclusive. Any other form exits 2. A turn or session with no timestamp is outside every bound.
+`--since` and `--until` take a UTC time as `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SS.mmmZ`. A bare date in `--since` means the start of that day and in `--until` the end of it, so `--since 2026-10-01 --until 2026-10-01` covers the whole day. Both bounds are inclusive. A value in any other form, or one that is not a real date or time, such as `2026-02-30`, month 13 or hour 25, exits 2 with a message naming the flag. A turn or session with no timestamp is outside every bound.
 
 ### `terminus search <words>`
 
-Finds past turns by text, a path, an error line or an identifier. Every word after `search` that is not an option is part of the query, so the words need no quotes, and a turn must match all of them. Only the first 32 terms are used, and stderr says so when a query is cut.
+Finds past turns by text, a path, an error line or an identifier. Every word after `search` that is not an option is part of the query, so the words need no quotes, and a turn must match all of them. A word made only of letters the search index makes no token from, such as circled letters, is dropped and takes no place in the count. Only the first 32 distinct terms are used, and stderr says so when a query is cut. A query with nothing left to search, such as `///`, finds no turns, says so, and exits 0.
 
-Each hit is two lines: the turn id, the day, the transcript's file name, the project, and `(subagent)` for a subagent's turn, then an excerpt around the match. The count of hits goes to stderr. The turn id is what `terminus show` takes. Control characters in archived text, other than tab and newline, print as `\u00XX` escapes, such as `\u001b` for ESC, with or without `--raw`.
+Each hit is two lines: the turn id, the day, the transcript's file name, the project, and `(subagent)` for a subagent's turn, then an excerpt around the match. The count of hits goes to stderr. The turn id is what `terminus show` takes. As in every command's human output, a control character in archived text other than tab and newline prints as a `\u00XX` escape, such as `\u001b` for ESC, with or without `--raw`.
 
 - `--project <path>`: which project to search, as [above](#which-project-a-read-command-sees).
 - `--tool <name>`: only turns that called this tool, such as `Bash` or `Read`.
-- `--kind <type>`: only turns of this record type: `user`, `assistant`, `system` or `attachment`. Any other value is accepted and matches nothing, so a misspelled type returns no hits. `observation` exits 2, because session summaries were removed.
+- `--kind <type>`: only turns of this record type: `user`, `assistant`, `system` or `attachment`. Any other value is accepted and matches nothing, so a misspelled type returns no hits.
 - `--path <path>`: only turns whose tool call or tool result names this path in a structured field, such as a `Read`'s `file_path`. The match is exact, not a prefix, and a turn that only mentions the path in text does not match. Repeat it to match any of several paths.
 - `--since <time>`, `--until <time>`: only turns inside these [bounds](#time-bounds).
 - `--limit <n>`: how many hits, default 10. A number above 50 is treated as 50, and 0 exits 2.
@@ -71,10 +73,10 @@ Each hit is two lines: the turn id, the day, the transcript's file name, the pro
 
 ### `terminus show <id>...`
 
-Prints the archived record behind each turn id, byte for byte as it was archived. It takes one or more ids, and a word that is not a number exits 2. Each record has a header line with the id, the time, the transcript's file name, the project, and `(body evicted)` when retention has evicted the session's text. An id that is not in the project is named on stderr. The header and the `--before`/`--after` turns print control characters in archived text, other than tab and newline, as `\u00XX` escapes, such as `\u001b` for ESC, with or without `--raw`. The record itself is still printed byte for byte.
+Prints the archived record behind each turn id, byte for byte as it was archived. It takes one or more ids, and a word that is not a number exits 2. Each record has a header line with the id, the time, the transcript's file name, the project, and `(body evicted)` when retention has evicted the session's text. An id that is not in the project is named on stderr. As in every command's human output, a control character in archived text other than tab and newline, in the header and the `--before`/`--after` turns, prints as a `\u00XX` escape, such as `\u001b` for ESC, with or without `--raw`. The record itself is still printed byte for byte.
 
 - `--project <path>`: which project the ids are looked up in, as [above](#which-project-a-read-command-sees). An id from another project needs that project or `*`.
-- `--before <n>`, `--after <n>`: also prints up to this many turns before and after each record, from the same session, at most 25 each. A larger number is treated as 25. The window stops at the session's first and last turn and says which end it reached.
+- `--before <n>`, `--after <n>`: also prints up to this many turns before and after each record, from the same session, at most 25 each. A larger number is treated as 25. The window stops at the session's first and last turn and says which end it reached. When the session continues from another, a line after the window names that session's id.
 - `--raw`: with [`[privacy] redact_recall`](configuration.md#privacy) on, prints the records unfiltered for this run only.
 - `--json`
 
@@ -89,7 +91,7 @@ Lists every archived session in the project, one line each: the day of its first
 
 ### `terminus observations`
 
-Lists the facts recorded for each closed session in the project: the transcript's file name, branch, turns, duration and compactions, then the files modified and read, the tools, the commands, the errors and the commits. The facts come from the transcript's own records, and no model is involved. A session has an entry once a pass has closed it. A list that hit its cap is named under `truncated`. Control characters in archived text, other than tab and newline, print as `\u00XX` escapes, such as `\u001b` for ESC.
+Lists the facts recorded for each closed session in the project: the transcript's file name, branch, turns, duration and compactions, then the files modified and read, the tools, the commands, the errors and the commits. The facts come from the transcript's own records, and no model is involved. A session has an entry once a pass has closed and observed it. One pass observes at most 100 closed sessions, and the rest wait for the next pass. A list that hit its cap is named under `truncated`. As in every command's human output, a control character in archived text other than tab and newline prints as a `\u00XX` escape, such as `\u001b` for ESC.
 
 - `--project <path>`: which project to list, as [above](#which-project-a-read-command-sees).
 - `--json`
@@ -119,13 +121,13 @@ Rebuilds every table derived from the archive, the search index among them. Turn
 
 ### `terminus status`
 
-Prints the store's path and size, the number of sessions and turns, how far into the transcripts the archive has read, the excluded projects, and the last ingest pass: when it started, how long it took, the files walked, archived and failed, the bytes read, the turns added, and its notes and errors. The lines recovery leaves, such as the count of sessions it re-keyed, print under `error` even when nothing failed. A pass's failures are recorded here and nowhere else, since there is no log file. It takes no lock, so it works while a pass runs. With no store, it says so and exits 0, and creates no store. On a store older than the binary, it says so on stderr, reports what is there, and changes nothing.
+Prints the store's path and size, the number of sessions and turns, how far into the transcripts the archive has read, the excluded projects, and the last ingest pass: when it started, how long it took, the files walked, archived and failed, the bytes read, the turns added, and its notes and errors. The lines recovery leaves, such as a watermark it lowered, print under `notes`, so a pass that only repaired a watermark shows no error. A pass's failures are recorded here and nowhere else, since there is no log file. It takes no lock, so it works while a pass runs. With no store, it says so and exits 0, and creates no store. On a store older than the binary, it says so on stderr, reports what is there, and changes nothing.
 
 - `--json`
 
 ### `terminus compact`
 
-Gives back the disk space retention freed. It rebuilds the database file without its free pages and then empties the write-ahead log, and prints the store's size before and after and the bytes reclaimed. It deletes nothing itself. It takes the ingest lock and exits 1 when a pass is running. With no store, it says there is nothing to reclaim and exits 0.
+Gives back the disk space retention freed. It rebuilds the database file without its free pages and then empties the write-ahead log, and prints the store's size before and after and the bytes reclaimed. It deletes nothing itself. It takes the ingest lock and exits 1 when a pass is running. With no store, it says there is nothing to reclaim and exits 0. A store it cannot read is an operational failure and exits 1.
 
 - `--json`
 
@@ -192,7 +194,7 @@ It changes nothing. Retention acts only inside the ingest pass, and this command
 
 ### `terminus doctor`
 
-Reports what is wired into Claude Code and what is not. It checks the binary at `~/.local/bin/terminus` and its version, Claude Code's `settings.json`, each of the four hook entries, the MCP entry, the `claude` command, the transcript roots, the data directory, the store, the last ingest pass, and the two Claude Code settings Terminus [reports and never changes](configuration.md#claude-code-settings-terminus-reports). Each check is `ok`, `note`, `unknown` or `problem`, and where there is something to run, it carries the command that fixes it.
+Reports what is wired into Claude Code and what is not. It checks the binary at `~/.local/bin/terminus` and its version, Claude Code's `settings.json`, each of the four hook entries, the MCP entry, the `claude` command, the transcript roots, the data directory, the store, the last ingest run, and the two Claude Code settings Terminus [reports and never changes](configuration.md#claude-code-settings-terminus-reports). Each check is `ok`, `note`, `unknown` or `problem`, and where there is something to run, it carries the command that fixes it. The last ingest run is a `problem` when it failed a file or recorded an error, including `terminus ingest <path.jsonl>` on a damaged file, and it stays one until a later run records no failure.
 
 It writes nothing and repairs nothing. It reads `settings.json` only for the keys it checks and never prints the file. It exits 1 only when a check is a `problem`.
 
@@ -214,7 +216,7 @@ Removes what `install` added: the four hook entries from `settings.json`, the MC
 
 It keeps the versions folder, because a session already running may be using one of its files, and it keeps the data directory, because the archive is the product. It prints both paths. A step that cannot be done is reported, the rest still happen, and the command exits 1.
 
-- `--purge`: also deletes the whole data directory, its snapshots and the state the hooks keep included, after showing its path and a size and asking once. The size counts only `terminus.db` and its `-wal` and `-shm` files, not the snapshots. With no `terminus.db` in the directory, it prints that there is nothing to purge and deletes nothing. The default answer is no. It takes the ingest lock and deletes nothing while a pass is running. With no answer to read, nothing is deleted and the command exits 1. It never deletes the versions folder.
+- `--purge`: also deletes the whole data directory, its snapshots and the state the hooks keep included, after showing its path and a size and asking once. The size counts everything `--purge` deletes, the snapshots and the state the hooks keep included. With no `terminus.db` in the directory, it prints that there is nothing to purge and deletes nothing. The default answer is no. It takes the ingest lock and deletes nothing while a pass is running. With no answer to read, or a store it cannot read, nothing is deleted and the command exits 1. It never deletes the versions folder.
 - `-y`, `--yes`: answers the `--purge` question yes. Without `--purge` it changes nothing.
 
 ## Run by Claude Code
@@ -237,7 +239,7 @@ The MCP server, started by Claude Code for each session over stdio and registere
 
 It serves three tools. All three are read-only, answer about the session's project unless given another, and never return an excluded project:
 
-- `recall_search`: the search `terminus search` runs, with the same query, `project`, `paths` (at most 25), `tool`, `kind`, `since`, `until` and `limit` (default 10, at most 50).
+- `recall_search`: the search `terminus search` runs, with the same query, `project`, `paths`, `tool`, `kind`, `since`, `until` and `limit` (default 10, at most 50).
 - `recall_context`: the turns before and after one turn id, default 5 each side and at most 25, stopping at the session's ends.
 - `recall_get`: the full archived text of up to 25 turn ids.
 

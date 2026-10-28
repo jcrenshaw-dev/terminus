@@ -1,8 +1,8 @@
-//! RET-01..RET-03: what retention names, and what it then does to it.
+//! What retention names, and what it then does to it.
 //!
 //! Every case runs against a real temp SQLite store. The evaluation instant is
 //! passed in rather than read off the wall clock, which is the property the
-//! shared evaluation exists to give (D-04) and is also what makes these
+//! shared evaluation exists to give and is also what makes these
 //! assertions about a fixed corpus rather than about the day they run.
 
 #![cfg(feature = "testkit")]
@@ -57,7 +57,7 @@ impl Bench {
     }
 
     /// A session row shaped like an archived one, plus the transcript file on
-    /// disk that D-02's delete rule asks about.
+    /// disk that the delete rule asks about.
     ///
     /// Planted rather than ingested: this half of the module reads
     /// `session_meta` and never a blob, so a fixture would only make the same
@@ -123,9 +123,10 @@ fn config(body: &str) -> Config {
 const EVICT_30: &str = "[retention]\naction = \"evict\"\nage_days = 30\n";
 const DELETE_30: &str = "[retention]\naction = \"delete\"\nage_days = 30\n";
 
-/// RET-01. Every session in the store predates any plausible default and the
-/// off policy still names none of them - which is the whole of AC1 stated at
-/// the level retention decides it.
+/// An off policy names nothing. Every session in the store predates any
+/// plausible default and the off policy still names none of them - which is
+/// the whole of retention being off by default, stated at the level retention
+/// decides it.
 #[test]
 fn an_off_policy_names_nothing_however_old_the_store_is() {
     let bench = bench();
@@ -156,7 +157,7 @@ fn an_off_policy_names_nothing_however_old_the_store_is() {
     }
 }
 
-/// D-11: only sessions the idle rule has already closed are eligible. Evicting
+/// Only sessions the idle rule has already closed are eligible. Evicting
 /// a live transcript's blob would fail the next pass's `blob::append` checksum
 /// precondition and record that file as a failure on every pass thereafter.
 #[test]
@@ -173,7 +174,7 @@ fn a_session_that_is_not_final_is_never_named_however_old_it_is() {
     );
 }
 
-/// D-11 again, from the other side: a session with no `last_turn_at` is not
+/// The same rule from the other side: a session with no `last_turn_at` is not
 /// idle, it is unknown, and nothing is done to a session nothing is known about.
 #[test]
 fn a_session_with_no_last_turn_is_never_named() {
@@ -201,7 +202,7 @@ fn the_age_window_decides_and_the_cutoff_comes_off_the_passed_instant() {
     assert_eq!(narrow.evict, vec![old, recent]);
 }
 
-/// D-02: `delete` is a garbage collector for what Claude Code's own
+/// `delete` is a garbage collector for what Claude Code's own
 /// `cleanupPeriodDays` already removed. A session whose transcript is still on
 /// disk is rediscovered and re-ingested from offset 0 on the next hook spawn,
 /// so deleting it reclaims nothing measurable.
@@ -233,7 +234,7 @@ fn a_session_already_evicted_is_not_named_again() {
     assert!(bench.evaluate(&config(EVICT_30)).is_empty());
 }
 
-/// D-01: the per-project rule governs its subtree, and the global table governs
+/// The per-project rule governs its subtree, and the global table governs
 /// everything else.
 #[test]
 fn a_per_project_rule_governs_its_subtree_and_the_global_table_the_rest() {
@@ -261,7 +262,7 @@ fn a_per_project_rule_governs_its_subtree_and_the_global_table_the_rest() {
     assert_eq!(selection.evict, vec![sibling]);
 }
 
-/// ING-08: exclusion means never read, on the ingest path and the read path
+/// Exclusion means never read, on the ingest path and the read path
 /// both, and a deletion is the most extreme thing that could be done to bytes a
 /// user said not to look at. Passed over, and counted rather than silently
 /// dropped - a policy that reclaims nothing has to be able to say why.
@@ -395,7 +396,7 @@ impl Bench {
     }
 }
 
-/// RET-02: the row, the metadata and every derived row survive an eviction.
+/// The row, the metadata and every derived row survive an eviction.
 /// Only the bytes go - which is what lets `terminus sessions` still list it and
 /// a search still match its turns.
 #[test]
@@ -460,6 +461,7 @@ fn a_deletion_removes_every_row_the_session_owns() {
     let bench = bench();
     let key = bench.archive("doomed.jsonl");
     bench.plant_observation(&key);
+    bench.remove_transcript(&key);
     for (table, count) in bench.rows(&key) {
         assert!(count > 0, "{table} has nothing to delete");
     }
@@ -491,7 +493,7 @@ fn a_deletion_removes_every_row_the_session_owns() {
     );
 }
 
-/// FEED-03: the replay history outlives the session it was recorded against.
+/// The replay history outlives the session it was recorded against.
 /// `decisions` records prompt-time state no blob ever held, so a deletion that
 /// took it would silently delete what `terminus replay` and `stats` are
 /// computed over.
@@ -515,6 +517,7 @@ fn a_decision_naming_the_deleted_session_survives_it() {
             [&session_id],
         )
         .unwrap();
+    bench.remove_transcript(&key);
 
     bench.apply(&Selection {
         delete: vec![key.clone()],
@@ -543,6 +546,8 @@ fn a_failure_on_one_session_does_not_stop_the_next() {
     let fine = bench.archive("fine.jsonl");
     bench.plant_observation(&doomed);
     bench.plant_observation(&fine);
+    bench.remove_transcript(&doomed);
+    bench.remove_transcript(&fine);
     bench
         .conn()
         .execute_batch(&format!(
@@ -581,7 +586,52 @@ fn a_failure_on_one_session_does_not_stop_the_next() {
     }
 }
 
-// D-03 on the ingest side. An evicted session's block rows were deleted on
+/// A transcript that comes back between selection and delete keeps its session
+/// (#43). `evaluate` names the session while the transcript is gone, the bytes
+/// are written back, and `apply` asks again just before the delete: nothing
+/// goes, and the kept session is a note, never an error.
+#[test]
+fn a_transcript_that_comes_back_before_the_delete_keeps_its_session() {
+    let bench = bench();
+    let key = bench.archive("returning.jsonl");
+    let rows = bench.rows(&key);
+    let matched = bench.matches(testkit::UNIQUE_TOKEN);
+    assert!(matched > 0, "the fixture has to be searchable to start with");
+
+    // Setup only: these are the two columns `evaluate` reads.
+    bench
+        .conn()
+        .execute(
+            "UPDATE session_meta SET is_final = 1, last_turn_at = ?2 WHERE session_key = ?1",
+            rusqlite::params![key, ANCIENT],
+        )
+        .unwrap();
+    let bytes = std::fs::read(&key).unwrap();
+    bench.remove_transcript(&key);
+
+    let selection = bench.evaluate(&config(DELETE_30));
+    assert_eq!(selection.delete, vec![key.clone()], "the premise");
+
+    std::fs::write(&key, bytes).unwrap();
+    let applied = bench.apply(&selection);
+
+    assert!(applied.deleted.is_empty(), "{:?}", applied.deleted);
+    assert!(applied.notes.is_empty(), "{:?}", applied.notes);
+    assert!(applied.errors().is_empty(), "{:?}", applied.errors());
+    assert_eq!(applied.kept, 1);
+    assert!(
+        applied
+            .notes()
+            .iter()
+            .any(|l| l.contains("transcript was back on disk")),
+        "the kept session has to be said: {:?}",
+        applied.notes()
+    );
+    assert_eq!(bench.rows(&key), rows, "a kept session lost a row");
+    assert_eq!(bench.matches(testkit::UNIQUE_TOKEN), matched);
+}
+
+// Eviction on the ingest side. An evicted session's block rows were deleted on
 // purpose, so an append has no tail block to build on: left to the ordinary path
 // the transcript becomes a per-file failure on every pass forever, and writing
 // its tail as FRESH block rows instead would resurrect a session retention

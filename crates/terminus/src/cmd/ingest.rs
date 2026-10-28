@@ -1,8 +1,8 @@
 //! `terminus ingest`: the whole configured tree, or one named transcript file.
 //!
-//! With no argument it walks every configured transcript root (ING-05). With a
-//! path it ingests that one file, which is the shape phase 1 shipped and the
-//! shape the crash harness and the lock race still use.
+//! With no argument it walks every configured transcript root. With a path it
+//! ingests that one file, which is the shape the crash harness and the lock
+//! race use.
 
 use std::path::PathBuf;
 
@@ -16,8 +16,8 @@ pub fn run(args: Args) -> Result<(), Failure> {
     match args {
         Args::One(transcript) => match ingest::run(&data_dir, &transcript)? {
             // Exit 0 with nothing on stdout. Losing the lock race is the
-            // expected outcome of a second hook spawn, not a failure to report
-            // (ING-02), and a transcript with no new complete record is the
+            // expected outcome of a second hook spawn, not a failure to report,
+            // and a transcript with no new complete record is the
             // steady state.
             Outcome::LockHeld | Outcome::UpToDate | Outcome::Committed(_) => Ok(()),
             // Named on stderr, and exit 0: nothing was read and nothing is
@@ -25,7 +25,7 @@ pub fn run(args: Args) -> Result<(), Failure> {
             // produced no archive, where the hook spawning this per file is
             // owed silence on stdout.
             Outcome::Excluded(project) => {
-                eprintln!(
+                errln!(
                     "skipped {}: inside the excluded project {}",
                     transcript.display(),
                     project.display()
@@ -46,23 +46,23 @@ fn tree(data_dir: &std::path::Path) -> Result<(), Failure> {
     // Named on stderr, and exit 0. The tree WAS ingested: a pass that skipped
     // one damaged transcript out of two thousand did the work it was asked to
     // do, and failing the command would make the next hook spawn look broken
-    // for as long as the damaged file sits there (D-12). A pass that could not
+    // for as long as the damaged file sits there. A pass that could not
     // run at all is a different thing and reaches `Failure::Operational`
     // through the `?` above.
     for (path, reason) in summary.failures.iter().chain(&summary.unreadable) {
-        eprintln!("{}", pass::note(path, reason));
+        errln!("{}", pass::note(path, reason));
     }
     if !summary.failures.is_empty() {
-        eprintln!("{} file(s) skipped", summary.failures.len());
+        errln!("{} file(s) skipped", summary.failures.len());
     }
 
     // The snapshot step's notes, on stderr and not in `runs.error`: it runs
-    // after the lock drops and after that row commits (D-15), so stderr is all
+    // after the lock drops and after that row commits, so stderr is all
     // it has - there is no log file, by design. Silent when the copy worked or
     // was not due: a snapshot is a copy of what is already archived, so there
     // is nothing to report unless it did not happen.
     for note in &summary.snapshot.notes {
-        eprintln!("{note}");
+        errln!("{note}");
     }
     Ok(())
 }
@@ -87,8 +87,7 @@ pub fn parse(parser: &mut lexopt::Parser) -> Result<Args, Failure> {
         }
     }
 
-    // No path is no longer misuse: it is the tree pass. That is an intended
-    // change to a shipped contract - `ingest` exited 2 in phase 1.
+    // No path is not misuse: it is the tree pass.
     Ok(match transcript {
         Some(path) => Args::One(path),
         None => Args::Tree,

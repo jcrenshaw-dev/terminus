@@ -85,6 +85,32 @@ digest() {
     printf '%s\n' "${sum%% *}"
 }
 
+read_manifest() {
+    {
+        IFS= read -r version_line || fail 'manifest line 1 is missing or has no final newline'
+        IFS= read -r digest_line || fail 'manifest line 2 is missing or has no final newline'
+        extra=
+        if IFS= read -r extra || [ -n "$extra" ]; then
+            fail 'manifest has content after line 2'
+        fi
+    } < "$1"
+    case $version_line in
+        'version '*) version=${version_line#version } ;;
+        *) fail 'manifest line 1 must start with "version "' ;;
+    esac
+    valid_version "$version" || fail 'manifest line 1 needs major.minor.patch with no leading zeros and each part fitting u64'
+    case $digest_line in
+        'sha256 '*) sha256=${digest_line#sha256 } ;;
+        *) fail 'manifest line 2 must start with "sha256 "' ;;
+    esac
+    case $sha256 in *[!0-9a-f]*) fail 'manifest line 2 needs 64 lowercase hex digits' ;; esac
+    [ "${#sha256}" -eq 64 ] || fail 'manifest line 2 needs 64 lowercase hex digits'
+    # Some shells discard NUL bytes during read, so compare the exact text too.
+    manifest_digest=$(digest < "$1")
+    text_digest=$(printf 'version %s\nsha256 %s\n' "$version" "$sha256" | digest)
+    [ "$manifest_digest" = "$text_digest" ] || fail 'manifest is not exactly two UTF-8 lines'
+}
+
 verify_download() {
     actual=$(digest < "$scratch/terminus")
     [ "$actual" = "$sha256" ] ||
@@ -102,7 +128,7 @@ in_versions_folder() {
 # Whatever carries the marker is a terminus build and may be replaced, as
 # terminus install decides it. A link to $versions/<version>/terminus is this
 # script's own layout and is replaced without that check, whether or not its
-# file is still there: 0.1.0's aarch64 builds lack the marker.
+# file is still there.
 check_stable_path() {
     if [ -d "$stable" ]; then
         fail "$stable: a folder is there, or a symbolic link to one"
@@ -206,29 +232,7 @@ stage() {
     curl -q --proto '=https' --tlsv1.2 -fsSL "$source/terminus-$os-$arch" -o "$scratch/terminus" ||
         fail "binary download failed: $source/terminus-$os-$arch"
 
-    {
-        IFS= read -r version_line || fail 'manifest line 1 is missing or has no final newline'
-        IFS= read -r digest_line || fail 'manifest line 2 is missing or has no final newline'
-        extra=
-        if IFS= read -r extra || [ -n "$extra" ]; then
-            fail 'manifest has content after line 2'
-        fi
-    } < "$scratch/manifest"
-    case $version_line in
-        'version '*) version=${version_line#version } ;;
-        *) fail 'manifest line 1 must start with "version "' ;;
-    esac
-    valid_version "$version" || fail 'manifest line 1 needs major.minor.patch with no leading zeros and each part fitting u64'
-    case $digest_line in
-        'sha256 '*) sha256=${digest_line#sha256 } ;;
-        *) fail 'manifest line 2 must start with "sha256 "' ;;
-    esac
-    case $sha256 in *[!0-9a-f]*) fail 'manifest line 2 needs 64 lowercase hex digits' ;; esac
-    [ "${#sha256}" -eq 64 ] || fail 'manifest line 2 needs 64 lowercase hex digits'
-    # Some shells discard NUL bytes during read, so compare the exact text too.
-    manifest_digest=$(digest < "$scratch/manifest")
-    text_digest=$(printf 'version %s\nsha256 %s\n' "$version" "$sha256" | digest)
-    [ "$manifest_digest" = "$text_digest" ] || fail 'manifest is not exactly two UTF-8 lines'
+    read_manifest "$scratch/manifest"
 
     verify_download
 

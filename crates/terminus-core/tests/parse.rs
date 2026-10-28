@@ -1,16 +1,16 @@
 //! Scanning a transcript into records, turns and a resume offset.
 //!
-//! The three decisions under test are D-03 (what is a turn), D-02 (turn order
-//! comes from bytes, never from the clock) and D-14 (the resume offset stops at
-//! the last newline). D-12's tolerance is here too: a `.jsonl` in the tree that
-//! is not a transcript must scan without erroring.
+//! The three rules under test are what a turn is, that turn order comes from
+//! bytes and never from the clock, and that the resume offset stops at the last
+//! newline. The scan's tolerance is here too: a `.jsonl` in the tree that is
+//! not a transcript must scan without erroring.
 
 #![cfg(feature = "testkit")]
 
 use terminus_core::parse::{self, TURN_TYPES};
 use terminus_core::testkit::{self, Rng};
 
-/// The eleven record types that carry no turn (D-03).
+/// The eleven record types that carry no turn.
 const STATE_TYPES: [&str; 11] = [
     "last-prompt",
     "ai-title",
@@ -75,8 +75,8 @@ fn only_the_four_turn_types_become_turns() {
     }
 }
 
-/// D-02. Two adjacent turns in the fixture have decreasing timestamps; byte
-/// order decides `turn_seq`, so the earlier-in-file record keeps the lower one.
+/// Two adjacent turns in the fixture have decreasing timestamps; byte order
+/// decides `turn_seq`, so the earlier-in-file record keeps the lower one.
 #[test]
 fn turn_seq_follows_byte_order_even_when_the_clock_goes_backwards() {
     let bytes = testkit::fixture_bytes("session-basic.jsonl");
@@ -145,13 +145,13 @@ fn a_turn_carries_the_fields_ingest_and_derive_need() {
         );
         assert_eq!(record.cwd.as_deref(), Some("/data/code/verbatim"));
         assert_eq!(record.git_branch.as_deref(), Some("restart"));
-        // D-11: this fixture continues nothing.
+        // This fixture continues nothing.
         assert_eq!(record.foreign_session_id, None);
     }
 }
 
-/// D-11: the file-level lineage signal is the snake_case `session_id`, and it
-/// is not the record's own `sessionId`.
+/// The file-level lineage signal is the snake_case `session_id`, and it is not
+/// the record's own `sessionId`.
 #[test]
 fn a_continuation_reports_a_foreign_session_id_distinct_from_its_own() {
     let bytes = testkit::fixture_bytes("session-continuation.jsonl");
@@ -170,8 +170,8 @@ fn a_continuation_reports_a_foreign_session_id_distinct_from_its_own() {
     }
 }
 
-/// D-12. `journal.jsonl` is valid JSON with none of the transcript identity
-/// fields. It yields records, no turns, and no error of any kind.
+/// `journal.jsonl` is valid JSON with none of the transcript identity fields.
+/// It yields records, no turns, and no error of any kind.
 #[test]
 fn a_non_transcript_jsonl_yields_no_turns_and_no_error() {
     let bytes = testkit::fixture_bytes(testkit::NON_TRANSCRIPT_FIXTURE);
@@ -209,8 +209,8 @@ fn an_unparseable_line_does_not_abort_the_scan() {
     assert_eq!(bad.len, "this is not json at all".len() as u64);
 }
 
-/// D-03 requires *both* identity fields. A turn-typed record missing either one
-/// is not a turn, and the fixtures cannot show that on their own: every
+/// A turn requires *both* identity fields. A turn-typed record missing either
+/// one is not a turn, and the fixtures cannot show that on their own: every
 /// turn-typed record in them carries both.
 #[test]
 fn a_turn_type_without_both_identity_fields_is_not_a_turn() {
@@ -237,7 +237,7 @@ fn a_turn_type_without_both_identity_fields_is_not_a_turn() {
     }
 }
 
-/// D-14. The one fixture with no trailing newline: the resume offset stops at
+/// The one fixture with no trailing newline: the resume offset stops at
 /// the last complete record and the partial one is left for the next pass.
 #[test]
 fn the_resume_offset_stops_at_the_last_newline_not_at_end_of_file() {
@@ -290,9 +290,9 @@ fn a_tail_scan_continues_the_turn_numbering_and_the_offsets() {
     assert_eq!(tail.resume_offset, bytes.len() as u64);
 }
 
-/// D-14 as a property, over 200 pseudorandom cuts. Whatever the truncation
-/// point, the resume offset lands immediately after a `\n` at or before it, and
-/// what was parsed is a prefix of the complete file's parse.
+/// The last-newline rule as a property, over 200 pseudorandom cuts. Whatever
+/// the truncation point, the resume offset lands immediately after a `\n` at or
+/// before it, and what was parsed is a prefix of the complete file's parse.
 #[test]
 fn truncating_anywhere_resumes_after_a_newline_and_parses_a_prefix() {
     let bytes = testkit::fixture_bytes("session-basic.jsonl");
@@ -335,7 +335,7 @@ fn truncating_anywhere_resumes_after_a_newline_and_parses_a_prefix() {
     }
 }
 
-/// D-21 + D-08. The boundary line carries its subtype and the raw bytes of its
+/// The boundary line carries its subtype and the raw bytes of its
 /// `compactMetadata`, and it is an ordinary turn - `system` is already a turn
 /// type and the record carries both identity fields, so no classification rule
 /// changed to admit it.
@@ -356,7 +356,7 @@ fn the_boundary_line_carries_its_subtype_and_its_metadata_bytes() {
     assert_eq!(record.record_type.as_deref(), Some("system"));
     assert_eq!(record.subtype.as_deref(), Some(parse::COMPACT_BOUNDARY));
     assert!(record.is_compact_boundary());
-    assert!(record.is_turn(), "D-03 already classifies the boundary");
+    assert!(record.is_turn(), "the boundary is not a turn");
 
     let bytes = record
         .compact_metadata
@@ -374,9 +374,9 @@ fn the_boundary_line_carries_its_subtype_and_its_metadata_bytes() {
         "a different slice was taken"
     );
 
-    // The measured relation D-08 rests on: the preserved uuids are a PROPER
-    // subset of all of them, so the lists describe what survived and cannot
-    // enumerate what was dropped.
+    // The measured relation the query-time drop set rests on: the preserved
+    // uuids are a PROPER subset of all of them, so the lists describe what
+    // survived and cannot enumerate what was dropped.
     let preserved: std::collections::BTreeSet<&str> = stored["preservedMessages"]["uuids"]
         .as_array()
         .unwrap()
@@ -415,10 +415,10 @@ fn only_a_system_record_is_a_compact_boundary() {
 }
 
 /// The other half of the same change: a record with neither field is unchanged.
-/// Every phase 1 assertion compares whole `Record` values, so a subtype or a
-/// metadata blob appearing where the line has none would break them all.
+/// The assertions that compare whole `Record` values would all break on a
+/// subtype or a metadata blob appearing where the line has none.
 ///
-/// `subtype` is read off whatever line carries one, and a phase 1 fixture
+/// `subtype` is read off whatever line carries one, and an older fixture
 /// already does: `session-basic.jsonl` holds a `system` record with
 /// `subtype: "local_command_output"`, exactly as real transcripts do. So the
 /// property is that no fixture but the compacted one produces a *compaction*
@@ -444,7 +444,7 @@ fn only_the_compacted_fixture_produces_a_compaction_signal() {
         "no fixture line exercises the neither-field case"
     );
 
-    // The one real subtype the phase 1 corpus carries, still read as itself.
+    // The one real subtype `session-basic.jsonl` carries, still read as itself.
     let basic = parse::scan(&testkit::fixture_bytes("session-basic.jsonl"));
     let subtypes: Vec<&str> = basic
         .records
@@ -466,14 +466,14 @@ fn a_nested_mention_of_the_field_name_is_not_the_field() {
 }
 
 // ---------------------------------------------------------------------------
-// INJ-07: did the PERSON type this `user` record?
+// Did the PERSON type this `user` record?
 //
-// D-01/D-05/D-06 bind the rule to the record's own `message.content` blocks -
-// never the top-level `toolUseResult`, whose shape is a dict on 6,265 records,
-// a string on 522 and a list on 35 - and D-02 binds its meaning to "authored by
-// the person", which folds `isMeta` caveats and the harness envelopes in beside
-// tool results. D-07 is the consequence: reading message content and nothing
-// else is what makes a `lean` or `minimal` ingest agree with a `full` one.
+// The rule reads the record's own `message.content` blocks - never the
+// top-level `toolUseResult`, whose shape is a dict on 6,265 records, a string
+// on 522 and a list on 35 - and its meaning is "authored by the person", which
+// folds `isMeta` caveats and the harness envelopes in beside tool results.
+// Reading message content and nothing else is what makes a `lean` or `minimal`
+// ingest agree with a `full` one.
 
 /// The envelope tags measured on 2026-08-23 over 400 top-level transcripts.
 ///
@@ -541,7 +541,7 @@ fn a_typed_prompt_reads_typed_and_a_tool_result_does_not() {
     );
 }
 
-/// D-05: the tool-result test wins over the text one. Both real examples are
+/// The tool-result test wins over the text one. Both real examples are
 /// fork boilerplate in `agent-*.jsonl`.
 #[test]
 fn a_record_carrying_both_a_text_and_a_tool_result_block_is_not_typed() {
@@ -554,7 +554,7 @@ fn a_record_carrying_both_a_text_and_a_tool_result_block_is_not_typed() {
     );
 }
 
-/// D-02: `isMeta` is the harness talking, whatever the content shape.
+/// `isMeta` is the harness talking, whatever the content shape.
 #[test]
 fn an_is_meta_record_is_not_typed() {
     let mut fields = serde_json::json!({
@@ -573,7 +573,7 @@ fn an_is_meta_record_is_not_typed() {
     );
 }
 
-/// D-02's envelope list, one record per tag, in both content shapes.
+/// The envelope list, one record per tag, in both content shapes.
 #[test]
 fn every_harness_envelope_tag_is_not_typed() {
     for tag in ENVELOPE_TAGS {
@@ -623,7 +623,7 @@ fn a_prompt_that_merely_contains_a_tag_is_still_typed() {
     }
 }
 
-/// D-06: the classification never reads `toolUseResult`, which is why its shape
+/// The classification never reads `toolUseResult`, which is why its shape
 /// cannot mislead it. The record here has the key as a bare STRING - 522 of a
 /// 300-file sample do - and no `tool_result` block, so it is typed.
 #[test]
@@ -636,7 +636,7 @@ fn the_top_level_tool_use_result_is_not_what_is_read() {
         Some(true)
     );
     // And the converse: the block decides even when the key is absent, which is
-    // the 282 sidecar records D-01 measured.
+    // the case on 282 measured sidecar records.
     assert_eq!(
         classify(&user(serde_json::json!([
             { "type": "tool_result", "tool_use_id": "toolu_1", "content": "ok" }
@@ -645,7 +645,7 @@ fn the_top_level_tool_use_result_is_not_what_is_read() {
     );
 }
 
-/// D-04: the question is asked of `user` records and of no other type, so
+/// The question is asked of `user` records and of no other type, so
 /// nothing else carries a value at all.
 #[test]
 fn only_a_user_record_carries_a_classification() {
@@ -679,7 +679,7 @@ fn only_a_user_record_carries_a_classification() {
     assert!(users > 0, "the fixture has to hold a user turn");
 }
 
-/// D-07: `[capture]` elision replaces `toolUseResult` and `attachment` and
+/// `[capture]` elision replaces `toolUseResult` and `attachment` and
 /// never touches `message.content`, so a reduced ingest and a later blob-only
 /// rebuild classify the same bytes the same way.
 #[test]

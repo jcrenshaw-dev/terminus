@@ -1,14 +1,14 @@
-//! `terminus sessions`: every session a read path may see (RCL-05).
+//! `terminus sessions`: every session a read path may see.
 //!
-//! **Through `config::visible::sessions`, not through PLAN-2's projection.**
-//! D-21 keeps the hot query paths on a project-only projection because the
+//! **Through `config::visible::sessions`, not through `visible::projects`.**
+//! The hot query paths stay on that project-only projection because the
 //! per-session `count(*)` costs ~7 ms on a real store and search cannot spend
 //! that before it starts. This is a listing: the counts ARE what it is for, it
 //! runs when a person asks for it, and going through the module every read path
 //! is required to use is what makes the exclusion gate one gate rather than two
 //! that can disagree.
 //!
-//! Exclusion is applied retroactively, which is the whole of ING-08's read half:
+//! Exclusion is applied retroactively, which is all a read path does about it:
 //! no flag is written at ingest, the predicate is re-applied on every read, and
 //! the case that matters is precisely the session archived *before* its project
 //! was excluded.
@@ -27,14 +27,14 @@ const COMMAND: &str = "sessions";
 pub fn run(args: Args) -> Result<(), Failure> {
     let reader = match read::open()? {
         Opened::Ready(reader) => reader,
-        Opened::Nothing(reason) => return read::empty(document(&[]), &reason, args.json),
+        Opened::Nothing(reason) => return read::empty(empty(), &reason, args.json),
     };
     let conn = reader.store().conn();
     let config = reader.config();
 
     let scoped = scope::resolve(conn, config, &read::scope(args.project.as_deref())?)?;
     if let Some(reason) = scoped.reason() {
-        return read::empty(document(&[]), &reason.to_string(), args.json);
+        return read::empty(empty(), &reason.to_string(), args.json);
     }
 
     // Inlined rather than a helper taking a connection: `rusqlite` is
@@ -115,7 +115,7 @@ pub fn run(args: Args) -> Result<(), Failure> {
 
     // Commentary on stderr the way `status` reports its own, so stdout stays one
     // parseable line per session.
-    eprintln!("{} session(s)", listed.len());
+    errln!("{} session(s)", listed.len());
     Ok(())
 }
 
@@ -137,7 +137,7 @@ struct Detail {
     branch: Option<String>,
     first_turn_at: Option<String>,
     last_turn_at: Option<String>,
-    /// D-07: a sidecar is a session whose `parent_session_key` is non-null.
+    /// A sidecar is a session whose `parent_session_key` is non-null.
     sidecar: bool,
     evicted: bool,
 }
@@ -201,7 +201,7 @@ fn document(sessions: &[serde_json::Value]) -> Document {
     Document::new(COMMAND).field("sessions", sessions.to_vec())
 }
 
-/// A transcript timestamp at day resolution (D-23: one shape, UTC only).
+/// A transcript timestamp at day resolution (one shape, UTC only).
 fn day(ts: Option<&str>) -> &str {
     match ts {
         // `get` and not `&ts[..10]`: `len` counts bytes, the slice needs a char
@@ -221,6 +221,12 @@ fn file_name(session_key: &str) -> &str {
         .rsplit(['/', '\\'])
         .next()
         .unwrap_or(session_key)
+}
+
+/// The document with no session. The no-store answer, and what `main` writes
+/// when the command fails.
+pub(crate) fn empty() -> Document {
+    document(&[])
 }
 
 /// The parsed command line for `sessions`.
@@ -245,12 +251,8 @@ pub fn parse(parser: &mut lexopt::Parser) -> Result<Args, Failure> {
     while let Some(arg) = parser.next().map_err(|e| Failure::Misuse(e.to_string()))? {
         match arg {
             Long("project") => project = Some(super::value(parser, "project")?),
-            Long("since") => {
-                window.since = Some(super::time_bound("since", &super::value(parser, "since")?)?)
-            }
-            Long("until") => {
-                window.until = Some(super::time_bound("until", &super::value(parser, "until")?)?)
-            }
+            Long("since") => window.since = Some(super::date_value(parser, "since")?),
+            Long("until") => window.until = Some(super::date_value(parser, "until")?),
             Long("limit") => {
                 let raw = super::value(parser, "limit")?;
                 limit = raw
@@ -279,7 +281,7 @@ mod tests {
 
     /// A stored timestamp is any JSON string the transcript carried, so the
     /// day cut has to be total over arbitrary bytes rather than over the one
-    /// shape D-23 measured.
+    /// measured shape.
     #[test]
     fn the_day_cut_survives_a_timestamp_that_is_not_the_measured_shape() {
         // The shape 22,412 of 22,412 sampled turns actually carry.

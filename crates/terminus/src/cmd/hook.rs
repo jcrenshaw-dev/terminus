@@ -4,14 +4,14 @@
 //! one thing, exit 0. Most of what makes this command interesting is still a
 //! negative.
 //!
-//! **It writes one JSON object to stdout, or nothing, and never anything else
-//! (D-01, D-15).** Claude Code validates any hook stdout that parses as JSON
+//! **It writes one JSON object to stdout, or nothing, and never anything
+//! else.** Claude Code validates any hook stdout that parses as JSON
 //! against the event name, so a stray line is not ignored, it is a protocol
 //! error - and a document that starts with `{` and fails schema validation is a
 //! red `hook_non_blocking_error` banner shown to the user rather than silence.
 //! The object carries `hookSpecificOutput.hookEventName` equal to the event
 //! that fired and the injected text in `hookSpecificOutput.additionalContext`,
-//! and it is built with `serde_json` and never with `format!` (the D-25 rule
+//! and it is built with `serde_json` and never with `format!` (the rule
 //! `cmd::json` states), because injected text is arbitrary transcript bytes.
 //! Only `SessionStart` and `UserPromptSubmit` have that variant in the
 //! harness's union: `SessionEnd` and `PostCompact` write nothing on every path,
@@ -28,26 +28,27 @@
 //! settings file rather than a routine event.
 //!
 //! **It reads five fields of the payload, and the read is still bounded
-//! twice.** Phase 5 needs `session_id`, `transcript_path`, `cwd`, `prompt` and
-//! `source` to inject anything, and D-02 says they arrive here or nowhere: the
-//! argv stays `["hook", "<event>"]` and gains no flag, because
-//! `cmd::install::targets` writes those entries once and never rewrites them
-//! (INST-05), so a new argument would mean editing every user's `settings.json`
-//! on upgrade. Every field is optional at the type level - a payload that omits
-//! one is a payload that gets less injection, never an error - and the bounds
-//! the read had when the bytes were dropped are the bounds it still has: at
-//! most [`MAX_PAYLOAD`] bytes, so a line that never ends cannot grow a buffer
-//! without limit, and at most [`DRAIN_DEADLINE`] of waiting, because the
-//! reading happens on a thread this command starts and never joins. A writer
-//! that opens stdin and then neither writes a newline nor closes it gets the
-//! one line on stderr the paragraph above promises, rather than holding the
-//! hook until the harness's own timeout kills it - which on `UserPromptSubmit`
-//! is the user's prompt waiting on us.
+//! twice.** The injection arms of `SessionStart` and `UserPromptSubmit` need
+//! `session_id`, `transcript_path`, `cwd`, `prompt` and `source` to inject
+//! anything, and those arrive here or nowhere: the argv stays
+//! `["hook", "<event>"]` and gains no flag, because `cmd::install::targets`
+//! writes those entries once and never rewrites them, so a new argument would
+//! mean editing every user's `settings.json` on upgrade. Every field is
+//! optional at the type level - a payload that omits one is a payload that
+//! gets less injection, never an error - and the bounds the read had when the
+//! bytes were dropped are the bounds it still has: at most [`MAX_PAYLOAD`]
+//! bytes, so a line that never ends cannot grow a buffer without limit, and at
+//! most [`DRAIN_DEADLINE`] of waiting, because the reading happens on a thread
+//! this command starts and never joins. A writer that opens stdin and then
+//! neither writes a newline nor closes it gets the one line on stderr the
+//! paragraph above promises, rather than holding the hook until the harness's
+//! own timeout kills it - which on `UserPromptSubmit` is the user's prompt
+//! waiting on us.
 //!
 //! **It spawns before it reads.** A harness that writes the payload and never
 //! closes stdin would otherwise be able to stop the ingest from ever starting,
 //! and the ordering is the only thing that rules it out. All four events spawn
-//! the same argument-free tree pass (D-18): the ingest lock collapses
+//! the same argument-free tree pass: the ingest lock collapses
 //! concurrent spawns into one pass and the losers exit 0 having written
 //! nothing, so nothing here needs to know that another hook just fired.
 
@@ -65,7 +66,7 @@ use super::{spawn, Failure};
 /// One list, named here and read there, so the settings file cannot come to
 /// hold an event the binary rejects.
 ///
-/// `PostCompact`, never `PreCompact` (D-02). Compaction is append-only and the
+/// `PostCompact`, never `PreCompact`. Compaction is append-only and the
 /// `system`/`compact_boundary` record is appended *after* it, so an ingest
 /// spawned before compaction can never see the boundary it exists to record.
 pub const EVENTS: &[&str] = &[
@@ -112,7 +113,7 @@ fn drain_deadline() -> Duration {
 }
 
 /// The longest the hook waits on its own injection before abandoning it and
-/// writing nothing (INJ-06, D-03).
+/// writing nothing.
 ///
 /// 50 ms is five times the 10 ms p99 wall budget
 /// `crates/terminus/tests/hook.rs` asserts over 100 runs of every event - so an
@@ -160,7 +161,7 @@ pub struct Payload {
     /// keys a session on once it is canonicalized.
     pub transcript_path: Option<String>,
     /// The working directory of the session - never this process's own, which
-    /// on a hook is whatever directory the harness happened to choose (D-12).
+    /// on a hook is whatever directory the harness happened to choose.
     pub cwd: Option<String>,
     /// The text the user just submitted. `UserPromptSubmit` only.
     pub prompt: Option<String>,
@@ -173,9 +174,9 @@ pub struct Payload {
     /// file, a fresh session, then `/compact`, produced two lines under one
     /// `session_id`: `hook_event_name` `SessionStart` with `source` `"startup"`
     /// at session start, then `hook_event_name` `SessionStart` with `source`
-    /// `"compact"` once the compaction finished. That is the fact D-08 builds
-    /// INJ-05's trigger on and the only one nothing in this repository had
-    /// observed; D-08's fallback (reading the boundary row at
+    /// `"compact"` once the compaction finished. That is the fact the
+    /// compaction injection is triggered on, and the only one nothing in this
+    /// repository had observed; the fallback (reading the boundary row at
     /// `UserPromptSubmit` and accepting the ingest race) is not needed.
     /// `tests/fixtures/hooks/session-start-compact.json` is that second line.
     ///
@@ -232,7 +233,7 @@ impl Payload {
 pub fn run(event: &str) -> Result<(), Failure> {
     // First, and before stdin is touched.
     if let Err(e) = spawn::detached(&["ingest"]) {
-        eprintln!("terminus: {event} could not start an ingest: {e}");
+        errln!("terminus: {event} could not start an ingest: {e}");
     }
 
     let payload = drain(event);
@@ -273,8 +274,8 @@ pub(crate) fn arm(event: &str) -> Option<Arm> {
 /// through a temp file and a rename. A write cut off here leaves a `.tmp`, and a
 /// decision write cut off after it reserves its `.json` also leaves that empty
 /// `.json`. The ingest's drain deletes both once they are old. The thread never
-/// writes SQLite and never takes the ingest lock (INJ-06). This is the second
-/// of D-03's two mechanisms: the busy
+/// writes SQLite and never takes the ingest lock. This is the second of the
+/// two mechanisms that bound how long the hook waits on its injection: the busy
 /// timeout `terminus_core::inject` sets turns lock contention into an immediate
 /// `SQLITE_BUSY`, and this catches what a busy timeout cannot see - a slow
 /// query, a large blob, a `terminus.toml` on a filesystem that has stopped
@@ -308,7 +309,7 @@ fn inject(event: &str, payload: Payload) -> Option<String> {
             let _ = done.send(text);
         });
     if let Err(e) = worker {
-        eprintln!("terminus: {event} could not start its injection: {e}");
+        errln!("terminus: {event} could not start its injection: {e}");
         return None;
     }
 
@@ -316,7 +317,7 @@ fn inject(event: &str, payload: Payload) -> Option<String> {
     match injected.recv_timeout(deadline) {
         Ok(text) => text,
         Err(RecvTimeoutError::Timeout) => {
-            eprintln!(
+            errln!(
                 "terminus: {event} abandoned its injection after {} ms",
                 deadline.as_millis()
             );
@@ -341,14 +342,16 @@ fn emit(event: &str, text: &str) {
             "additionalContext": text,
         }
     });
-    outln!("{document}");
+    // Raw (#72): the harness parses this line, and escaping the DEL and C1
+    // serde_json passes would change the context it hands Claude.
+    crate::out::write_raw(format!("{document}\n").as_bytes());
 }
 
-/// Read the one line the harness owes us (D-14), but never let the harness
+/// Read the one line the harness owes us, but never let the harness
 /// decide how long that takes or how much of it there is.
 ///
 /// The read runs on a thread that is deliberately not joined: a blocking read
-/// on a pipe nobody closes cannot be cancelled with `std` alone (D-04), so the
+/// on a pipe nobody closes cannot be cancelled with `std` alone, so the
 /// only way to stop an idle writer from holding this process is to stop waiting
 /// on the reader and let process exit take the thread with it. Abandoning it
 /// costs nothing beyond the injection it would have fed: there is no
@@ -374,7 +377,7 @@ fn drain(event: &str) -> Payload {
             let _ = done.send((Payload::parse(&line), outcome.err()));
         });
     if let Err(e) = reader {
-        eprintln!("terminus: {event} could not read its payload: {e}");
+        errln!("terminus: {event} could not read its payload: {e}");
         return Payload::default();
     }
 
@@ -384,18 +387,18 @@ fn drain(event: &str) -> Payload {
         // A read that failed part way still parses what arrived, which is
         // almost always nothing. The line on stderr is the same one it was.
         Ok((payload, Some(e))) => {
-            eprintln!("terminus: {event} could not read its payload: {e}");
+            errln!("terminus: {event} could not read its payload: {e}");
             payload
         }
         Err(RecvTimeoutError::Timeout) => {
-            eprintln!(
+            errln!(
                 "terminus: {event} stopped waiting on a stdin that stayed open for {} ms",
                 deadline.as_millis()
             );
             Payload::default()
         }
         Err(RecvTimeoutError::Disconnected) => {
-            eprintln!("terminus: {event} lost the thread reading its payload");
+            errln!("terminus: {event} lost the thread reading its payload");
             Payload::default()
         }
     }
@@ -484,7 +487,7 @@ mod tests {
         assert_eq!(compact.source, None);
 
         // The one payload captured from a live compaction rather than read off
-        // a schema, and the whole reason D-08 has a trigger to build on.
+        // a schema, and the fact the compaction injection's trigger rests on.
         let after_compact =
             Payload::parse(&testkit::fixture_bytes("hooks/session-start-compact.json"));
         assert_eq!(after_compact.session_id.as_deref(), Some(session));

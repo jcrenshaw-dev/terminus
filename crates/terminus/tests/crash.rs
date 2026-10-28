@@ -1,4 +1,4 @@
-//! AC2 / AC6 / STOR-02: killing ingest anywhere leaves a store that converges.
+//! Killing ingest anywhere leaves a store that converges.
 //!
 //! The harness kills the child un-catchably - `Child::kill` is `SIGKILL` - at
 //! more than forty points across three scenarios, spread three ways. Some are
@@ -17,11 +17,10 @@
 //! nobody thought to name.
 //!
 //! Three scenarios, because they fail differently. One transcript killed on a
-//! first pass is phase 1's. A *tree* killed on a first pass is what a real hook
-//! spawn does, and a tree killed on an **append** pass is the one phase 1 never
-//! covered and flagged: every kill it ran went into a fresh data directory, so
-//! the resume path - a store that already holds bytes for the file being killed
-//! - had never been interrupted at all.
+//! first pass is the narrowest. A *tree* killed on a first pass is what a real
+//! hook spawn does, and a tree killed on an **append** pass is the only one that
+//! interrupts the resume path - a store that already holds bytes for the file
+//! being killed - since every other kill goes into a fresh data directory.
 //!
 //! Everything rests on the invariant check being able to fail, so
 //! `the_harness_catches_a_watermark_committed_outside_the_transaction` runs the
@@ -293,7 +292,7 @@ type BlockRow = (i64, Vec<u8>, Vec<u8>);
 ///
 /// Every block row of every session, so "the same store an uninterrupted pass
 /// reaches" means the same rows, numbered the same, holding the same bytes and
-/// hashes (D-12).
+/// hashes.
 ///
 /// `runs` is excluded on purpose: an interrupted store reaches the same
 /// contents in more passes than an uninterrupted one, and one row per committed
@@ -359,16 +358,16 @@ impl Snapshot {
     }
 }
 
-/// AC2's invariants, as a check that returns its complaint instead of
-/// panicking: the negative tests need to assert that it *does* complain.
+/// The convergence invariants, as a check that returns its complaint instead
+/// of panicking: the negative tests need to assert that it *does* complain.
 ///
-/// Five properties, each stated over the committed block rows (D-12), and it
+/// Five properties, each stated over the committed block rows, and it
 /// is worth being explicit about which is which, because two of them look like
 /// one and are not:
 ///
 /// 1. **Every session that is not evicted verifies.** Its rows are numbered
 ///    with no gap, each decodes to its stored hash, and the session checksum
-///    matches those hashes (D-16). A killed pass must never leave a row its own
+///    matches those hashes. A killed pass must never leave a row its own
 ///    hash, or a checksum its rows, disown.
 /// 2. **No orphaned derived row.** Nothing in `turns`, `turns_fts`, `entities`
 ///    or `paths` may outlive the row it derives from - which is what "one
@@ -380,7 +379,7 @@ impl Snapshot {
 ///    stream either. Also weak: it rejects a store that claims bytes no block
 ///    holds, and accepts one that resumes from the middle of a record.
 /// 5. **The watermark is a record boundary.** The *strong* property, and the
-///    one that actually encodes D-14: the watermark is the byte just past a
+///    one that actually encodes the watermark rule: it is the byte just past a
 ///    `\n`, so the byte before it, read from the committed rows, is a newline.
 ///    A watermark one byte short of a boundary passes 4 and fails 5, and a pass
 ///    resuming from it would archive half a record as a whole one.
@@ -518,8 +517,8 @@ fn check_invariants(data_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// AC2. Twenty-three kills against one transcript, aimed and timed, from a
-/// printed seed.
+/// Twenty-three kills against one transcript, aimed and timed, from a printed
+/// seed.
 #[test]
 fn killing_ingest_anywhere_leaves_a_store_that_converges() {
     let dirs = dirs();
@@ -594,7 +593,7 @@ fn killing_ingest_anywhere_leaves_a_store_that_converges() {
     println!("single file: {kills} kills, {incomplete} of them interrupted the pass");
     assert!(
         kills >= 20,
-        "AC2 asks for 20 or more kill points, ran {kills}"
+        "20 or more kill points are required, ran {kills}"
     );
     assert!(
         incomplete >= ROUNDS * 3,
@@ -603,16 +602,16 @@ fn killing_ingest_anywhere_leaves_a_store_that_converges() {
     );
 }
 
-/// AC6. A tree pass killed on a first pass and again on an append pass, ten or
-/// more kills each, every one resumed to completion and required to land on the
-/// same store an uninterrupted pass reaches.
+/// A tree pass killed on a first pass and again on an append pass, ten or more
+/// kills each, every one resumed to completion and required to land on the same
+/// store an uninterrupted pass reaches.
 ///
-/// The append half is the one phase 1 could not do. Every kill it ran went into
-/// an empty data directory, so an append - checking the stored hashes and the
-/// tail before it writes, rewriting at most the tail row, resuming a session at
-/// a non-zero watermark - had never been interrupted once.
+/// The append half is the one a kill into an empty data directory cannot reach:
+/// an append - checking the stored hashes and the tail before it writes,
+/// rewriting at most the tail row, resuming a session at a non-zero watermark -
+/// is only interrupted against a store that already holds the file.
 ///
-/// The append half also holds D-12's second check: every block that was
+/// The append half also holds a second check: every block that was
 /// complete after the first pass is byte-identical after the append pass, in
 /// the reference store and in every interrupted one.
 #[test]
@@ -651,7 +650,7 @@ fn killing_a_tree_pass_converges_on_a_first_pass_and_on_an_append() {
     );
     assert!(
         first_kills >= 10,
-        "AC6 asks for ten or more kills against a first pass, ran {first_kills}"
+        "ten or more kills against a first pass are required, ran {first_kills}"
     );
 
     // --- Scenario two: the same spread against an append pass. ---
@@ -702,7 +701,7 @@ fn killing_a_tree_pass_converges_on_a_first_pass_and_on_an_append() {
     );
     assert!(
         append_kills >= 10,
-        "AC6 asks for ten or more kills against an append pass, ran {append_kills}"
+        "ten or more kills against an append pass are required, ran {append_kills}"
     );
 }
 
@@ -711,8 +710,8 @@ fn killing_a_tree_pass_converges_on_a_first_pass_and_on_an_append() {
 ///
 /// `seed_dir` is the store every iteration starts from, copied per iteration -
 /// `None` for a first pass, which starts from nothing. Every block complete in
-/// `seed_dir` must still be there unchanged after the kill and after converging
-/// (D-12); a first pass has none yet.
+/// `seed_dir` must still be there unchanged after the kill and after
+/// converging; a first pass has none yet.
 fn kill_spread(
     dirs: &Dirs,
     label: &str,
@@ -828,7 +827,7 @@ fn complete_blocks(data_dir: &Path) -> Vec<(String, BlockRow)> {
 }
 
 /// Every row in `kept` is still in `data_dir`'s store, at its number, with the
-/// same bytes and hash (D-12).
+/// same bytes and hash.
 fn kept_complete_blocks(data_dir: &Path, kept: &[(String, BlockRow)]) -> Result<(), String> {
     let conn = Connection::open(data_dir.join(DB_FILE_NAME)).unwrap();
     let mut now = std::collections::BTreeMap::new();

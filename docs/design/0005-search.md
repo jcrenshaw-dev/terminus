@@ -16,7 +16,7 @@ The indexing half is called by the ingest pass in [0003: Ingest](0003-ingest.md)
 | Projection | The text a turn actually said, read from four parts of its record, with no JSON keys, numbers or booleans. |
 | Expansion token | A camelCase or PascalCase piece of a word in the body that the body does not already hold, appended so a query for the piece finds the whole word. |
 | Entity | One `(kind, value_norm)` pair in `entities`, taken from a turn's structured tool fields. The kinds are `path`, `command`, `error`, `symbol` and `tool`. |
-| Query token | One piece of the typed string, split on every character that is not a letter or a digit, as the index splits text. |
+| Query token | One piece of the typed string, split on every character that is not a letter or a digit, kept only when at least one of its characters is one the tokenizer makes a token from. |
 | Exact match | A stored entity value whose tokens are exactly the query's tokens, in order. |
 | Covered match | A stored entity value all of whose tokens are in the query, which asks for more besides. |
 | Scope | Which project a read answers about: the directory the caller stands in, a named path, or `*` for every project. |
@@ -35,6 +35,7 @@ Indexing and querying live in the library crate, `crates/terminus-core`, under `
 | [`crates/terminus-core/src/index/entity.rs`](../../crates/terminus-core/src/index/entity.rs) | The five entity kinds, extraction from a record's tool fields, the cap of `MAX_ENTITIES_PER_TURN`, 48, and the path and error normalization. |
 | [`crates/terminus-core/src/recall/mod.rs`](../../crates/terminus-core/src/recall/mod.rs) | The query layer the terminal commands and the MCP server share. Nothing in it writes, and every function takes a connection the caller opened. |
 | [`crates/terminus-core/src/recall/query.rs`](../../crates/terminus-core/src/recall/query.rs) | Turns a typed string into query tokens and the FTS5 expression, and decides whether a stored entity value is an exact or a covered match. |
+| [`crates/terminus-core/src/recall/unindexable.rs`](../../crates/terminus-core/src/recall/unindexable.rs) | The code points `unicode61` makes no token from, checked against the bundled SQLite by its own test. |
 | [`crates/terminus-core/src/recall/search.rs`](../../crates/terminus-core/src/recall/search.rs) | One search: the filters, the ranking query, the entity re-rank and the cut to the limit. `MAX_RESULTS` and `DEFAULT_RESULTS`. |
 | [`crates/terminus-core/src/recall/scope.rs`](../../crates/terminus-core/src/recall/scope.rs) | Resolves a scope to one project key by longest-prefix match against the stored keys, and lists the excluded ones. |
 | [`crates/terminus-core/src/recall/excerpt.rs`](../../crates/terminus-core/src/recall/excerpt.rs) | Cuts each hit's excerpt from the block rows its turn covers, through the same projection ingest indexed. |
@@ -71,7 +72,7 @@ Search writes three derived tables at ingest and reads them, with `turns` and `s
 
 JSON keys are never emitted, and neither are numbers or booleans. The text stops at `MAX_BODY_BYTES`. Under `[capture] mode` `lean` or `minimal`, an elided `toolUseResult` or `attachment` contributes nothing.
 
-Then `index::expand` appends expansion tokens. The table uses FTS5's default tokenizer, plain `unicode61`, with no custom tokenizer, and `unicode61` already splits on every character that is not a letter or a digit. So snake_case, kebab-case and path parts are already tokens of their own: a query for `worker` finds `src/worker/S.ts` and a query for `manager` finds `search_manager_new`, with nothing appended. What `unicode61` does not split is a case boundary, so `SearchManager` would not be found by `manager`. For each word, the expansion appends its camelCase or PascalCase pieces, `Search` and `Manager` here, but only pieces the body does not already contain, in the order the text gives them, up to `MAX_EXPANSION_BYTES`. Digits stay with their piece, so `S3Client` gives `S3` and `Client`, and the last capital of a run starts the next piece, so `HTTPServer` gives `HTTP` and `Server`.
+Then `index::expand` appends expansion tokens. The table uses FTS5's default tokenizer, plain `unicode61`, with no custom tokenizer. `unicode61` makes tokens from characters in the Unicode letter, number and private-use categories and splits on everything else, so snake_case, kebab-case and path parts are already tokens of their own: a query for `worker` finds `src/worker/S.ts` and a query for `manager` finds `search_manager_new`, with nothing appended. What it splits on includes some characters Rust counts as letters, such as combining marks like U+0345 and circled letters like U+24B6, so the query drops a word made only of them. What `unicode61` does not split is a case boundary, so `SearchManager` would not be found by `manager`. For each word, the expansion appends its camelCase or PascalCase pieces, `Search` and `Manager` here, but only pieces the body does not already contain, in the order the text gives them, up to `MAX_EXPANSION_BYTES`. Digits stay with their piece, so `S3Client` gives `S3` and `Client`, and the last capital of a run starts the next piece, so `HTTPServer` gives `HTTP` and `Server`.
 
 ### What becomes an entity
 
@@ -100,20 +101,20 @@ Options are in [commands.md](../commands.md#reading-the-archive), and the `--jso
 ### `terminus search <words>`
 
 - **Inputs:** the words, the scope, and the filters `--tool`, `--kind`, `--path`, `--since` and `--until`, with `--limit`, which defaults to 10 here and is cut to `MAX_RESULTS`, 50.
-- **Outputs:** the hits, ranked as in Figure 1, each with its turn id, session, record type, time, project, whether it is a sidechain, and its excerpt. With `[privacy] redact_recall` on, the excerpts are filtered, and `--raw` prints them unfiltered for that one run. When a query is cut at 32 tokens, stderr says so.
-- **Refusals:** a string with nothing searchable in it, such as pure punctuation, is an empty result with a reason. `--limit 0` and `--kind observation` exit 2.
+- **Outputs:** the hits, ranked as in Figure 1, each with its turn id, session, record type, time, project, whether it is a sidechain, and its excerpt. With `[privacy] redact_recall` on, the excerpts are filtered, and `--raw` prints them unfiltered for that one run. When a query is cut at 32 tokens, stderr says so. The human output writes every control character other than tab and newline as its JSON escape, such as `\u001b`, so archived text cannot drive the terminal, and an excerpt holding one prints longer than 246 characters. `--json` is not escaped.
+- **Refusals:** a string with nothing searchable in it, such as pure punctuation, is an empty result with a reason. `--limit 0` exits 2, and so does a `--since` or `--until` that is not a real date or time, written `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SS.mmmZ`.
 
 ### `terminus show <id>...`
 
 - **Inputs:** one or more turn ids, the scope, and `--before` and `--after`, at most `MAX_CONTEXT_SIDE`, 25, each.
-- **Outputs:** each turn's record, its archived bytes written to stdout as stored, through `recall::get::records`. With `--before` or `--after`, the turns around it from the same session, through `recall::context::window`, which stops at the session's ends and says which end it reached. An evicted session's record is marked as such. With `[privacy] redact_recall` on, the bytes are filtered, and `--raw` prints them unfiltered.
+- **Outputs:** each turn's record, its archived bytes written to stdout as stored, through `recall::get::records`. With `--before` or `--after`, the turns around it from the same session, through `recall::context::window`, which stops at the session's ends and says which end it reached. An evicted session's record is marked as such. With `[privacy] redact_recall` on, the bytes are filtered, and `--raw` prints them unfiltered. The header line and the window lines escape control characters as `search` does, and the record's bytes are written unescaped.
 - **Refusals:** an id outside the scope is named on stderr. A word that is not a number exits 2.
 
 ### `terminus sessions`
 
 - **Inputs:** the scope, `--since`, `--until` and `--limit`.
-- **Outputs:** every session the scope can see, through `config::visible::sessions`, the listing every read path uses, so a session archived before its project was excluded is hidden too.
-- **Refusals:** `--limit 0` exits 2.
+- **Outputs:** every session the scope can see, through `config::visible::sessions`, the listing every read path uses, so a session archived before its project was excluded is hidden too. Control characters in the listing are escaped as `search` does.
+- **Refusals:** `--limit 0` exits 2, and so does a `--since` or `--until` that `search` would refuse.
 
 ## 6. States and workflows
 
@@ -121,8 +122,10 @@ Options are in [commands.md](../commands.md#reading-the-archive), and the `--jso
 
 ```mermaid
 flowchart TD
-  W["the words typed"] --> P["Query::parse: split on every non-alphanumeric, drop case-folded repeats, keep the first 32"]
-  P --> S["scope::resolve: longest-prefix match of the path against stored project keys"]
+  W["the words typed"] --> P["Query::parse: split on every non-alphanumeric, drop words the tokenizer makes no token from, drop case-folded repeats, keep the first 32"]
+  P --> D{"since and until, when given: each a real date or time in one of the two forms?"}
+  D -->|"no"| B["caller error: InvalidTimeFilter"]
+  D -->|"yes"| S["scope::resolve: longest-prefix match of the path against stored project keys"]
   S --> R{"a project, or every project?"}
   R -->|"neither"| M["empty result with the reason"]
   R -->|"yes"| E{"any tokens left?"}
@@ -136,7 +139,7 @@ flowchart TD
   C --> H["the hits"]
 ```
 
-*Figure 1. One search, from the words typed to the hits with their excerpts. A user's string never reaches `MATCH` as written: every token is quoted, so no FTS5 operator survives in it. The excerpts are read only for the hits that survive the cut.*
+*Figure 1. One search, from the words typed to the hits with their excerpts. A user's string never reaches `MATCH` as written: every token is quoted, so no FTS5 operator survives in it. The time bounds are checked before the scope is resolved, so a bound that is not a real date or time is the caller's error wherever the caller stands. The excerpts are read only for the hits that survive the cut.*
 
 The query is a conjunction. Every token is a quoted FTS5 string and the tokens are joined with an explicit `AND`, so a query for a path such as `src/worker/S.ts`, which FTS5 would refuse as written, finds every turn holding all of its parts. The query's tokens are not expanded, because the index already holds the expansion: a query for `SearchManager` asks for that word and does not turn into a search for `manager`.
 

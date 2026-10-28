@@ -2,7 +2,7 @@
 //!
 //! Three decisions shape everything here.
 //!
-//! **Filename, never record shape (D-16).** A `<uuid>.jsonl` directly inside a
+//! **Filename, never record shape.** A `<uuid>.jsonl` directly inside a
 //! project directory is a transcript, and an `agent-*.jsonl` anywhere below one
 //! is a transcript. Nothing else is, and nothing else is opened to find out.
 //! That is what keeps the four `journal.jsonl` files, the 816
@@ -10,12 +10,12 @@
 //! `tool-results/` directories of `.txt` and `.md` out of the archive without a
 //! single read.
 //!
-//! **Unbounded depth (D-16).** Sidecars sit at depth 4
+//! **Unbounded depth.** Sidecars sit at depth 4
 //! (`<project>/<sessionId>/subagents/agent-*.jsonl`, 781 real files) *and* at
 //! depth 6 (`.../subagents/workflows/wf_*/agent-*.jsonl`, 41 real files). A
 //! depth limit silently drops those 41.
 //!
-//! **Canonicalize the root once, join onto it (D-17).** The root itself is a
+//! **Canonicalize the root once, join onto it.** The root itself is a
 //! two-hop symlink chain (`~/.claude -> /claude/.claude -> /data/claude/.claude`),
 //! so canonicalizing the root alone yields canonical paths at one syscall
 //! instead of two thousand. Those paths are not the session keys: ingest keys a
@@ -24,8 +24,8 @@
 //! folder, keeps its key.
 //!
 //! The walk is sequential and single-threaded, with no `walkdir`, no `glob` and
-//! no `rayon` (D-18): bounded-parallelism backfill is phase 4's, and a walker
-//! built now on one thread is what phase 4 fans out.
+//! no `rayon`: the bounded parallelism belongs to `ingest::backfill`, which
+//! takes the list this walk returns and spreads its files over its workers.
 
 use std::path::{Path, PathBuf};
 
@@ -94,7 +94,7 @@ pub fn discover_root(root: &Path, config: &Config) -> Discovered {
         if !entry.is_dir {
             continue;
         }
-        // Before anything inside it is listed, let alone opened (D-22). All 822
+        // Before anything inside it is listed, let alone opened. All 822
         // real sidecar files sit under `<project>/<sessionId>/subagents/`, so
         // one directory-level skip covers them too.
         if config.excludes_encoded_dir(&entry.name) {
@@ -116,8 +116,8 @@ pub fn discover_root(root: &Path, config: &Config) -> Discovered {
 /// into, and never looks again. `ingest::run` is handed one path with no walk
 /// behind it, so it has to find that directory itself - and it has to, because
 /// exclusion that holds only on the tree pass is exclusion a single
-/// `terminus ingest <path>` walks around, which is the read-then-filter ING-08
-/// forbids.
+/// `terminus ingest <path>` walks around, which is the read-then-filter an
+/// exclusion forbids: an excluded project is never read at all.
 ///
 /// A project directory is an entry directly inside a configured transcript
 /// root, so that is where the name comes from when the transcript is under one.
@@ -129,8 +129,8 @@ pub fn discover_root(root: &Path, config: &Config) -> Discovered {
 /// Reads no transcript and opens nothing: directory names and, inside the
 /// encoded test, directory entries.
 pub fn excluded_project_of(config: &Config, transcript: &Path) -> Option<PathBuf> {
-    // A real filesystem path is available here, so the exact test answers first
-    // (D-23). The encoded tests below only ever see a project DIRECTORY name -
+    // A real filesystem path is available here, so the exact test answers
+    // first. The encoded tests below only ever see a project DIRECTORY name -
     // `-data-projects-cadence` - and a path that is literally inside the
     // excluded project, which is what a link resolves to and what a user names
     // by hand, matches none of them.
@@ -230,9 +230,9 @@ fn walk_project(project: &Path, config: &Config, found: &mut Discovered) {
 /// excludes.
 ///
 /// Only a link is resolved. Canonicalizing every transcript would be two
-/// thousand syscalls for an answer D-17 already has - the root is canonical and
-/// the walk joined onto it - and the real tree contains zero symlinks, so this
-/// costs nothing there. A link that cannot be resolved is not followed: an
+/// thousand syscalls for an answer the walk already has - the root is canonical
+/// and the walk joined onto it - and the real tree contains zero symlinks, so
+/// this costs nothing there. A link that cannot be resolved is not followed: an
 /// unanswerable question at an exclusion boundary is the one
 /// [`Config::excludes_encoded_dir`] already answers "do not read".
 fn keep_transcript(entry: Entry, config: &Config, found: &mut Discovered) {
@@ -263,7 +263,7 @@ fn is_transcript_name(name: &str, at_project_depth: bool) -> bool {
 
 pub(crate) fn is_agent_transcript(name: &str) -> bool {
     // `agent-*.meta.json` fails on the extension, which is the whole reason
-    // D-04 can store those bytes without them ever becoming a session.
+    // ingest can store those bytes without them ever becoming a session.
     name.starts_with("agent-") && name.ends_with(".jsonl")
 }
 
@@ -327,14 +327,14 @@ fn entries(dir: &Path) -> std::io::Result<Vec<Entry>> {
 
 /// The one way anything in this crate opens a transcript for reading.
 ///
-/// One function, so AC5's "zero opens of any file under that directory" is a
+/// One function, so "zero opens of any file under an excluded directory" is a
 /// number a test can read rather than a claim about the code. The shipped
 /// binary takes no branch for it: [`opened::record`] compiles to nothing
 /// without the `testkit` feature.
 ///
 /// The path is recorded *before* the open is attempted, so a file that exists
-/// and cannot be read still counts as an open. AC5 is about what terminus
-/// reaches for, not about what it succeeded in reading.
+/// and cannot be read still counts as an open. The count is about what
+/// terminus reaches for, not about what it succeeded in reading.
 pub fn open_transcript(path: &Path) -> std::io::Result<std::fs::File> {
     opened::record(path);
     std::fs::File::open(path)

@@ -41,8 +41,6 @@ What the user docs already pin down is linked from here and not restated, so the
 - what the installer and `terminus install` do, in [install.md](../install.md);
 - how a release is built, signed and checked, in [release.md](../release.md).
 
-[DESIGN-BRIEF.md](../../DESIGN-BRIEF.md) is the original design input. It is not kept current, and where it and these docs differ, these docs describe what was built.
-
 ## Index
 
 | Document | What it covers |

@@ -4,11 +4,13 @@
 //! fuzz targets in `fuzz/` can reach the parsers that read outside input, through
 //! the [`fuzz`] module, which only `cargo fuzz` builds contain.
 //!
-//! Exit codes (phase 1 subset of the CLI contract): 0 success, 1 operational
-//! failure, 2 misuse. Data goes to stdout, errors go to stderr.
+//! Exit codes: 0 success, 1 operational failure, 2 misuse. Data goes to stdout,
+//! errors go to stderr.
 
-// Stdout goes through `outln!` and `out!`, which survive a closed pipe.
-#![cfg_attr(not(test), deny(clippy::print_stdout))]
+// Stdout goes through `outln!` and `out!` and stderr through `errln!`. All three
+// escape archived controls and survive a closed pipe, and the print macros do
+// neither, so both streams are denied them.
+#![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
 
 use std::process::ExitCode;
 
@@ -17,6 +19,7 @@ mod out;
 mod cmd;
 mod escape;
 
+use cmd::json::Document;
 use cmd::Failure;
 
 const USAGE: &str = "usage: terminus [--version] <command>\n\
@@ -52,7 +55,7 @@ const USAGE: &str = "usage: terminus [--version] <command>\n\
 pub fn main() -> ExitCode {
     // Before the parser, and before anything else: this process may be the
     // reparenting hand-off `cmd::spawn` uses to put the ingest outside every
-    // set Claude Code kills a hook through (D-03). If it is, it has already
+    // set Claude Code kills a hook through. If it is, it has already
     // started the process that does the work and has nothing else to do.
     //
     // The test is `cmd::spawn::HANDOFF` as the first argument, so the only way
@@ -63,28 +66,48 @@ pub fn main() -> ExitCode {
     if cmd::spawn::handed_off() {
         return ExitCode::SUCCESS;
     }
-    match run() {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(Failure::Operational(msg)) => {
-            eprintln!("terminus: {msg}");
+    match parse(&mut lexopt::Parser::from_env()) {
+        Ok(Invocation::Version) => outln!("{}", env!("CARGO_PKG_VERSION")),
+        Ok(Invocation::Usage) => outln!("{USAGE}"),
+        Ok(Invocation::Command(Command { empty, run })) => {
+            if let Err(failure) = run() {
+                return ended(failure, empty);
+            }
+        }
+        Err(failure) => return ended(failure, None),
+    }
+    ExitCode::SUCCESS
+}
+
+/// The exit code for a command that did not succeed, and what it writes first.
+///
+/// `empty` is the command's own empty document, held only when `--json` was
+/// asked for. An operational failure under `--json` is that document with
+/// `ok: false` and the reason, and nothing on stderr, so a caller reading
+/// stdout gets the same shape whether or not the command got far enough to
+/// answer (#107). Misuse writes no document: it is raised in a `parse` fn,
+/// before the command's output mode is known.
+fn ended(failure: Failure, empty: Option<Document>) -> ExitCode {
+    match failure {
+        Failure::Operational(msg) => {
+            match empty {
+                // A stdout that cannot be written still exits 1: the failure is
+                // the answer, and a second write to a dead stdout fails the same
+                // way, so the error has nowhere better to go.
+                Some(document) => {
+                    let _ = document.failed().because(msg).try_emit();
+                }
+                None => errln!("terminus: {msg}"),
+            }
             ExitCode::from(1)
         }
-        Err(Failure::Silent) => ExitCode::from(1),
-        Err(Failure::Misuse(msg)) => {
-            eprintln!("terminus: {msg}");
-            eprintln!("{USAGE}");
+        Failure::Silent => ExitCode::from(1),
+        Failure::Misuse(msg) => {
+            errln!("terminus: {msg}");
+            errln!("{USAGE}");
             ExitCode::from(2)
         }
     }
-}
-
-fn run() -> Result<(), Failure> {
-    match parse(&mut lexopt::Parser::from_env())? {
-        Invocation::Version => outln!("{}", env!("CARGO_PKG_VERSION")),
-        Invocation::Usage => outln!("{USAGE}"),
-        Invocation::Command(command) => return command(),
-    }
-    Ok(())
 }
 
 /// What a command line asks for, parsed and not yet run.
@@ -95,7 +118,13 @@ enum Invocation {
 }
 
 /// A subcommand whose arguments are parsed, waiting to run.
-type Command = Box<dyn FnOnce() -> Result<(), Failure>>;
+struct Command {
+    /// The command's own empty document, built from its parsed arguments
+    /// before `run` takes them. Held only when `--json` was asked for, and
+    /// never for a command that has no `--json`.
+    empty: Option<Document>,
+    run: Box<dyn FnOnce() -> Result<(), Failure>>,
+}
 
 fn parse(parser: &mut lexopt::Parser) -> Result<Invocation, Failure> {
     use lexopt::prelude::*;
@@ -127,7 +156,7 @@ fn parse(parser: &mut lexopt::Parser) -> Result<Invocation, Failure> {
 fn command(name: &str, parser: &mut lexopt::Parser) -> Result<Command, Failure> {
     Ok(match name {
         "ingest" => then(cmd::ingest::parse(parser)?, cmd::ingest::run),
-        // The whole history, once, without the shell waiting for it (ING-11).
+        // The whole history, once, without the shell waiting for it.
         // It prints an estimate first and does the work in a detached process,
         // which is why it is a command of its own rather than a flag on
         // `ingest`: the two return at different times and mean different things.
@@ -136,77 +165,142 @@ fn command(name: &str, parser: &mut lexopt::Parser) -> Result<Command, Failure> 
         // hand. It writes nothing to stdout and exits 0 once its event name is
         // known, because a hook that fails is a hook that can block a prompt.
         "hook" => then(cmd::hook::parse(parser)?, cmd::hook::run),
-        "search" => then(cmd::search::parse(parser)?, cmd::search::run),
-        "show" => then(cmd::show::parse(parser)?, cmd::show::run),
-        "sessions" => then(cmd::sessions::parse(parser)?, cmd::sessions::run),
-        // D-24: the three commands phase 1 and 2 shipped take `--json` and
-        // nothing else. `cmd::json_flag` is what replaced `no_more_arguments`
-        // here - the rule that a subcommand rejects every argument it was not
-        // written for still holds, and `--json` is now one it was.
-        "verify" => then(cmd::json_flag(parser)?, cmd::verify::run),
-        "reindex" => then(cmd::json_flag(parser)?, cmd::reindex::run),
-        "status" => then(cmd::json_flag(parser)?, cmd::status::run),
-        // RET-04. Reclaims what retention already freed and deletes nothing
-        // itself: `VACUUM` then `PRAGMA wal_checkpoint(TRUNCATE)` (D-08), under
-        // the ingest lock, because a plain `VACUUM` fails outright while a pass
-        // holds a write transaction.
-        "compact" => then(cmd::json_flag(parser)?, cmd::compact::run),
-        // RET-05. Two tables that each reconcile to their own total (D-09):
+        "search" => then_json(
+            cmd::search::parse(parser)?,
+            |a| a.json,
+            cmd::search::empty,
+            cmd::search::run,
+        ),
+        "show" => then_json(
+            cmd::show::parse(parser)?,
+            |a| a.json,
+            |_| cmd::show::empty(),
+            cmd::show::run,
+        ),
+        "sessions" => then_json(
+            cmd::sessions::parse(parser)?,
+            |a| a.json,
+            |_| cmd::sessions::empty(),
+            cmd::sessions::run,
+        ),
+        // These three commands take `--json` and nothing else. `cmd::json_flag`
+        // is what replaced `no_more_arguments` here - the rule that a subcommand
+        // rejects every argument it was not written for still holds, and
+        // `--json` is now one it was.
+        "verify" => flagged(parser, cmd::verify::empty, cmd::verify::run)?,
+        "reindex" => flagged(parser, cmd::reindex::empty, cmd::reindex::run)?,
+        "status" => flagged(parser, cmd::status::empty, cmd::status::run)?,
+        // Reclaims what retention already freed and deletes nothing itself:
+        // `VACUUM` then `PRAGMA wal_checkpoint(TRUNCATE)`, under the ingest lock,
+        // because a plain `VACUUM` fails outright while a pass holds a write
+        // transaction.
+        "compact" => flagged(parser, cmd::compact::empty, cmd::compact::run)?,
+        // Two tables that each reconcile to their own total:
         // archived blob bytes by project and by month, and the database file's
         // pages by table. Never one number for both - the file is 2.4x the
         // archive, and the difference is the derived tables.
-        "usage" => then(cmd::json_flag(parser)?, cmd::usage::run),
-        // PRIV-04. The transcripts as they arrived, one file per session, plus
+        "usage" => flagged(parser, cmd::usage::empty, cmd::usage::run)?,
+        // The transcripts as they arrived, one file per session, plus
         // a manifest that states in words that they are unredacted and what is
         // not in them. Redaction is keyed on destination and a directory the
-        // user named is not egress (PRIV-01), so the statement is the answer.
-        "export" => then(cmd::export::parse(parser)?, cmd::export::run),
-        // FEED-04. A CLI data command and never an MCP tool (D-14): every
+        // user named is not egress, so the statement is the answer.
+        "export" => then_json(
+            cmd::export::parse(parser)?,
+            |a| a.json,
+            cmd::export::empty,
+            cmd::export::run,
+        ),
+        // A CLI data command and never an MCP tool: every
         // tool description sits in every session's context forever.
-        "stats" => then(cmd::json_flag(parser)?, cmd::stats::run),
-        // OBS-01. The facts come off the parser, never off a model: this reads
+        "stats" => flagged(parser, cmd::stats::empty, cmd::stats::run)?,
+        // The facts come off the parser, never off a model: this reads
         // back a row the ingest pass wrote and opens no network connection on
         // any path.
-        "observations" => then(cmd::observations::parse(parser)?, cmd::observations::run),
-        // FEED-03. Read-only by construction (D-15) and the one command whose
-        // flags move the injection thresholds - for this report and nothing
-        // else: the live path compiles them in (D-08).
-        "replay" => then(cmd::replay::parse(parser)?, cmd::replay::run),
-        // RET-03. A report and never an action: retention acts inside the
-        // ingest pass and nowhere else (D-04, D-10), so this shares that one
+        "observations" => then_json(
+            cmd::observations::parse(parser)?,
+            cmd::observations::json,
+            cmd::observations::empty,
+            cmd::observations::run,
+        ),
+        // Read-only by construction and the one command whose flags move the
+        // injection thresholds - for this report and nothing else: the live
+        // path compiles them in.
+        "replay" => then_json(
+            cmd::replay::parse(parser)?,
+            |a| a.json,
+            cmd::replay::empty,
+            cmd::replay::run,
+        ),
+        // A report and never an action: retention acts inside the ingest pass
+        // and nowhere else, so this shares that one
         // evaluation function and applies nothing it names.
-        "retention" => then(cmd::retention::parse(parser)?, cmd::retention::run),
-        // D-26: the MCP server is this binary, not a second artifact to place
+        "retention" => then_json(
+            cmd::retention::parse(parser)?,
+            |a| a.json,
+            |_| cmd::retention::empty(),
+            cmd::retention::run,
+        ),
+        // The MCP server is this binary, not a second artifact to place
         // and keep in version lockstep. It takes no arguments - a client spawns
         // it, nobody types it - and it writes JSON-RPC on stdout rather than
         // anything the `--json` contract above describes.
         "mcp" => then(cmd::mcp::parse(parser)?, cmd::mcp::run),
-        // Read-only by construction (INST-06, D-12): it opens the store
+        // Read-only by construction: it opens the store
         // through the read path, never `Store::open`, and creates no file and
         // no directory on any path it takes.
-        "doctor" => then(cmd::json_flag(parser)?, cmd::doctor::run),
-        // Human-only and deliberately not a `--json` data command (D-24): it
+        "doctor" => flagged(parser, cmd::doctor::empty, cmd::doctor::run)?,
+        // Human-only and deliberately not a `--json` data command: it
         // prints a receipt for a person to read.
         "install" => then(cmd::install::parse(parser)?, |()| cmd::install::run()),
-        // Human-only and not a `--json` data command (D-24): it asks under
+        // Human-only and not a `--json` data command: it asks under
         // `--purge`. The only command in this binary that deletes anything: it
         // removes what install added, leaves the archive alone and prints its
         // path, and destroys it only under `--purge`, after showing the size
-        // and asking (INST-07, D-13).
+        // and asking.
         "uninstall" => then(cmd::uninstall::parse(parser)?, cmd::uninstall::run),
-        // STOR-07. Human-only for the third time and the same reason: it prints
+        // Human-only for the third time and the same reason: it prints
         // what is about to move, warns about the one hazard nothing can detect
-        // for the user (D-16) and asks once. The two-word form follows
+        // for the user and asks once. The two-word form follows
         // `observations regenerate`, and the location it records is read by
-        // `store::data_dir` and by nothing in settings.json (D-14).
+        // `store::data_dir` and by nothing in settings.json.
         "data" => then(cmd::data::parse(parser)?, cmd::data::run),
         other => return Err(Failure::Misuse(format!("unknown command '{other}'"))),
     })
 }
 
-/// A command's `run`, holding the arguments its `parse` returned.
+/// A command's `run`, holding the arguments its `parse` returned. For a command
+/// with no `--json`.
 fn then<A: 'static>(args: A, run: fn(A) -> Result<(), Failure>) -> Command {
-    Box::new(move || run(args))
+    Command {
+        empty: None,
+        run: Box::new(move || run(args)),
+    }
+}
+
+/// The same for a command that takes `--json`. `json` reads the flag off the
+/// parsed arguments, and `empty` builds the command's empty document from them.
+/// `empty` is called only when the flag is set.
+fn then_json<A: 'static>(
+    args: A,
+    json: fn(&A) -> bool,
+    empty: impl FnOnce(&A) -> Document,
+    run: fn(A) -> Result<(), Failure>,
+) -> Command {
+    Command {
+        empty: json(&args).then(|| empty(&args)),
+        run: Box::new(move || run(args)),
+    }
+}
+
+/// [`then_json`] for the commands `cmd::json_flag` parses, whose only argument
+/// is the flag itself.
+fn flagged(
+    parser: &mut lexopt::Parser,
+    empty: fn() -> Document,
+    run: fn(bool) -> Result<(), Failure>,
+) -> Result<Command, Failure> {
+    let json = cmd::json_flag(parser)?;
+    Ok(then_json(json, |json| *json, |_| empty(), run))
 }
 
 pub(crate) fn unexpected(arg: lexopt::Arg<'_>) -> String {

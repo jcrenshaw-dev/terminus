@@ -88,7 +88,7 @@ It keeps two folders and prints both paths:
 - **The versions folder**, `~/.local/lib/crenshawdev/terminus/versions/`, because a session already running may be using one of its files.
 - **The data directory**, which holds the archive ([where it is](configuration.md#the-data-directory)).
 
-`terminus uninstall --purge` also deletes the whole data directory, its snapshots and the state the hooks keep included. It shows the directory's path and the size of `terminus.db` with its `-wal` and `-shm` files, which leaves out the snapshots, and asks once, with no as the default answer. When the directory holds no `terminus.db`, it prints that there is nothing to purge and deletes nothing, the snapshots and the state the hooks keep included. `-y` or `--yes` answers yes without asking, and does nothing without `--purge`. With no answer to read, or while an ingest is running, nothing is deleted and the command exits 1. `--purge` never deletes the versions folder.
+`terminus uninstall --purge` also deletes the whole data directory, its snapshots and the state the hooks keep included. It shows the directory's path and the size of everything it deletes, the snapshots and the state the hooks keep included, and asks once, with no as the default answer. When the directory holds no `terminus.db`, it prints that there is nothing to purge and deletes nothing, the snapshots and the state the hooks keep included. `-y` or `--yes` answers yes without asking, and does nothing without `--purge`. With no answer to read, a store it cannot read, or while an ingest is running, nothing is deleted and the command exits 1. `--purge` never deletes the versions folder.
 
 The full options are in [commands](commands.md#terminus-uninstall).
 
@@ -99,6 +99,6 @@ After `terminus uninstall --purge`, these are still on disk:
 - `~/.local/lib/crenshawdev/terminus`, which holds the versions folder.
 - The config directory, `~/.config/terminus` by default, with `terminus.toml` if you wrote one and the `data-location` file if you ran `terminus data move` ([where it is](configuration.md#the-file)).
 - `settings.json.terminus-backup`, when you edited `settings.json` after install.
-- `.claude.json.terminus-backup`, when an older install left one. Uninstall prints its path and does not restore it, because it holds an older copy of Claude Code's own state.
+- `.claude.json.terminus-backup`, when one is there. Uninstall prints its path and does not restore it, because it holds an earlier copy of Claude Code's own state.
 
 To remove the rest of Terminus, delete the config directory and `~/.local/lib/crenshawdev/terminus` once no session is running. Either backup file above stays where it is until you delete it. Leave `~/.local/lib/crenshawdev` itself, because Baley uses it too.

@@ -1,4 +1,4 @@
-//! The bounded-parallelism pass a backfill runs (D-11, ING-11).
+//! The bounded-parallelism pass a backfill runs.
 //!
 //! One pass over the tree, with the reading, JSON scanning and zstd compression
 //! spread across a fixed number of [`std::thread`] workers while **exactly one**
@@ -13,16 +13,17 @@
 //! why it is the stage that moved. `crates/terminus/src/cmd/backfill.rs` fixes
 //! the count in one place, small and deliberately below any machine's cores.
 //!
-//! # No thread pool, and no thread on the hook path (D-11)
+//! # No thread pool, and no thread on the hook path
 //!
 //! `std::thread` and `std::sync::mpsc`, no `rayon` and no global pool. The
-//! threads are started here and nowhere else, inside [`run_with`], which is
-//! reached only by `terminus backfill`. A hook-triggered `terminus ingest` runs
-//! `pass::run` exactly as it did before and starts no thread at all - the
-//! measured 0.408 ms startup floor is the product, and it must not pay for a
-//! command it never runs.
+//! threads are started here and nowhere else, inside `pipeline`, which is
+//! reached only through [`run_with`] and only by `terminus backfill`; the
+//! driver it shares with the tree pass starts none. A hook-triggered
+//! `terminus ingest` runs `pass::run` exactly as it did before and starts no
+//! thread at all - the measured 0.408 ms startup floor is the product, and it
+//! must not pay for a command it never runs.
 //!
-//! # The work in flight is bounded, and that is the "chunked" half of ING-11
+//! # The work in flight is bounded, and that is what makes a backfill chunked
 //!
 //! Files are handed out in rounds of [`QUEUE_PER_WORKER`] per worker, and a
 //! round is fully drained before the next is dispatched. Peak memory is
@@ -35,27 +36,28 @@
 //! outstanding, so no send on either side can block: the writer never waits to
 //! dispatch while a worker waits to deliver.
 //!
-//! # Everything that makes a pass resumable is unchanged (D-22)
+//! # Everything that makes a pass resumable is the tree pass's
 //!
-//! The ingest lock taken once for the whole run before the store is opened,
-//! recovery at the top, one transaction per file so a kill loses at most one
-//! file, a per-file failure recorded against its path and skipped rather than
-//! propagated (D-12), and one `runs` row for the whole pass. Files are applied
-//! in discovery order, exactly as the sequential walk applies them, so the two
-//! reach byte-identical stores rather than merely equivalent ones.
+//! A backfill runs through the same driver as the tree pass (`ingest::driver`),
+//! which takes the ingest lock once for the whole run before the store is
+//! opened, recovers at the top, and writes one `runs` row for the whole pass
+//! through the same INSERT. One transaction per file, so a kill loses at most
+//! one file, and a per-file failure is recorded against its path and skipped
+//! rather than propagated, by the same handler the sequential walk uses. Files
+//! are applied in discovery order, exactly as the sequential walk applies them,
+//! so the two reach byte-identical stores rather than merely equivalent ones.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread::ThreadId;
-use std::time::Instant;
 
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::ingest::lock::{self, Attempt};
-use crate::ingest::pass::{note, PassOutcome, Summary};
-use crate::ingest::{claim, read_rows, Claim, Existing, Outcome, Prepared, Rows, RunRow};
+use crate::ingest::driver::{self, Walk};
+use crate::ingest::pass::{PassOutcome, Summary};
+use crate::ingest::{claim, Claim, Existing, Prepared, Rows};
 use crate::project::Resolver;
 use crate::store::Store;
 
@@ -95,71 +97,61 @@ pub fn run(data_dir: &Path, workers: usize) -> Result<Report> {
 /// The seam tests use, mirroring [`crate::ingest::pass::run_with`], so the two
 /// can be run over one tree and compared.
 pub fn run_with(data_dir: &Path, config: &Config, workers: usize) -> Result<Report> {
-    let started = Instant::now();
     // Zero workers is a caller's arithmetic, not a request to do nothing.
     let workers = workers.max(1);
 
-    // Once, for the whole run, and before the store is opened (D-15, D-18). A
-    // hook that fires during a backfill loses this race and exits 0.
-    let _guard = match lock::try_acquire(data_dir)? {
-        Attempt::Held => {
-            return Ok(Report {
-                outcome: PassOutcome::LockHeld,
-                workers,
-                threads_used: 0,
-            })
-        }
-        Attempt::Acquired(guard) => guard,
+    // The driver takes the lock once for the whole run, before the store is
+    // opened, recovers, and writes the one row. A hook that fires during a
+    // backfill loses that race and exits 0, and the thread set stays empty.
+    let mut backfill = Backfill {
+        config,
+        workers,
+        transcripts: Vec::new(),
+        threads: HashSet::new(),
     };
+    let outcome = driver::drive(data_dir, &mut backfill)?;
+    Ok(Report {
+        outcome,
+        workers,
+        threads_used: backfill.threads.len(),
+    })
+}
 
-    // Recovery before discovery, and before anything is read (ING-03, D-24).
-    let (mut store, recovery) = crate::recover::recover(data_dir)?;
+/// The backfill, as the driver walks it: discovery, then the pipeline over
+/// every row, and none of the tree pass's other steps.
+struct Backfill<'a> {
+    config: &'a Config,
+    workers: usize,
+    /// What discovery found, filled in the step before the rows are read.
+    transcripts: Vec<PathBuf>,
+    /// Distinct worker threads that prepared a file.
+    threads: HashSet<ThreadId>,
+}
 
-    let found = crate::discover::discover(config);
-    let mut summary = Summary {
-        unreadable: found.unreadable,
-        excluded: found.excluded,
-        recovery,
-        ..Summary::default()
-    };
+impl Walk for Backfill<'_> {
+    fn before(&mut self, _store: &mut Store, summary: &mut Summary) {
+        let found = crate::discover::discover(self.config);
+        summary.unreadable = found.unreadable;
+        summary.excluded = found.excluded;
+        self.transcripts = found.transcripts;
+    }
 
-    // One resolver for the whole run, on the writer thread. Project identity may
-    // spawn git and is memoized across 63 distinct `cwd` values in a real
-    // corpus, so keeping it here costs a handful of resolutions and saves every
-    // worker queueing on a lock around it.
-    let mut projects = Resolver::new();
-    let mut threads: HashSet<ThreadId> = HashSet::new();
-
-    // Every file's row in one query, after recovery and before the pipeline,
-    // exactly as the sequential walk reads them (#85). A read that fails is
-    // the walk failing, and still leaves its `runs` row.
-    let walked = read_rows(store.conn(), None).and_then(|rows| {
+    fn walk(&mut self, store: &mut Store, rows: &Rows, summary: &mut Summary) -> Result<()> {
+        // One resolver for the whole run, on the writer thread. Project
+        // identity may spawn git and is memoized across 63 distinct `cwd`
+        // values in a real corpus, so keeping it here costs a handful of
+        // resolutions and saves every worker queueing on a lock around it.
+        let mut projects = Resolver::new();
         pipeline(
-            &mut store,
-            &rows,
-            &found.transcripts,
-            &mut summary,
+            store,
+            rows,
+            &self.transcripts,
+            summary,
             &mut projects,
-            workers,
-            &mut threads,
-            config.capture_mode(),
+            self.workers,
+            &mut self.threads,
+            self.config.capture_mode(),
         )
-    });
-    summary.duration = started.elapsed();
-
-    // One row, whatever happened (D-10, D-14).
-    let recorded = record_pass(store.conn(), &summary, walked.as_ref().err());
-
-    match walked {
-        Ok(()) => {
-            recorded?;
-            Ok(Report {
-                outcome: PassOutcome::Ran(summary),
-                workers,
-                threads_used: threads.len(),
-            })
-        }
-        Err(e) => Err(e),
     }
 }
 
@@ -174,9 +166,9 @@ pub fn run_with(data_dir: &Path, config: &Config, workers: usize) -> Result<Repo
 /// blocked. The backfill simply stopped, with no error and no exit.
 ///
 /// Catching it here restores the invariant the drain loop is written against -
-/// every job sent comes back exactly once - and costs nothing else: D-12
-/// already says one damaged transcript is not a reason to archive none of the
-/// tree, and a panic is only the loudest way for one to be damaged. The file is
+/// every job sent comes back exactly once - and costs nothing else: one
+/// damaged transcript is already not a reason to archive none of the tree, and
+/// a panic is only the loudest way for one to be damaged. The file is
 /// recorded and skipped like any other per-file failure.
 fn panic_error(path: &Path, payload: Box<dyn std::any::Any + Send>) -> Error {
     let detail = payload
@@ -210,9 +202,9 @@ struct Done {
 /// The round-by-round pipeline.
 ///
 /// Only a failure of the pass as a whole comes back as `Err`; every per-file
-/// failure is recorded against its path and skipped (D-12), because the tree is
-/// the unit of work and one damaged transcript is not a reason to archive none
-/// of it.
+/// failure is recorded against its path and skipped, because the tree is the
+/// unit of work and one damaged transcript is not a reason to archive none of
+/// it.
 #[allow(clippy::too_many_arguments)]
 fn pipeline(
     store: &mut Store,
@@ -222,7 +214,7 @@ fn pipeline(
     projects: &mut Resolver,
     workers: usize,
     threads: &mut HashSet<ThreadId>,
-    // Resolved once for the whole run and copied into every worker (ING-07).
+    // Resolved once for the whole run and copied into every worker.
     // `CaptureMode` is `Copy`, so the workers share a value rather than a lock.
     mode: crate::config::CaptureMode,
 ) -> Result<()> {
@@ -319,11 +311,11 @@ fn dispatch_round(
     job_tx: &mpsc::SyncSender<(usize, Job)>,
     done_rx: &mpsc::Receiver<Done>,
 ) -> Result<()> {
-    // Two paths can share a key (D-01, D-03), and [`claim`] lets only the first
-    // through, across rounds, so no two jobs in this run share one. That is
-    // what makes reading every row once before the run, and building a whole
-    // round's `Existing` before applying any of it, safe: no apply in the run
-    // can change a row another job reads.
+    // Two paths can share a key, and [`claim`] lets only the first through,
+    // across rounds, so no two jobs in this run share one. That is what makes
+    // reading every row once before the run, and building a whole round's
+    // `Existing` before applying any of it, safe: no apply in the run can
+    // change a row another job reads.
     let mut sent = 0usize;
     let mut results: Vec<Option<Result<Prepared>>> = (0..batch.len()).map(|_| None).collect();
     // The file each slot reads, which is a link's target, not the link.
@@ -373,7 +365,7 @@ fn dispatch_round(
 
     for (slot, result) in results.into_iter().enumerate() {
         let Some(result) = result else { continue };
-        commit_one(store, &files[slot], result, summary, projects)?;
+        commit_one(store, &files[slot], result, summary, projects);
     }
     Ok(())
 }
@@ -385,49 +377,18 @@ fn commit_one(
     prepared: Result<Prepared>,
     summary: &mut Summary,
     projects: &mut Resolver,
-) -> Result<()> {
-    let applied = prepared.and_then(|prepared| {
-        // A fresh `Instant` per file: the elapsed time the pass reports is the
-        // run's, measured by the caller, not this file's.
-        crate::ingest::apply(store, prepared, Instant::now(), RunRow::PassOwns, projects)
-    });
-
-    match applied {
-        Ok(Outcome::Committed(pass)) => {
-            summary.files_committed += 1;
-            summary.bytes_read += pass.bytes_read;
-            summary.turns_added += pass.turns_added;
-            // The same file-aimed fault point the sequential walk has, so a
-            // kill can be aimed between two files of a backfill too. Inert
-            // without `testkit`.
-            crate::ingest::fault::stall_after_files(summary.files_committed);
-        }
-        Ok(Outcome::UpToDate | Outcome::LockHeld | Outcome::Excluded(_)) => {}
-        Err(e) => {
-            let mut reason = e.to_string();
-            // D-13, matched on the variant and never on the message, exactly as
-            // the sequential walk matches it: a transcript at a non-UTF-8 path
-            // fails with the same io kind and must flag nothing.
-            if matches!(
-                e,
-                crate::error::Error::TranscriptDiverged { .. }
-                    | crate::error::Error::TranscriptRewritten { .. }
-            ) {
-                if let Err(flag) = crate::ingest::flag_divergence(store.conn(), path) {
-                    reason.push_str(&format!(" (the flag could not be set: {flag})"));
-                }
-            }
-            summary.failures.push((path.to_path_buf(), reason));
-        }
-    }
-    Ok(())
+) {
+    let applied = prepared.and_then(|prepared| crate::ingest::apply(store, prepared, projects));
+    // The same handler the sequential walk ends each file with, so a file
+    // counts, fails and flags a divergence the same way on both.
+    driver::tally(store, summary, path, applied);
 }
 
 /// What the store already holds for one transcript, built on the writer thread
 /// from the row read at the start of the run.
 ///
 /// `path` is the file [`claim`] resolved, a link's target and never the link,
-/// so the worker reads, and the store records, that file (D-03).
+/// so the worker reads, and the store records, that file.
 fn read_existing(store: &Store, rows: &Rows, path: PathBuf, session_key: String) -> Result<Job> {
     let existing = Existing::read(store.conn(), rows, &session_key, &path)?;
     Ok(Job {
@@ -435,51 +396,4 @@ fn read_existing(store: &Store, rows: &Rows, path: PathBuf, session_key: String)
         session_key,
         existing,
     })
-}
-
-/// The one `runs` row this pass leaves behind (D-10).
-///
-/// Field for field the row `pass::record_pass` writes, because a backfill is a
-/// pass and `terminus status` reads one table.
-fn record_pass(
-    conn: &rusqlite::Connection,
-    summary: &Summary,
-    fatal: Option<&crate::error::Error>,
-) -> Result<()> {
-    let mut notes: Vec<String> = Vec::new();
-    for (path, reason) in summary.failures.iter().chain(&summary.unreadable) {
-        notes.push(note(path, reason));
-    }
-    notes.extend(summary.recovery.lines());
-    if let Some(e) = fatal {
-        notes.push(format!("pass failed: {e}"));
-    }
-    let error = if notes.is_empty() {
-        None
-    } else {
-        Some(notes.join("\n"))
-    };
-
-    let elapsed = summary.duration;
-    conn.execute(
-        "INSERT INTO runs (
-            started_at, finished_at, duration_ms, files_seen, bytes_read,
-            turns_added, error, files_committed, files_failed
-         ) VALUES (
-            strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?1),
-            strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-            ?2, ?3, ?4, ?5, ?6, ?7, ?8
-         )",
-        rusqlite::params![
-            format!("-{} seconds", elapsed.as_secs_f64()),
-            elapsed.as_millis() as i64,
-            summary.files_walked as i64,
-            summary.bytes_read as i64,
-            summary.turns_added as i64,
-            error,
-            summary.files_committed as i64,
-            summary.failures.len() as i64,
-        ],
-    )?;
-    Ok(())
 }

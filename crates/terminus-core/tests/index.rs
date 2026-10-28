@@ -1,4 +1,4 @@
-//! RCL-01 through RCL-04: what a turn leaves behind in the index.
+//! What a turn leaves behind in the index.
 //!
 //! Every test here runs against a store holding the whole fixture corpus, built
 //! by the ordinary ingest path, so what is asserted is what a real pass wrote
@@ -80,14 +80,15 @@ fn turns_whose_record_contains(conn: &Connection, needle: &str) -> Vec<i64> {
         .collect()
 }
 
-/// D-01, the negative half: no JSON key and no record-type literal reaches the
-/// index, however many records carry it.
+/// The text projection, negative half: no JSON key and no record-type literal
+/// reaches the index, however many records carry it.
 ///
 /// `toolUseResult` is the named case - a key on 4,858 records of the measured
-/// sample - but the failure was general. Phase 1 indexed
-/// `String::from_utf8_lossy(record)`, so every key, every field value and every
-/// record type was a searchable term, and BM25 ranked turns by how much
-/// scaffolding they carried.
+/// sample - but the failure is general. Indexing
+/// `String::from_utf8_lossy(record)` makes every key, every field value and
+/// every record type a searchable term, and BM25 then ranks turns by how much
+/// scaffolding they carry, so the index holds a projection of each record's
+/// text and never its raw bytes.
 #[test]
 fn no_json_key_and_no_record_type_literal_is_indexed() {
     let bench = bench();
@@ -130,8 +131,8 @@ fn no_json_key_and_no_record_type_literal_is_indexed() {
     assert_eq!(matching(&conn, "restart"), Vec::<i64>::new());
 }
 
-/// D-01, the positive half: each of the four projected subtrees is reachable,
-/// and a phrase a turn actually said still finds it.
+/// The text projection, positive half: each of the four projected subtrees is
+/// reachable, and a phrase a turn actually said still finds it.
 #[test]
 fn every_projected_subtree_is_searchable() {
     let bench = bench();
@@ -188,7 +189,7 @@ fn every_fixed_query_matches_a_real_turn() {
 
 /// A record the parser could not read projects to nothing, never to its bytes.
 ///
-/// Unreachable for a real turn - D-03 classifies one only when `uuid` and
+/// Unreachable for a real turn - the parser classifies one only when `uuid` and
 /// `timestamp` parsed out of it - and asserted anyway, because the fallback's
 /// whole job is to be the one place JSON scaffolding could come back.
 #[test]
@@ -241,10 +242,9 @@ fn an_unparseable_record_projects_to_nothing() {
     assert_eq!(body, 1, "the row itself must still exist, empty");
 }
 
-// --- RCL-01: expansion -------------------------------------------------------
+// --- expansion ---------------------------------------------------------------
 
-/// AC1's first half, and D-13's measured claim: case splitting is the rule that
-/// changes recall.
+/// The measured claim: case splitting is the rule that changes recall.
 ///
 /// The second assertion is the falsifying one. `MATCH 'worker'` passes with no
 /// expansion written at all, because `unicode61` splits on `/` by itself - a
@@ -304,8 +304,8 @@ fn the_expansion_rules_are_functions_with_answers() {
     );
 
     // Nothing already reachable is emitted a second time: `unicode61` splits on
-    // every separator, so the snake, kebab and path rules add no bytes (D-13),
-    // and the case rule adds only what is genuinely new.
+    // every separator, so the snake, kebab and path rules add no bytes, and the
+    // case rule adds only what is genuinely new.
     assert!(expansion_tokens("search_manager_new").is_empty());
     assert!(expansion_tokens("src/worker/S.ts").is_empty());
     assert!(expansion_tokens("--setting-sources").is_empty());
@@ -323,7 +323,7 @@ fn the_expansion_rules_are_functions_with_answers() {
     );
 }
 
-// --- RCL-02: entities --------------------------------------------------------
+// --- entities ----------------------------------------------------------------
 
 /// Every `(kind, value_norm)` one turn carries, in `entities` order.
 fn entities_of(conn: &Connection, turn_id: i64) -> Vec<(String, String)> {
@@ -352,7 +352,7 @@ fn only_turn_containing(conn: &Connection, needle: &str) -> i64 {
     hits[0]
 }
 
-/// AC3's structured-versus-prose pair, which is what "entities are not
+/// The structured-versus-prose pair, which is what "entities are not
 /// extracted from prose" has to mean to be worth anything.
 #[test]
 fn a_structured_path_becomes_an_entity_and_the_same_path_in_prose_does_not() {
@@ -374,7 +374,7 @@ fn a_structured_path_becomes_an_entity_and_the_same_path_in_prose_does_not() {
 }
 
 /// The `tool` kind and `turns.tool_name` are the same value read twice, so a
-/// filter on either cannot disagree with the other (D-16).
+/// filter on either cannot disagree with the other.
 #[test]
 fn the_tool_entity_agrees_with_the_turn_column() {
     let bench = bench();
@@ -461,14 +461,14 @@ fn only_identifier_shaped_tokens_become_symbols() {
         .all(|(kind, _)| kind != "symbol"));
 }
 
-/// FEED-02: a `recall_search` call is the model saying what it did not already
-/// have, so what it searched FOR has to become rows.
+/// A `recall_search` call is the model saying what it did not already have, so
+/// what it searched FOR has to become rows.
 ///
 /// The `miss` label is a SQL join over `entities` and may never read the blob to
-/// find out what a query said (D-07), so a query that leaves no entity is a
-/// decision that can never be labelled a miss. Zero such calls exist across the
-/// 3,217 measured transcripts (D-13), which is why this record is synthesized
-/// rather than found in a fixture.
+/// find out what a query said, so a query that leaves no entity is a decision
+/// that can never be labelled a miss. Zero such calls exist across the 3,217
+/// measured transcripts, which is why this record is synthesized rather than
+/// found in a fixture.
 #[test]
 fn a_recall_search_call_leaves_what_it_searched_for() {
     let record = serde_json::json!({
@@ -619,7 +619,7 @@ fn the_entity_rules_are_functions_with_answers() {
     assert!(!is_identifier_shaped("_leading"));
 }
 
-// --- RCL-03: errors ----------------------------------------------------------
+// --- errors ------------------------------------------------------------------
 
 /// Every `error` value one turn carries, in `entities` order.
 fn errors_of(conn: &Connection, turn_id: i64) -> Vec<String> {
@@ -630,8 +630,8 @@ fn errors_of(conn: &Connection, turn_id: i64) -> Vec<String> {
         .collect()
 }
 
-/// AC2 in both directions: the four variable parts collapse and a bare integer
-/// does not.
+/// Error normalization in both directions: the four variable parts collapse and
+/// a bare integer does not.
 ///
 /// The second half is the one that costs something to get right. Stripping bare
 /// integers too was measured over a 400-file sample and scores *worse* on
@@ -670,7 +670,7 @@ fn one_failure_seen_twice_is_one_value_and_a_different_integer_is_two() {
     );
     assert_ne!(errors_of(&conn, seven), errors_of(&conn, nine));
 
-    // D-03's negative: `interrupted` says a call was cut short, not that it
+    // The negative case: `interrupted` says a call was cut short, not that it
     // failed, and an empty stderr is not a failure either.
     let interrupted = only_turn_containing(&conn, "\"interrupted\":true");
     assert!(record(&conn, interrupted).contains("the command was interrupted"));
@@ -733,14 +733,14 @@ fn the_error_normalization_is_a_function_with_answers() {
     assert!(norm(&wide).len() <= MAX_ERROR_BYTES);
 }
 
-// --- RCL-04: the per-turn cap ------------------------------------------------
+// --- the per-turn cap --------------------------------------------------------
 
 /// A turn cannot write more entity rows than the cap, and the cut is positional
 /// so a re-derive reproduces it exactly.
 ///
-/// The reproducibility half is what makes the cap safe: AC3 asserts that
-/// dropping the derived tables and rebuilding from the blobs alone reproduces
-/// the same rows, which holds only because the cut depends on the record's own
+/// The reproducibility half is what makes the cap safe: dropping the derived
+/// tables and rebuilding from the blobs alone must reproduce the same rows,
+/// which holds only because the cut depends on the record's own
 /// bytes and on nothing the store knows. A cap applied by frequency or recency
 /// would pass this test on a fresh store and fail it on a full one.
 #[test]

@@ -1,5 +1,4 @@
-//! The dropped-turn set, over a store built by the ordinary ingest path
-//! (INJ-05, D-07).
+//! The dropped-turn set, over a store built by the ordinary ingest path.
 //!
 //! `session-compacted.jsonl` is what makes this a test rather than a
 //! restatement: its four records are shaped so that the three readings of a
@@ -101,8 +100,8 @@ impl Bench {
     }
 }
 
-/// D-07: the complement of `preservedMessages.uuids`, and not one of the three
-/// readings that look like it.
+/// The dropped set is the complement of `preservedMessages.uuids`, and not one
+/// of the three readings that look like it.
 #[test]
 fn the_dropped_set_is_what_preserved_messages_does_not_name() {
     let bench = bench();
@@ -207,7 +206,7 @@ fn a_boundary_that_cannot_be_read_drops_nothing() {
 /// `None` rather than an empty set, and the two are not the same answer. An
 /// empty set means a boundary was read and dropped nothing this build can
 /// name; `None` means no boundary is there yet, which on the prompt path is a
-/// debt to carry rather than one to settle (D-08).
+/// debt to carry rather than one to settle.
 #[test]
 fn a_session_with_no_boundary_is_not_a_session_that_dropped_nothing() {
     let bench = bench();

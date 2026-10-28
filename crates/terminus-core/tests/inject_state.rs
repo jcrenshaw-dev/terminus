@@ -1,4 +1,4 @@
-//! The per-session injection state file (INJ-04, D-06).
+//! The per-session injection state file.
 //!
 //! Real files in real temporary directories, never a mock: what is under test
 //! is a write that survives a kill and a name that comes off an untrusted
@@ -46,8 +46,8 @@ fn populated() -> State {
     state
 }
 
-/// Everything one session was given, written and read back - and AC4's
-/// requirement that the reason is legible in the file itself.
+/// Everything one session was given, written and read back - and the reason
+/// for each suppression legible in the file itself.
 #[test]
 fn one_sessions_state_survives_a_round_trip_through_its_file() {
     let dir = tempfile::tempdir().unwrap();
@@ -61,7 +61,7 @@ fn one_sessions_state_survives_a_round_trip_through_its_file() {
     assert!(state.save(&data_dir, Some(SESSION)));
     assert_eq!(State::load(&data_dir, Some(SESSION)), state);
 
-    // AC4 asks for a suppressed turn and its reason to be readable here, so
+    // A suppressed turn and its reason have to be readable here, so
     // the assertion is against the bytes rather than against the parse.
     let text = std::fs::read_to_string(file_of(&data_dir, SESSION)).unwrap();
     assert!(text.contains("already_injected"), "{text}");
@@ -93,8 +93,8 @@ fn a_file_this_build_cannot_read_is_empty_state_rather_than_a_failure() {
             "a format from another build",
             br#"{"format":9999,"injected":[7]}"#,
         ),
-        // A reason this build has no variant for: phase 6 may add reasons, and
-        // a file naming one must not become an error on the prompt path.
+        // A reason this build has no variant for: a later build may add one,
+        // and a file naming one must not become an error on the prompt path.
         (
             "a suppression reason this build has no name for",
             br#"{"format":1,"suppressed":[{"turn_id":7,"reason":"budget"}]}"#,
@@ -264,16 +264,16 @@ fn a_write_replaces_the_target_rather_than_rewriting_it_in_place() {
     );
 }
 
-/// PRIV-02, PRIV-04: the injection scratch holds the turn ids each session was
-/// given, its suppressions and its compaction flag, keyed by session id, and
-/// none of it - nor the directory holding it, nor the data directory the hook
-/// had to create to get there - is readable by group or world.
+/// The injection scratch holds the turn ids each session was given, its
+/// suppressions and its compaction flag, keyed by session id, and none of it -
+/// nor the directory holding it, nor the data directory the hook had to create
+/// to get there - is readable by group or world.
 ///
 /// The data directory does not exist when this starts, which is the case that
 /// matters: a `SessionStart` hook on a machine that has installed terminus and
 /// never ingested is the first thing to create it, so the mode it lands with is
 /// this write's to get right. That the directories ABOVE it keep the user's own
-/// default is D-04, asserted where it can be seen -
+/// default is asserted where it can be seen -
 /// `tests/pass.rs::the_data_directory_and_the_lock_are_owner_only_from_the_first_acquire`
 /// - since a `tempfile` root is already 0700 and would prove nothing here.
 #[test]

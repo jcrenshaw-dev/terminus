@@ -1,5 +1,6 @@
-//! Ingesting one named transcript: AC7's byte fidelity, AC1's block counts,
-//! and ING-01's resume from a mid-line watermark.
+//! Ingesting one named transcript: the blob reads back byte for byte, a turn
+//! read decompresses only the blocks it occupies, and a resume from a mid-line
+//! watermark converges on a single pass.
 
 #![cfg(feature = "testkit")]
 
@@ -76,8 +77,8 @@ fn watermark(conn: &Connection, key: &str) -> i64 {
     .unwrap()
 }
 
-/// AC7. Every line of the fixture, including the eleven state record types that
-/// get no turn row, reads back from the blob byte-identical to the source.
+/// Every line of the fixture, including the eleven state record types that get
+/// no turn row, reads back from the blob byte-identical to the source.
 #[test]
 fn the_blob_reproduces_the_transcript_byte_for_byte() {
     let bench = bench();
@@ -87,11 +88,11 @@ fn the_blob_reproduces_the_transcript_byte_for_byte() {
     let pass = committed(bench.ingest(&path));
     let conn = bench.conn();
 
-    assert_eq!(stream(&conn, &pass.session_key), source, "AC7");
+    assert_eq!(stream(&conn, &pass.session_key), source, "blob != source");
     assert_eq!(pass.watermark, source.len() as u64);
     assert_eq!(watermark(&conn, &pass.session_key), source.len() as i64);
 
-    // The state records are in the blob and produce no turn row (D-03/D-13).
+    // The state records are in the blob and produce no turn row.
     let text = String::from_utf8(stream(&conn, &pass.session_key)).unwrap();
     for kind in [
         "user",
@@ -124,7 +125,7 @@ fn the_blob_reproduces_the_transcript_byte_for_byte() {
 }
 
 /// The session is keyed on the transcript file, never on the record's session
-/// id (D-01): the sidecar reports its parent's `sessionId` and must not collide.
+/// id: the sidecar reports its parent's `sessionId` and must not collide.
 #[test]
 fn a_sidecar_reporting_its_parents_session_id_gets_its_own_row() {
     let bench = bench();
@@ -157,8 +158,8 @@ fn a_sidecar_reporting_its_parents_session_id_gets_its_own_row() {
     );
 }
 
-/// AC1 / STOR-01. A turn that fits in one block costs one block; the 200 KB
-/// record costs the four it occupies.
+/// A turn that fits in one block costs one block; the 200 KB record costs the
+/// four it occupies.
 #[test]
 fn reading_a_turn_decompresses_only_the_blocks_it_occupies() {
     let bench = bench();
@@ -181,17 +182,17 @@ fn reading_a_turn_decompresses_only_the_blocks_it_occupies() {
     let (bytes, blocks) = testkit::read_turn(&conn, schema::turn_id(session_no, 0));
     assert_eq!(bytes, lines[0]);
     assert!(bytes.len() > 3 * blob::BLOCK_SIZE, "the big record is big");
-    assert_eq!(blocks, 4, "AC1: N blocks for a turn spanning N");
+    assert_eq!(blocks, 4, "a 4-block turn read other than 4");
 
     // Turn 1 is small and sits inside one block.
     let (bytes, blocks) = testkit::read_turn(&conn, schema::turn_id(session_no, 1));
     assert_eq!(bytes, lines[1]);
     assert!(bytes.len() < blob::BLOCK_SIZE);
-    assert_eq!(blocks, 1, "AC1: one block for a turn that fits in one");
+    assert_eq!(blocks, 1, "a one-block turn read other than one block");
 }
 
 /// Every turn's row addresses its own record's bytes, for every fixture. This
-/// is the general form of AC1's two spot checks.
+/// is the general form of the two block-count spot checks above.
 #[test]
 fn every_turn_row_addresses_its_own_record() {
     let bench = bench();
@@ -224,20 +225,115 @@ fn every_turn_row_addresses_its_own_record() {
     }
 }
 
-/// A rerun over an unchanged file adds no row to any table, not even `runs`.
+/// A rerun over an unchanged file adds no row to any table but `runs`, which
+/// gains the run's one row: one file seen, none committed, none failed (#31).
 #[test]
-fn a_rerun_on_an_unchanged_file_writes_nothing() {
+fn a_rerun_on_an_unchanged_file_writes_only_its_runs_row() {
     let bench = bench();
     let path = bench.copy("session-basic.jsonl");
     committed(bench.ingest(&path));
 
     let before = counts(&bench.conn());
     assert_eq!(bench.ingest(&path), Outcome::UpToDate);
-    assert_eq!(counts(&bench.conn()), before);
+    let after = counts(&bench.conn());
+    let moved: Vec<(&str, i64)> = before
+        .iter()
+        .zip(&after)
+        .filter(|(b, a)| b.1 != a.1)
+        .map(|(b, a)| (b.0.as_str(), a.1 - b.1))
+        .collect();
+    assert_eq!(
+        moved,
+        vec![("runs", 1)],
+        "an up-to-date rerun moved a table"
+    );
+
+    let run = last_run(&bench.conn());
+    assert_eq!((run.seen, run.committed, run.failed), (1, 0, 0));
+    assert_eq!(run.error, None);
 }
 
-/// ING-01. Ingest a transcript cut mid-record, let it grow, ingest again: the
-/// result must equal a single pass over the completed file.
+/// The counts and the error of the newest `runs` row.
+#[derive(Debug)]
+struct LastRun {
+    seen: i64,
+    committed: i64,
+    failed: i64,
+    bytes_read: i64,
+    turns_added: i64,
+    error: Option<String>,
+}
+
+fn last_run(conn: &Connection) -> LastRun {
+    conn.query_row(
+        "SELECT files_seen, files_committed, files_failed, bytes_read, turns_added, error
+           FROM runs ORDER BY id DESC LIMIT 1",
+        [],
+        |r| {
+            Ok(LastRun {
+                seen: r.get(0)?,
+                committed: r.get(1)?,
+                failed: r.get(2)?,
+                bytes_read: r.get(3)?,
+                turns_added: r.get(4)?,
+                error: r.get(5)?,
+            })
+        },
+    )
+    .unwrap()
+}
+
+fn runs(conn: &Connection) -> i64 {
+    conn.query_row("SELECT count(*) FROM runs", [], |r| r.get(0))
+        .unwrap()
+}
+
+/// A named file leaves one `runs` row on every run that holds the lock (#31):
+/// when it commits, when it is up to date, and when it fails. The failure
+/// still comes back to the caller as its typed error, and the row names the
+/// file.
+#[test]
+fn a_named_file_writes_one_runs_row_whether_it_commits_is_up_to_date_or_fails() {
+    let bench = bench();
+    let path = bench.copy("session-basic.jsonl");
+
+    let pass = committed(bench.ingest(&path));
+    assert_eq!(runs(&bench.conn()), 1);
+    let run = last_run(&bench.conn());
+    assert_eq!((run.seen, run.committed, run.failed), (1, 1, 0));
+    assert_eq!(run.bytes_read, pass.bytes_read as i64);
+    assert_eq!(run.turns_added, pass.turns_added as i64);
+    assert_eq!(run.error, None);
+
+    assert_eq!(bench.ingest(&path), Outcome::UpToDate);
+    assert_eq!(runs(&bench.conn()), 2);
+    let run = last_run(&bench.conn());
+    assert_eq!((run.seen, run.committed, run.failed), (1, 0, 0));
+    assert_eq!(run.error, None);
+
+    std::fs::write(&path, b"{}\n").unwrap();
+    let err = ingest::run(&bench.data_dir, &path).unwrap_err();
+    assert!(
+        matches!(err, terminus_core::Error::TranscriptDiverged { .. }),
+        "a shrunk file did not fail as diverged: {err}"
+    );
+    assert_eq!(runs(&bench.conn()), 3);
+    let run = last_run(&bench.conn());
+    assert_eq!((run.seen, run.committed, run.failed), (1, 0, 1));
+    let error = run.error.expect("the failed run's row has no error");
+    let canonical = path.canonicalize().unwrap();
+    assert!(
+        error.contains(&*canonical.to_string_lossy()),
+        "the row's error does not name the file: {error}"
+    );
+    assert!(
+        !error.contains("pass failed:"),
+        "one failed file was reported twice: {error}"
+    );
+}
+
+/// Ingest a transcript cut mid-record, let it grow, ingest again: the result
+/// must equal a single pass over the completed file.
 #[test]
 fn resuming_from_a_mid_line_watermark_converges_on_a_single_pass() {
     let bench = bench();
@@ -251,7 +347,7 @@ fn resuming_from_a_mid_line_watermark_converges_on_a_single_pass() {
 
     // Pass one stops at the last complete record, short of the file.
     let first = committed(bench.ingest(&growing));
-    assert!(first.watermark < partial.len() as u64, "D-14");
+    assert!(first.watermark < partial.len() as u64, "watermark at EOF");
     assert_eq!(
         stream(&bench.conn(), &first.session_key),
         &complete[..first.watermark as usize],
@@ -308,9 +404,9 @@ fn resuming_from_a_mid_line_watermark_converges_on_a_single_pass() {
     );
 }
 
-/// The same transcript reached through a symlink is one session, not two
-/// (`DESIGN-BRIEF.md:406`), and its key is the path below the project folder,
-/// `<uuid>.jsonl`, rather than either absolute spelling.
+/// The same transcript reached through a symlink is one session, not two, and
+/// its key is the path below the project folder, `<uuid>.jsonl`, rather than
+/// either absolute spelling.
 #[test]
 fn two_paths_to_one_transcript_produce_one_session() {
     let bench = bench();
@@ -335,8 +431,8 @@ fn two_paths_to_one_transcript_produce_one_session() {
     assert_eq!(first.session_key, name);
 }
 
-/// D-11. `continues_from` comes from the record's foreign `session_id`, which
-/// is not the file's own `sessionId`.
+/// `continues_from` comes from the record's foreign `session_id`, which is not
+/// the file's own `sessionId`.
 #[test]
 fn a_continuation_records_the_session_it_continues() {
     let bench = bench();
@@ -365,10 +461,10 @@ fn a_continuation_records_the_session_it_continues() {
     assert_ne!(own, predecessor, "its own sessionId is a different signal");
 }
 
-/// D-11's fallback: a continuation carrying no foreign `session_id` is linked
-/// through the first turn's `parentUuid`, resolved to the session that holds
-/// that record so the column stays in one namespace. No fixture carries this
-/// shape, so the test builds one.
+/// The lineage fallback: a continuation carrying no foreign `session_id` is
+/// linked through the first turn's `parentUuid`, resolved to the session that
+/// holds that record so the column stays in one namespace. No fixture carries
+/// this shape, so the test builds one.
 #[test]
 fn a_continuation_without_a_foreign_session_id_falls_back_to_parent_uuid() {
     let bench = bench();
@@ -411,8 +507,8 @@ fn a_continuation_without_a_foreign_session_id_falls_back_to_parent_uuid() {
     );
 }
 
-/// A transcript that is not a transcript (D-12) still archives: it produces a
-/// session and no turns, and nothing errors.
+/// A transcript that is not a transcript still archives: it produces a session
+/// and no turns, and nothing errors.
 #[test]
 fn a_non_transcript_jsonl_archives_with_no_turns() {
     let bench = bench();
@@ -456,10 +552,10 @@ fn the_stored_checksum_is_blake3_over_the_uncompressed_stream() {
     assert_eq!(len, source.len() as i64);
 }
 
-/// STOR-02's premise, checked at the level this test can reach: the store is
-/// opened for writing exactly once per pass and every table moves together.
-/// The kill harness (AC2) is the real proof; this catches an ingest that wrote
-/// a session without its watermark.
+/// One transaction per pass, checked at the level this test can reach: the
+/// store is opened for writing exactly once per pass and every table moves
+/// together. The kill harness in `crates/terminus/tests/crash.rs` is the real
+/// proof; this catches an ingest that wrote a session without its watermark.
 #[test]
 fn a_pass_moves_the_session_its_turns_and_its_watermark_together() {
     let bench = bench();
@@ -485,7 +581,7 @@ fn a_pass_moves_the_session_its_turns_and_its_watermark_together() {
             "session_meta",
             "turns",
             "turns_fts",
-            // `session-basic.jsonl` carries a `Bash` tool_use, so phase 3's
+            // `session-basic.jsonl` carries a `Bash` tool_use, so the entity
             // extractor fills `entities` on the same pass. `paths` stays
             // absent: that command line names no file.
             "entities",
@@ -503,11 +599,10 @@ fn a_pass_moves_the_session_its_turns_and_its_watermark_together() {
 /// were the same answer. A pass over a grown transcript then wrote the tail as
 /// the whole blob - destroying every archived byte before it - allocated a
 /// second `session_no` that no longer matched the `sessions` row, and left the
-/// watermark ahead of the committed blob, which is the one state STOR-02 says
-/// a store must never reach. It exited 0, and `verify` certified it, because
-/// the checksum had been minted over the truncated stream. The obvious
-/// response to `verify` naming a session - re-run ingest - was what destroyed
-/// the archive.
+/// watermark ahead of the committed blob, which is the one state a store must
+/// never reach. It exited 0, and `verify` certified it, because the checksum
+/// had been minted over the truncated stream. The obvious response to `verify`
+/// naming a session - re-run ingest - was what destroyed the archive.
 #[test]
 fn a_session_that_lost_its_metadata_row_is_refused_rather_than_re_ingested() {
     let bench = bench();

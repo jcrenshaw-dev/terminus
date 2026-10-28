@@ -1,11 +1,10 @@
-//! `terminus mcp`: the archive, reachable from inside Claude Code (RCL-07 ..
-//! RCL-11).
+//! `terminus mcp`: the archive, reachable from inside Claude Code.
 //!
-//! A subcommand of the same binary (D-26), dispatched from `main.rs` like every
+//! A subcommand of the same binary, dispatched from `main.rs` like every
 //! other command, so install has one artifact to place and no version skew to
 //! keep in step.
 //!
-//! **Bounded by its stdin (D-27).** It reads newline-delimited JSON-RPC
+//! **Bounded by its stdin.** It reads newline-delimited JSON-RPC
 //! messages until EOF and returns 0. No socket, no listener, no port, no
 //! background thread, and no ingest lock - reads run beside an ingest pass
 //! under WAL, exactly as `cmd::status` already does. Claude Code's stdio
@@ -24,7 +23,7 @@
 //! call, and an open that happened before the client's first question would
 //! answer with an archive that is already out of date. `cmd::read::open` is the
 //! same entry point `search`, `show` and `sessions` use, so the read-only rule
-//! (D-10) and the missing-store answer are one implementation rather than two.
+//! and the missing-store answer are one implementation rather than two.
 //!
 //! **Nothing here may panic on what a client sent.** A panic writes a Rust
 //! backtrace onto the transport stream and takes the session's tool with it, and
@@ -197,7 +196,7 @@ fn route(request: &rpc::Request) -> Value {
         // The only method that reads the archive. Its `Err` is a protocol
         // failure - params that do not name a call this server has - and
         // never a tool that could not answer, which is a result carrying a
-        // reason (RCL-10).
+        // reason.
         "tools/call" => match tools::call(&request.params) {
             Ok(result) => rpc::result(&request.id, result),
             Err((code, message)) => rpc::failure(Some(&request.id), code, &message),

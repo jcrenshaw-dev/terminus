@@ -1,5 +1,5 @@
 //! `terminus doctor`: the report, the commands it prints, and the fact that it
-//! writes nothing anywhere (INST-06, AC6).
+//! writes nothing anywhere.
 //!
 //! Every spawn here points `TERMINUS_BIN_DIR`, `CLAUDE_CONFIG_DIR`,
 //! `TERMINUS_DATA_DIR`, `TERMINUS_CONFIG_DIR` and `HOME` at temporary
@@ -192,7 +192,7 @@ impl Fixture {
     /// Run a command doctor printed, through a shell, exactly as it was
     /// printed.
     ///
-    /// The point of AC6 is that the command in the report is a command: not a
+    /// The point is that the command in the report is a command: not a
     /// description, not a sentence with a path in it. So the test runs the
     /// string rather than asserting on its text. Stdin is null: nothing a fix
     /// runs may wait on an answer.
@@ -345,7 +345,7 @@ fn after_install_every_wiring_check_is_ok() {
     );
 }
 
-/// AC6, the whole of it: a problem, a command, and the command works.
+/// The whole contract: a problem, a command, and the command works.
 ///
 /// The command is run rather than matched, because the requirement is not that
 /// doctor prints a plausible string - it is that what it prints fixes the thing
@@ -522,7 +522,7 @@ fn break_registration(fixture: &Fixture, missing: bool) {
     write(&claude_json, &value);
 }
 
-/// D-16: with no `claude` on `PATH`, install cannot place the entry either, so
+/// With no `claude` on `PATH`, install cannot place the entry either, so
 /// the fix is the `claude mcp` command itself. With the remove in front when an
 /// entry is there, because `add-json` refuses a name that exists.
 #[test]
@@ -560,7 +560,7 @@ fn without_claude_on_path_the_mcp_fix_is_the_claude_mcp_command() {
     }
 }
 
-/// D-04: doctor's own `claude --version` carries the traffic variable. The
+/// Doctor's own `claude --version` carries the traffic variable. The
 /// fixture takes it out of doctor's environment, so a logged `1` can only have
 /// come from doctor.
 #[test]
@@ -579,12 +579,12 @@ fn doctors_claude_version_runs_with_nonessential_traffic_off() {
 // The store and the data directory, neither of which doctor creates
 // ---------------------------------------------------------------------------
 
-/// AC6's first half: a machine before its first ingest is a state, not a
+/// A machine before its first ingest is a state, not a
 /// failure, and the report leaves it exactly that.
 ///
 /// The listing is taken of the *parent*, before and after, so a created WAL
 /// file, a `LOCK`, or a directory made on the way to somewhere else fails this
-/// test too. `Store::open` would create all three (D-12), which is why doctor
+/// test too. `Store::open` would create all three, which is why doctor
 /// opens through the read path instead.
 #[test]
 fn a_data_directory_that_does_not_exist_is_a_state_and_stays_absent() {
@@ -625,7 +625,7 @@ fn after_one_ingest_the_store_and_the_last_run_are_reported() {
     fixture.install();
 
     // A `<uuid>.jsonl` directly inside a project directory, because that is
-    // what `discover` calls a transcript (D-16); a fixture kept under its own
+    // what `discover` calls a transcript; a fixture kept under its own
     // name would be walked past and the store would stay empty.
     let project = fixture.claude_dir.join("projects").join("-data-code-x");
     std::fs::create_dir_all(&project).unwrap();
@@ -694,6 +694,181 @@ fn a_last_run_with_only_notes_is_ok() {
     assert_eq!(report.state("last_run"), "ok", "{}", report.whole);
 }
 
+/// One `session-basic.jsonl` transcript as `discover` finds one, a
+/// `<uuid>.jsonl` directly inside a project directory.
+fn place_basic(fixture: &Fixture) -> PathBuf {
+    let project = fixture.claude_dir.join("projects").join("-data-code-x");
+    std::fs::create_dir_all(&project).unwrap();
+    let path = project.join("44444444-4444-4444-8444-444444444444.jsonl");
+    std::fs::write(&path, testkit::fixture_bytes("session-basic.jsonl")).unwrap();
+    path.canonicalize().unwrap()
+}
+
+fn store(fixture: &Fixture) -> rusqlite::Connection {
+    rusqlite::Connection::open(
+        fixture
+            .root
+            .join("data")
+            .join(terminus_core::store::DB_FILE_NAME),
+    )
+    .unwrap()
+}
+
+/// A bare `terminus ingest`, which must exit 0.
+fn ingest(fixture: &Fixture) {
+    let out = fixture.run(&["ingest"]);
+    assert_eq!(out.status.code(), Some(0), "ingest failed: {}", text(&out));
+}
+
+/// `terminus status`'s stdout, from a run that exited 0.
+fn status(fixture: &Fixture) -> String {
+    let out = fixture.run(&["status"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    String::from_utf8(out.stdout).unwrap()
+}
+
+/// A pass that only recovered is not an error (#96).
+///
+/// The damage is real: the session's watermark is pushed past what its archive
+/// holds, the state a killed pass leaves, and the next `terminus ingest` has to
+/// lower it. Nothing is planted in `runs`, so what `status` and `doctor` show
+/// is what that pass wrote.
+#[test]
+fn a_pass_that_only_lowered_a_watermark_is_not_an_error() {
+    let fixture = fixture();
+    fixture.install();
+    let path = place_basic(&fixture);
+    ingest(&fixture);
+
+    let key = terminus_core::ingest::path_key(&path).unwrap();
+    let conn = store(&fixture);
+    let committed: i64 = conn
+        .query_row(
+            "SELECT uncompressed_len FROM session_meta WHERE session_key = ?1",
+            [&key],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let changed = conn
+        .execute(
+            "UPDATE watermarks SET byte_offset = ?2 WHERE transcript_path = ?1",
+            rusqlite::params![key, committed + 4096],
+        )
+        .unwrap();
+    assert_eq!(changed, 1, "the session has no watermark to push");
+    drop(conn);
+    ingest(&fixture);
+
+    let printed = status(&fixture);
+    assert!(
+        !printed.contains("  error"),
+        "a pass that only recovered printed an error: {printed}"
+    );
+    let (_, notes) = printed
+        .split_once("  notes\n")
+        .unwrap_or_else(|| panic!("status printed no notes: {printed}"));
+    let line = notes
+        .lines()
+        .take_while(|line| line.starts_with("    "))
+        .map(str::trim_start)
+        .find(|line| line.starts_with(&format!("{key}: ")))
+        .unwrap_or_else(|| panic!("no note names {key}: {printed}"))
+        .to_owned();
+    assert!(line.ends_with("lowered"), "{line}");
+
+    let out = fixture.run(&["status", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let document: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let run = &document["data"]["last_run"];
+    assert_eq!(run["error"], serde_json::Value::Null, "{document}");
+    assert!(
+        run["notes"]
+            .as_str()
+            .is_some_and(|notes| notes.lines().any(|l| l == line)),
+        "{document}"
+    );
+
+    let (code, report) = fixture.doctor();
+    assert_eq!(code, Some(0), "{}", report.whole);
+    assert_eq!(report.state("last_run"), "ok", "{}", report.whole);
+}
+
+/// A pass that skipped a transcript is a problem until a later run fails
+/// nothing. The transcript is cut shorter than what its archive already holds,
+/// which the walk names and skips.
+#[test]
+fn a_pass_that_skipped_a_shrunk_transcript_is_a_problem() {
+    let fixture = fixture();
+    fixture.install();
+    let path = place_basic(&fixture);
+    ingest(&fixture);
+
+    std::fs::write(&path, b"{}\n").unwrap();
+    // Exit 0: a skipped file is not a failed pass.
+    ingest(&fixture);
+
+    let printed = status(&fixture);
+    let (_, under_error) = printed
+        .split_once("  error\n")
+        .unwrap_or_else(|| panic!("status printed no error: {printed}"));
+    assert!(
+        under_error.contains(path.to_str().unwrap()),
+        "status does not name the transcript under error: {printed}"
+    );
+
+    let (code, report) = fixture.doctor();
+    assert_eq!(code, Some(1), "{}", report.whole);
+    assert_eq!(report.problems(), ["last_run"], "{}", report.whole);
+}
+
+/// Finalized sessions the per-pass bound leaves for the next pass are a note,
+/// not an error (#96).
+///
+/// One more one-record session than a pass observes, every record months old,
+/// so the idle rule finalizes all of them on the first pass and the bound
+/// leaves exactly one waiting.
+#[test]
+fn sessions_left_waiting_to_be_observed_are_not_an_error() {
+    let fixture = fixture();
+    fixture.install();
+
+    let project = fixture.claude_dir.join("projects").join("-data-code-x");
+    std::fs::create_dir_all(&project).unwrap();
+    for n in 0..terminus_core::observe::MAX_PER_PASS + 1 {
+        std::fs::write(
+            project.join(format!("{n:08x}-1111-4111-8111-111111111111.jsonl")),
+            format!(
+                "{{\"type\":\"user\",\"uuid\":\"cccccccc-0000-4000-8000-{n:012x}\",\
+                  \"timestamp\":\"2026-08-12T10:{:02}:{:02}.000Z\",\
+                  \"sessionId\":\"{n:08x}-2222-4222-8222-222222222222\",\
+                  \"cwd\":\"/data/code/x\",\
+                  \"message\":{{\"role\":\"user\",\"content\":[{{\"type\":\"text\",\"text\":\"hi\"}}]}}}}\n",
+                n / 60,
+                n % 60
+            ),
+        )
+        .unwrap();
+    }
+    ingest(&fixture);
+
+    let out = fixture.run(&["status", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let document: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let run = &document["data"]["last_run"];
+    assert_eq!(run["error"], serde_json::Value::Null, "{document}");
+    assert_eq!(run["files_failed"], 0, "{document}");
+    assert!(
+        run["notes"].as_str().is_some_and(
+            |notes| notes.contains("1 more finalized session(s) are waiting to be observed")
+        ),
+        "{document}"
+    );
+
+    let (code, report) = fixture.doctor();
+    assert_eq!(code, Some(0), "{}", report.whole);
+    assert_eq!(report.state("last_run"), "ok", "{}", report.whole);
+}
+
 /// Every name directly inside `dir`, sorted.
 fn entries(dir: &Path) -> Vec<String> {
     let mut found: Vec<String> = std::fs::read_dir(dir)
@@ -710,7 +885,7 @@ fn entries(dir: &Path) -> Vec<String> {
 
 /// Both values, the file each came from, and not one byte written back.
 ///
-/// The byte comparison is the requirement: INST-06 says doctor never repairs,
+/// The byte comparison is the requirement: doctor never repairs,
 /// and the settings file is the thing it would be most tempting to repair,
 /// since `install` already knows how to raise `cleanupPeriodDays`.
 #[test]
@@ -804,7 +979,7 @@ fn a_project_settings_file_outranks_the_user_one() {
 // ---------------------------------------------------------------------------
 
 /// One document, the envelope's four keys, and `data` keyed by check name with
-/// the same three fields under every one of them (D-24, RCL-06).
+/// the same three fields under every one of them.
 #[test]
 fn the_json_document_carries_every_check_by_name() {
     let fixture = fixture();

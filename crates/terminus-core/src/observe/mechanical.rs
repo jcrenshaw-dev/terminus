@@ -1,4 +1,4 @@
-//! OBS-01: what one session did, read off the parser and never off a model.
+//! What one session did, read off the parser and never off a model.
 //!
 //! Every fact here is either a SQL query over tables ingest already wrote or a
 //! value lifted straight out of the session's own bytes. **No model is called
@@ -6,7 +6,7 @@
 //! machine with no network at all still gets an auditable account of every
 //! finalized session.
 //!
-//! **Where each fact comes from (D-04).** `paths` gives the files and
+//! **Where each fact comes from.** `paths` gives the files and
 //! `turns.tool_name` says whether the turn that named one was writing it;
 //! `entities` of kind `tool` and `error` give the tools and the failures;
 //! `session_meta` gives the branch and the two timestamps the duration is the
@@ -73,7 +73,7 @@ const WRITING_TOOLS: [&str; 4] = ["Edit", "MultiEdit", "Write", "NotebookEdit"];
 const DURATION_SQL: &str = "CAST(round((julianday(last_turn_at) - julianday(first_turn_at)) \
                             * 86400000) AS INTEGER) / 1000";
 
-/// The OBS-01 fact set for one session.
+/// The mechanical fact set for one session.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Mechanical {
     pub files_read: Vec<String>,
@@ -122,7 +122,7 @@ impl Mechanical {
     }
 }
 
-/// Compute the OBS-01 facts for one archived session.
+/// Compute the mechanical facts for one archived session.
 ///
 /// The connection is the only input beside the key: this reads and never
 /// writes, so a caller may run it inside its own transaction or outside one.
@@ -217,9 +217,9 @@ fn cap(
 /// The files this session read and the files it changed.
 ///
 /// A file both read and written appears in both lists. Two lists of paths is
-/// what OBS-01 asks for, and "modified" has to mean that a tool which writes
-/// actually named it - so a path an `Edit` and a `Read` both touched is true on
-/// both counts rather than sorted into one.
+/// what an observation reports, and "modified" has to mean that a tool which
+/// writes actually named it - so a path an `Edit` and a `Read` both touched is
+/// true on both counts rather than sorted into one.
 fn files(conn: &Connection, session_key: &str) -> Result<(Vec<String>, Vec<String>)> {
     let mut statement = conn.prepare(
         "SELECT DISTINCT p.path, coalesce(t.tool_name, '')
@@ -247,14 +247,28 @@ fn files(conn: &Connection, session_key: &str) -> Result<(Vec<String>, Vec<Strin
     Ok((read, modified))
 }
 
+/// The entity query, as one constant so the test below plans the statement
+/// that runs and not a copy of it.
+const ENTITY_VALUES_SQL: &str = "\
+SELECT DISTINCT e.value_norm
+  FROM turns t CROSS JOIN entities e ON e.turn_id = t.id
+ WHERE t.session_key = ?1 AND e.kind = ?2
+ ORDER BY e.value_norm";
+
 /// Every distinct entity value of one kind this session's turns left behind.
+///
+/// The query starts from this session's turns (#70). Joined the other way
+/// round, the planner picked `SEARCH e USING INDEX idx_entities_lookup
+/// (kind=?)`, which reads every entity of that kind in the store for each
+/// session: on a 3,448-session store holding 138,371 `tool` entities, 30
+/// sessions took 1.82 s that way and 0.011 s this way, and returned the same 86
+/// values.
+///
+/// `CROSS JOIN` pins the order in the statement itself, because an index would
+/// reach an existing store only through a `DERIVED_SCHEMA` bump, which rebuilds
+/// every store. `a_plan_that_starts_from_the_sessions_turns` holds the shape.
 fn entity_values(conn: &Connection, session_key: &str, kind: &str) -> Result<Vec<String>> {
-    let mut statement = conn.prepare(
-        "SELECT DISTINCT e.value_norm
-           FROM entities e JOIN turns t ON t.id = e.turn_id
-          WHERE t.session_key = ?1 AND e.kind = ?2
-          ORDER BY e.value_norm",
-    )?;
+    let mut statement = conn.prepare(ENTITY_VALUES_SQL)?;
     let rows = statement.query_map(rusqlite::params![session_key, kind], |r| {
         r.get::<_, String>(0)
     })?;
@@ -446,6 +460,34 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap()
+    }
+
+    /// #70: the entity query must reach entities through the session's turns.
+    /// Index names are the schema's own, so a SQLite rewording of its plan text
+    /// cannot fail this.
+    #[test]
+    fn a_plan_that_starts_from_the_sessions_turns() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = Connection::open(dir.path().join("terminus.db")).unwrap();
+        conn.execute_batch(crate::store::schema::CREATE_SQL).unwrap();
+
+        let mut statement = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {ENTITY_VALUES_SQL}"))
+            .unwrap();
+        let details: Vec<String> = statement
+            .query_map(rusqlite::params!["session", "tool"], |r| r.get(3))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+
+        assert!(
+            details.iter().any(|d| d.contains("idx_entities_turn")),
+            "the plan never uses idx_entities_turn: {details:?}"
+        );
+        assert!(
+            !details.iter().any(|d| d.contains("idx_entities_lookup")),
+            "the plan scans every entity of the kind: {details:?}"
+        );
     }
 
     #[test]

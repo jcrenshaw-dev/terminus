@@ -1,4 +1,4 @@
-//! Resolving the data directory and opening the store behind the D-09 version
+//! Resolving the data directory and opening the store behind the version
 //! gate.
 
 use std::path::{Path, PathBuf};
@@ -10,10 +10,9 @@ use crate::error::{Error, Result};
 /// The archive format this build writes and understands.
 ///
 /// Bumped only when the archived bytes change meaning. The archive tables never
-/// migrate (`DESIGN-BRIEF.md:94`) and there is no conversion, so a store
-/// written in an older format is refused ([`Error::ArchiveFormatTooOld`]) rather
-/// than rebuilt: a rebuild would read the old bytes as the new format and fail
-/// every session.
+/// migrate and there is no conversion, so a store written in an older format is
+/// refused ([`Error::ArchiveFormatTooOld`]) rather than rebuilt: a rebuild
+/// would read the old bytes as the new format and fail every session.
 ///
 /// Format 2 is numbered block rows in `blocks`, each with its compressed
 /// bytes and a BLAKE3 hash of its uncompressed bytes, and `session_meta` holds
@@ -39,7 +38,7 @@ pub const META_ARCHIVE_FORMAT: &str = "archive_format";
 pub const META_DERIVED_SCHEMA: &str = "derived_schema";
 
 /// How long a writer waits behind another writer before giving up. Exclusivity
-/// is the `LOCK` file's job (D-15), not the busy handler's; this is only there
+/// is the `LOCK` file's job, not the busy handler's; this is only there
 /// so a short overlap with a reader is not an error.
 const BUSY_TIMEOUT_MS: u32 = 5_000;
 
@@ -55,7 +54,7 @@ const STATEMENT_CACHE_CAPACITY: usize = 32;
 /// Returned as an inspectable outcome rather than acted on here: the rebuild
 /// lives in `reindex`. The archive is never part of the rebuild, and an archive
 /// format other than this build's never gets this far: newer and older are both
-/// refused by the gate (STOR-10).
+/// refused by the gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RebuildRequired {
     pub store_archive_format: i64,
@@ -100,19 +99,19 @@ impl Store {
     ///
     /// The gate runs before any write. On an existing store the version
     /// integers are read over a **read-only** connection that is closed again
-    /// before a writable one is opened: AC5 requires a refused open to leave
+    /// before a writable one is opened: a refused open must leave
     /// `terminus.db`, its WAL and the `runs` table byte-for-byte unchanged, and
     /// read-only is what makes that true at the SQLite level rather than by
     /// discipline. A writable connection would checkpoint the WAL when the last
     /// one closes, which rewrites both files without a single statement of ours.
     ///
-    /// Everything this creates is owner-only from the syscall that creates it
-    /// (PRIV-02): the data directory 0700 and `terminus.db` 0600, the latter
-    /// created empty by us BEFORE rusqlite ever sees the path. `-wal` and
-    /// `-shm` are then SQLite's to make, and it `fchmod`s a fresh sidecar to
-    /// the main database's mode after opening it, which is why 0600 on the one
-    /// file covers all three and why there is no `chmod` after the fact here -
-    /// that would be a window with session text already on disk at 0644.
+    /// Everything this creates is owner-only from the syscall that creates it:
+    /// the data directory 0700 and `terminus.db` 0600, the latter created
+    /// empty by us BEFORE rusqlite ever sees the path. `-wal` and `-shm` are
+    /// then SQLite's to make, and it `fchmod`s a fresh sidecar to the main
+    /// database's mode after opening it, which is why 0600 on the one file
+    /// covers all three and why there is no `chmod` after the fact here - that
+    /// would be a window with session text already on disk at 0644.
     pub fn open(data_dir: &Path) -> Result<Self> {
         crate::owner_only::create_dir_all(data_dir).map_err(|e| Error::io(data_dir, e))?;
         let path = data_dir.join(DB_FILE_NAME);
@@ -161,9 +160,9 @@ impl Store {
             // open never leaves a declared column absent.
             missing: Vec::new(),
             // The same sentence, one level up: `bring_forward`'s missing-table
-            // arm creates a table this build declares and the store lacks, which
-            // is how phase 6 landed `decisions` and `labels` with no
-            // `DERIVED_SCHEMA` bump (D-02).
+            // arm creates a table this build declares and the store lacks, so a
+            // table added in a later release reaches an existing store with no
+            // `DERIVED_SCHEMA` bump.
             missing_tables: Vec::new(),
         };
         if state == StoreState::Fresh {
@@ -173,19 +172,18 @@ impl Store {
             // `rebuild_required`. `reindex` and the recovery at the top of an
             // ingest pass act on that outcome through `reindex::up_to_date`,
             // while `compact`, `observations regenerate` and the snapshot taken
-            // after a pass open through here alone - so gating the column
-            // bring-forward on it would leave them naming columns an older
-            // store does not have. Adding a missing column is safe on any
-            // writable opener; the destructive derived-table rebuild stays
+            // after a pass open through here alone - so gating `bring_forward`
+            // on it would leave them naming a table the store lacks. Creating a
+            // missing table is safe on any writable opener; the destructive
+            // derived-table rebuild stays
             // exactly where it is, outside this function and inside the ingest
             // lock.
             bring_forward(&store.conn)?;
-            drop_summary_columns(&store.conn)?;
         }
         Ok(store)
     }
 
-    /// Open an existing store for reading, and do nothing else to it (D-10).
+    /// Open an existing store for reading, and do nothing else to it.
     ///
     /// `SQLITE_OPEN_READ_ONLY`, no `create_dir_all`, no `initialize`, no
     /// `bring_forward`, no `pragma_update`. A `readOnlyHint` server may not
@@ -196,22 +194,21 @@ impl Store {
     ///
     /// The version gate still runs, because it is already read-only and because
     /// [`Store::rebuild_required`] is what lets a read command say the store
-    /// predates this build instead of silently querying an old-shape index
-    /// (D-18).
+    /// predates this build instead of silently querying an old-shape index.
     ///
-    /// Dropping `bring_forward` means the columns it adds are not guaranteed to
-    /// be there: `session_meta.project_pre_worktree`, `agent_meta` and
-    /// `transcript_diverged` all arrived after phase 1, and a read query naming
-    /// one of them fails with `no such column` on a connection that cannot
-    /// `ALTER`. So their absence is measured here, once, and reported through
-    /// [`Store::missing_columns`] - the D-18 degraded read - rather than left to
-    /// surface as a SQLite error from the middle of a search.
+    /// Skipping `bring_forward` means a table or column this build declares is
+    /// not guaranteed to be there, and a read query naming one fails with
+    /// `no such table` or `no such column` on a connection that cannot `CREATE`
+    /// or `ALTER`. So their absence is measured here, once, and reported through
+    /// [`Store::missing_tables`] and [`Store::missing_columns`] - the degraded
+    /// read - rather than left to surface as a SQLite error from the middle of
+    /// a search.
     ///
     /// A missing data directory or database file, or a database with no
     /// tables, is [`Error::StoreNotFound`] and any other failure to open is
     /// [`Error::StoreUnreadable`]: both are variants and neither is a panic,
-    /// because RCL-10 renders them as an empty result with a reason and a
-    /// caller must not have to match on message text to tell them apart.
+    /// because a read command renders them as an empty result with a reason
+    /// and a caller must not have to match on message text to tell them apart.
     pub fn open_read_only(data_dir: &Path) -> Result<Self> {
         let path = data_dir.join(DB_FILE_NAME);
 
@@ -259,7 +256,7 @@ impl Store {
         // `Store::open` stamps `journal_mode=wal` before `initialize` commits,
         // so a non-empty file with no tables is a store another process is still
         // creating: no store yet. Tables but no `meta` is somebody else's file,
-        // and `read_versions` says so (phase 2 D-03).
+        // and `read_versions` says so.
         if tables == 0 {
             return Err(Error::StoreNotFound { path });
         }
@@ -350,16 +347,16 @@ impl Store {
     /// Tables this build declares and the open store does not carry.
     ///
     /// The table-level counterpart of [`Store::missing_columns`], and it exists
-    /// because the column list cannot answer for a whole table: phase 6 added
-    /// `decisions` and `labels` to [`crate::store::schema::TABLES`] with no
-    /// `DERIVED_SCHEMA` bump (D-02), so on a store written by an older build
-    /// `rebuild` is `None` and [`Store::missing_columns`] - which walks
+    /// because the column list cannot answer for a whole table: `decisions`
+    /// and `labels` sit in [`crate::store::schema::TABLES`] with no
+    /// `DERIVED_SCHEMA` bump behind them, so on a store written by an older
+    /// build `rebuild` is `None` and [`Store::missing_columns`] - which walks
     /// `BRING_FORWARD_COLUMNS` alone - is empty. Both terms of
     /// [`Store::predates_this_build`] are false and the store reads as current,
     /// while a query naming either table fails with `no such table`.
     ///
     /// Deliberately NOT folded into [`Store::predates_this_build`]. That flag
-    /// makes every read command print the D-18 degraded-results line, and a
+    /// makes every read command print the degraded-results line, and a
     /// store missing only the decision log answers `search`, `show` and
     /// `sessions` perfectly well - the absence is a fact about one report, so it
     /// is reported to the commands whose answer depends on it and to no others.
@@ -369,7 +366,7 @@ impl Store {
         &self.missing_tables
     }
 
-    /// Is this store older than the build reading it (D-18)?
+    /// Is this store older than the build reading it?
     ///
     /// Either half is enough: version integers that do not match, or a column
     /// this build's queries name and the store does not carry. A read command
@@ -399,15 +396,15 @@ impl Store {
     }
 }
 
-/// Narrow a store an earlier build left readable by group or world (PRIV-02).
+/// Narrow a store something left readable by group or world.
 ///
-/// Runs on every [`Store::open`] and on NO read-only open (D-05): `doctor`,
+/// Runs on every [`Store::open`] and on NO read-only open: `doctor`,
 /// `search`, `show` and `replay` report on a store, and reporting on something
 /// is not permission to change it. Its counterpart is that a writable open is
 /// already a write, so repairing there costs the caller nothing it was not
 /// already paying.
 ///
-/// Compare, then chmod - never chmod unconditionally (D-06). A `chmod` to the
+/// Compare, then chmod - never chmod unconditionally. A `chmod` to the
 /// mode a file already has still moves its ctime, and "the repair ran once" is
 /// exactly what a second open leaving every ctime alone is the evidence for.
 /// There is no marker key recording the repair as done, deliberately: a store
@@ -415,7 +412,7 @@ impl Store {
 /// `chmod` - is tightened again, where a marker or a version gate would decide
 /// it had already been handled. The cost is a handful of `stat` calls per open.
 ///
-/// Every failure is ignored and the open proceeds (D-12). The alternative is an
+/// Every failure is ignored and the open proceeds. The alternative is an
 /// ingest that stops dead on a store whose files another account owns, or one on
 /// a read-only mount, which trades a mode this build cannot fix for a product
 /// that does not run.
@@ -494,17 +491,21 @@ fn narrow(path: &Path, mode: u32, wanted: fn(&std::fs::FileType) -> bool) {
 /// table lacks. It drops nothing, renames nothing and rewrites nothing, which
 /// is what makes it safe to run on a read command's open. `sessions` and
 /// `session_meta` are archive tables and an added column is the only change
-/// either is ever allowed (`DESIGN-BRIEF.md:94`).
+/// either is ever allowed.
 ///
 /// Nothing is written when nothing is missing - the common case is three read
 /// queries and no transaction at all - so a plain reopen of an up-to-date store
 /// still touches no byte of it.
 ///
 /// When something is missing, the list is read again inside an IMMEDIATE
-/// transaction before anything is altered, as [`drop_summary_columns`] does.
-/// Two processes opening one older store at once would otherwise both see the
-/// same column missing, and the second `ALTER TABLE ADD COLUMN` would fail on a
-/// column the first had just added.
+/// transaction before anything is written. Two processes opening a store that
+/// lacks a table would otherwise both see it missing under a deferred
+/// transaction's read lock, and once the first had created it, the second's
+/// read lock could not become the write lock its own `CREATE` needs: SQLite
+/// fails that upgrade at once with "database is locked" instead of calling the
+/// busy handler. Taking the write lock first means the second open waits, reads
+/// the list again and finds nothing left to add. A column listed in
+/// [`crate::store::schema::BRING_FORWARD_COLUMNS`] is covered the same way.
 fn bring_forward(conn: &Connection) -> Result<()> {
     let (missing_tables, missing_columns) = missing(conn)?;
     if missing_tables.is_empty() && missing_columns.is_empty() {
@@ -559,42 +560,6 @@ fn missing(conn: &Connection) -> Result<(Vec<&'static str>, Vec<Column>)> {
     Ok((missing_tables, missing_columns))
 }
 
-/// Drop the session-summary columns from `observations`, and their meta key,
-/// on a store that still has them.
-///
-/// Kept out of [`bring_forward`] because it is destructive. The usual case is
-/// one `PRAGMA` read and nothing written. When a column is there, the list is
-/// read again inside an IMMEDIATE transaction, so two processes opening the
-/// same old store at once cannot both attempt the drop and have the second
-/// fail on a column the first already removed.
-fn drop_summary_columns(conn: &Connection) -> Result<()> {
-    if summary_columns(conn)?.is_empty() {
-        return Ok(());
-    }
-    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
-    for column in summary_columns(&tx)? {
-        // Identifiers come from a `const` in this crate, never from a caller.
-        tx.execute_batch(&format!("ALTER TABLE observations DROP COLUMN {column}"))?;
-    }
-    tx.execute(
-        "DELETE FROM meta WHERE key = ?1",
-        [crate::store::schema::DROPPED_META_KEY],
-    )?;
-    tx.commit()?;
-    Ok(())
-}
-
-/// Which of [`crate::store::schema::DROPPED_OBSERVATION_COLUMNS`] the store
-/// still carries.
-fn summary_columns(conn: &Connection) -> Result<Vec<&'static str>> {
-    let present = column_names(conn, "observations")?;
-    Ok(crate::store::schema::DROPPED_OBSERVATION_COLUMNS
-        .iter()
-        .copied()
-        .filter(|name| present.iter().any(|p| p == name))
-        .collect())
-}
-
 /// Which of [`crate::store::schema::BRING_FORWARD_COLUMNS`] the open store does
 /// not carry.
 ///
@@ -622,7 +587,7 @@ fn missing_columns(conn: &Connection) -> Result<Vec<MissingColumn>> {
 ///
 /// The read-only counterpart of [`bring_forward`]'s missing-table arm: same
 /// list, same `sqlite_master` comparison, and no `CREATE`. A read never
-/// migrates (D-18), so this is what its caller must not query.
+/// migrates, so this is what its caller must not query.
 fn missing_tables(conn: &Connection) -> Result<Vec<&'static str>> {
     let present = table_names(conn)?;
     Ok(crate::store::schema::TABLES
@@ -672,8 +637,8 @@ enum StoreState {
 /// database that contains nothing.
 ///
 /// Presence of tables is the test instead. It reads `sqlite_master` over a
-/// **read-only** connection, so AC5's "a refused open leaves the store
-/// byte-for-byte unchanged" survives it. The one exception is a hot journal,
+/// **read-only** connection, so "a refused open leaves the store byte-for-byte
+/// unchanged" survives it. The one exception is a hot journal,
 /// which only a writable connection can roll back. Refusing it instead would
 /// leave a store killed during its first open refused by every open after.
 ///
@@ -791,7 +756,7 @@ fn read_versions(conn: &Connection, path: &Path) -> Result<Option<RebuildRequire
         });
     }
 
-    // Refused, never rebuilt (STOR-10). A rebuild here would create the new
+    // Refused, never rebuilt. A rebuild here would create the new
     // archive tables empty inside the old store, fail every session in
     // `reindex` and stamp the new format over bytes only the old one reads.
     // Both opens reach this before any writable connection, so `bring_forward`
@@ -823,7 +788,7 @@ fn read_versions(conn: &Connection, path: &Path) -> Result<Option<RebuildRequire
 }
 
 /// The file in terminus's config directory that names where the data directory
-/// lives (STOR-07, D-06).
+/// lives.
 ///
 /// Plain text holding one absolute path, and deliberately NOT TOML: the `toml`
 /// dependency in the root `Cargo.toml` is `default-features = false` with the
@@ -842,15 +807,38 @@ pub fn location_pointer_path() -> Result<PathBuf> {
     Ok(crate::config::config_dir()?.join(LOCATION_FILE_NAME))
 }
 
-/// The data directory, resolved once at startup and passed down explicitly
-/// afterwards, never re-derived (`DESIGN-BRIEF.md:404`).
+/// Record that the data directory now lives at `destination`, for `terminus
+/// data move` and nothing else.
 ///
-/// Three sources, in this order and no other (D-06):
+/// The text is the destination and one newline, written through a temporary
+/// and a rename ([`owner_only::replace`](crate::owner_only::replace)). Atomic
+/// because the alternative is a truncated pointer: a process killed mid-write
+/// would leave a file naming half a path, and the next command would resolve a
+/// store that does not exist rather than either the old one or the new one.
+///
+/// The pointer is 0600 from the create. The config directory is made 0700 only
+/// when this call makes it: one that already exists keeps its mode. A move
+/// killed mid-write can leave `.data-location-{pid}-{n}.tmp` behind in the
+/// config directory, and nothing deletes it.
+pub fn write_location_pointer(destination: &Path) -> Result<()> {
+    let pointer = location_pointer_path()?;
+    if let Some(dir) = pointer.parent() {
+        crate::owner_only::create_dir_all(dir).map_err(|e| Error::io(dir, e))?;
+    }
+    let text = format!("{}\n", destination.display());
+    crate::owner_only::replace(&pointer, text.as_bytes(), ".data-location-", ".tmp")
+        .map_err(|e| Error::io(&pointer, e))
+}
+
+/// The data directory, resolved once at startup and passed down explicitly
+/// afterwards, never re-derived.
+///
+/// Three sources, in this order and no other:
 ///
 /// 1. `TERMINUS_DATA_DIR`, which outranks everything. A test bench and a
 ///    spawned child that set it behave exactly as they did before the pointer
-///    existed, which is what makes STOR-07 a change nothing else has to know
-///    about.
+///    existed, which is what makes the pointer a change nothing else has to
+///    know about.
 /// 2. The [`LOCATION_FILE_NAME`] pointer `terminus data move` writes.
 /// 3. The platform location, which is where every user starts.
 ///

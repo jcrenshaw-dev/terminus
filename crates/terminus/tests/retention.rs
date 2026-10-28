@@ -1,4 +1,4 @@
-//! `terminus retention --dry-run` at the process boundary (RET-02, RET-03).
+//! `terminus retention --dry-run` at the process boundary.
 //!
 //! The report's whole claim is that it names what the NEXT pass will do, so
 //! every case here runs the pass afterwards and compares. Asserting the
@@ -22,7 +22,7 @@ const PROJECT: &str = "-data-projects-cadence";
 /// Evict everything a month past its last turn.
 const EVICT_30: &str = "[retention]\naction = \"evict\"\nage_days = 30\n";
 /// The same window, the other verb. `delete` still waits for the transcript to
-/// be gone (D-02), so the age alone never selects anything.
+/// be gone, so the age alone never selects anything.
 const DELETE_30: &str = "[retention]\naction = \"delete\"\nage_days = 30\n";
 
 /// Comfortably outside a 30-day window: ten days of clearance, so neither
@@ -74,7 +74,7 @@ impl Bench {
 
     /// Write `terminus.toml` into the config directory this bench points the
     /// binary at. Retention is configured by hand-edited TOML and by nothing
-    /// else (D-01), so this is exactly what a user does.
+    /// else, so this is exactly what a user does.
     fn config(&self, text: &str) {
         std::fs::write(self.config_dir.join("terminus.toml"), text).unwrap();
     }
@@ -146,9 +146,9 @@ impl Bench {
     /// The turn ids one search returns that belong to one session.
     ///
     /// Through the binary rather than through a direct `turns_fts MATCH`,
-    /// because what AC2 claims is about the command a person runs: exclusion,
-    /// scoping and the excerpt read all sit between the index and the answer,
-    /// and the excerpt read is the one that touches the emptied blob.
+    /// because staying searchable is a claim about the command a person runs:
+    /// exclusion, scoping and the excerpt read all sit between the index and the
+    /// answer, and the excerpt read is the one that touches the emptied blob.
     fn search_hits_in(&self, key: &Path, token: &str) -> Vec<i64> {
         let out = self.run(&["search", "--project", "*", token, "--json"]);
         assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
@@ -240,7 +240,7 @@ fn strings(value: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
-/// AC3. The report names exactly the sessions the immediately following pass
+/// The report names exactly the sessions the immediately following pass
 /// evicts - and it names them before anything has happened.
 #[test]
 fn the_dry_run_names_exactly_what_the_next_ingest_pass_evicts() {
@@ -319,12 +319,12 @@ fn running_the_dry_run_twice_changes_no_row_in_any_table() {
     assert_eq!(bench.snapshot(), before, "the dry run wrote something");
 }
 
-/// AC2 end to end. An evicted session stays listed and stays searchable with
-/// its body flagged; a deleted one is gone from both.
+/// Eviction and deletion end to end. An evicted session stays listed and stays
+/// searchable with its body flagged; a deleted one is gone from both.
 ///
 /// Two passes and two policies, because one global `action` is one verb: the
 /// first evicts the session whose transcript is still there, the second deletes
-/// the one Claude Code's own cleanup has already removed (D-02). The evicted
+/// the one Claude Code's own cleanup has already removed. The evicted
 /// session survives the second pass untouched, which is the arm on the ingest
 /// path being exercised rather than described.
 #[test]

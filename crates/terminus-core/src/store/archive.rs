@@ -4,7 +4,7 @@
 //! name how a session is stored. A session is numbered rows in `blocks`, one
 //! per block of its stream, cut at the block size `session_meta` records for
 //! it. Ranges and offsets are in the uncompressed session stream, and nothing
-//! here checks a hash (phase 7 D-15): `verify` and append are the checkers.
+//! here checks a hash: `verify` and append are the checkers.
 
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -21,7 +21,7 @@ pub struct Ranges {
     /// not read fails alone.
     pub bytes: Vec<Result<Vec<u8>>>,
     /// Block rows fetched from the database, each once however many ranges
-    /// need it (D-14).
+    /// need it.
     pub rows_fetched: usize,
     /// Blocks decompressed to cut every range, each once however many ranges
     /// need it.
@@ -30,7 +30,7 @@ pub struct Ranges {
 
 /// Read `(stream_offset, byte_len)` ranges out of one session, fetching and
 /// decompressing only the block rows those ranges cover, each row once however
-/// many ranges need it (D-13, D-20).
+/// many ranges need it.
 ///
 /// `None` when the session has no `sessions` row. A session whose layout will
 /// not read fails every range rather than the call, and a missing row or a
@@ -217,7 +217,7 @@ pub fn rows(conn: &Connection, session_key: &str) -> Result<Vec<Row>> {
 }
 
 /// Every session's stored archive bytes, by `session_key`: the sum of its
-/// block rows' lengths (D-17).
+/// block rows' lengths.
 pub fn stored_bytes(conn: &Connection) -> Result<BTreeMap<String, i64>> {
     let mut statement = conn.prepare(
         "SELECT s.session_key, coalesce(sum(length(b.bytes)), 0)
@@ -228,7 +228,7 @@ pub fn stored_bytes(conn: &Connection) -> Result<BTreeMap<String, i64>> {
     Ok(rows.collect::<std::result::Result<_, _>>()?)
 }
 
-/// What an append needs from one session's rows (D-10, D-11).
+/// What an append needs from one session's rows.
 pub(crate) struct AppendState {
     /// Every stored hash in `block_no` order, or why the list will not serve:
     /// a gap in the numbering or a hash that is not 32 bytes. Kept rather than
@@ -256,7 +256,7 @@ impl AppendState {
 
 /// Read what an append to `session_no` needs: every hash, and the bytes of at
 /// most the tail row. With `every_row` it fetches every row's bytes instead,
-/// which only a session flagged diverged asks for (D-13).
+/// which only a session flagged diverged asks for.
 pub(crate) fn append_state(
     conn: &Connection,
     session_no: i64,

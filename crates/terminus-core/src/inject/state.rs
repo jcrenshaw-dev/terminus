@@ -1,4 +1,4 @@
-//! What one Claude Code session has already been given (INJ-04, INJ-05).
+//! What one Claude Code session has already been given.
 //!
 //! One JSON file per session, under an `injection` subdirectory of the data
 //! directory, keyed on the payload's `session_id`. It carries the turn ids
@@ -6,21 +6,22 @@
 //! turns that were suppressed and why, and the flag a `SessionStart` whose
 //! `source` is `compact` leaves for the next prompt to consume.
 //!
-//! **Not a table (D-06, D-14).** A write on the prompt path is the one thing
-//! INJ-06 cannot tolerate: a backfill was measured holding the store for 49 s
-//! over the real corpus, and a blocked WRITER is strictly worse than a blocked
-//! reader, which is all the read side ever risks. And a new table could not
-//! reach an existing user's store at all - `Store::open` runs `CREATE_SQL` only
-//! against a fresh store and `bring_forward` covers columns, not tables - so it
-//! would arrive either as `no such table` on every upgraded machine or as a
+//! **Not a table.** A write on the prompt path is the one thing its deadline
+//! cannot tolerate: a backfill was measured holding the store for 49 s over the
+//! real corpus, and a blocked WRITER is strictly worse than a blocked reader,
+//! which is all the read side ever risks. And a new table could not reach an
+//! existing user's store at all - `Store::open` runs `CREATE_SQL` only against
+//! a fresh store and `bring_forward` covers columns, not tables - so it would
+//! arrive either as `no such table` on every upgraded machine or as a
 //! `DERIVED_SCHEMA` bump forcing that same ~49 s rebuild on the first
 //! hook-spawned pass after an upgrade.
 //!
-//! **Not phase 6's decision log.** FEED-01 is durable, joined against the
-//! transcripts that follow, and carries the entities, the candidates, the
-//! scores, the thresholds and the tokens spent. This is disposable per-session
-//! scratch and holds only what INJ-04 has to distinguish, which is why the
-//! reasons stop at three.
+//! **Not the decision log.** That log ([`super::decision`]) is durable, joined
+//! against the transcripts that follow, and carries the entities, the
+//! candidates, the scores, the thresholds and the tokens spent. This is
+//! disposable per-session scratch and holds only what it takes to tell a turn
+//! already injected, a turn of the session in view and a turn the brief quoted
+//! apart, which is why the reasons stop at three.
 //!
 //! **Every read fails open.** A missing file, an unreadable one, bytes that are
 //! not JSON and a document this build does not recognize all read as empty
@@ -29,7 +30,6 @@
 //! something twice, and the worst an error could do is inject nothing ever
 //! again.
 
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -50,15 +50,6 @@ pub const DIR_NAME: &str = "injection";
 /// injected twice.
 const FORMAT: u32 = 1;
 
-/// The shortest and longest a `session_id` may be and still name a file.
-///
-/// A Claude Code `session_id` is a 36-character uuid. The window is wider than
-/// that on both sides so a harness that changes its id format does not silently
-/// lose suppression, and narrow enough that nothing pathological gets near a
-/// filesystem call.
-const MIN_NAME: usize = 8;
-const MAX_NAME: usize = 64;
-
 /// How many suppressions one session's file keeps.
 ///
 /// The list is a record to read and not a fact anything decides on, so it is
@@ -72,18 +63,18 @@ const MAX_SUPPRESSED: usize = 100;
 pub(crate) const TEMPORARY_PREFIX: &str = ".inject-";
 pub(crate) const TEMPORARY_SUFFIX: &str = ".tmp";
 
-/// Why a candidate turn was not injected (INJ-04).
+/// Why a candidate turn was not injected.
 ///
-/// Exactly the three distinctions INJ-04 draws and no more. Entities,
-/// candidates, scores, thresholds and token counts belong to FEED-01, which
-/// owns them and lands in phase 6; recording them here would be a second,
-/// lossier decision log to keep in step with the real one.
+/// Exactly the three distinctions the suppressions draw and no more. Entities,
+/// candidates, scores, thresholds and token counts belong to the decision log,
+/// which owns them; recording them here would be a second, lossier decision log
+/// to keep in step with the real one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Reason {
     /// An earlier prompt in this session was already given this turn.
     AlreadyInjected,
-    /// The turn is in the session the user is looking at (D-15).
+    /// The turn is in the session the user is looking at.
     VisibleInSession,
     /// The resume brief quoted this turn at `SessionStart`.
     CarriedByBrief,
@@ -112,11 +103,11 @@ pub struct State {
     /// Turn ids the resume brief quoted.
     #[serde(default)]
     pub brief: Vec<i64>,
-    /// Candidates refused, with the reason AC4 asks to be able to read.
+    /// Candidates refused, with the reason, for a person to read.
     #[serde(default)]
     pub suppressed: Vec<Suppressed>,
     /// Set by a `SessionStart` whose `source` is `compact`, consumed by the
-    /// next `UserPromptSubmit` (D-08).
+    /// next `UserPromptSubmit`.
     ///
     /// It persists until it fires rather than being cleared by the prompt that
     /// found no boundary row yet: the ingest that commits that row is racing
@@ -185,7 +176,7 @@ impl State {
     ///
     /// Idempotent, because the list is the answer to `was_injected` and a turn
     /// recorded twice would say nothing the first entry does not. It is not
-    /// capped: it is what INJ-04's first suppression is decided on, and a
+    /// capped: it is what the already-injected suppression is decided on, and a
     /// forgotten id is a turn injected twice - three per prompt, so a session
     /// long enough for the size to matter has other problems.
     pub fn record_injected(&mut self, turn_id: i64) {
@@ -204,7 +195,7 @@ impl State {
     /// Remember that `turn_id` was refused, and why.
     ///
     /// Capped, unlike the two lists above, and that asymmetry is the design:
-    /// this one is a record for a person to read (AC4) rather than a fact
+    /// this one is a record for a person to read rather than a fact
     /// anything decides on, and it grows by up to one entry per ranked
     /// candidate per prompt instead of by at most three. The oldest go first,
     /// so what is in the file is what the session just did.
@@ -223,61 +214,34 @@ impl State {
 
 /// The file one `session_id` names, or nothing.
 ///
-/// **The refusal happens before any path is built.** A `session_id` arrives on
-/// an untrusted payload and becomes a file name, so a value carrying a
-/// separator, a `..`, a NUL or anything else that is not a plausible session id
-/// must reach no filesystem call at all - not a `join` that gets checked
-/// afterwards, which is the shape that keeps being wrong on the platform nobody
-/// tested.
+/// The check runs before any path is built, so a `session_id` that fails it
+/// reaches no filesystem call at all: [`super::checked_session_id`].
 fn path(data_dir: &Path, session_id: Option<&str>) -> Option<PathBuf> {
-    let name = file_name(session_id?)?;
-    Some(data_dir.join(DIR_NAME).join(name))
+    let id = super::checked_session_id(session_id?)?;
+    Some(data_dir.join(DIR_NAME).join(format!("{id}.json")))
 }
 
-/// `<session_id>.json`, when the `session_id` is one.
+/// Write `state` to `path`, replacing it whole.
 ///
-/// ASCII hex digits and dashes at a plausible uuid length, and nothing else: an
-/// allow-list rather than a scan for the dangerous spellings, because the list
-/// of dangerous spellings is per-platform and open-ended (`..`, `/`, `\`, `:`,
-/// a NUL, a trailing dot, `CON`) while the list of characters a session id is
-/// made of is closed. Byte length is character length here because every
-/// admitted byte is ASCII.
-fn file_name(session_id: &str) -> Option<String> {
-    let plausible = (MIN_NAME..=MAX_NAME).contains(&session_id.len());
-    let shaped = session_id
-        .bytes()
-        .all(|b| b.is_ascii_hexdigit() || b == b'-');
-    (plausible && shaped).then(|| format!("{session_id}.json"))
-}
-
-/// Write `state` to `path` through a temporary in the same directory.
+/// This runs on the hook's abandoned thread: the injection runs on a thread the
+/// binary never joins and process exit takes it wherever it got to, so a write
+/// cut off at the deadline leaves the target holding its previous content and at
+/// worst a `.inject-*.tmp` beside it - never a document the next prompt reads
+/// half of.
 ///
-/// The same shape `crates/terminus/src/cmd/install/json_file.rs` writes
-/// settings with, and for the same reason: a kill between the `open` and the
-/// last byte must not leave a half-written document where the next prompt
-/// expects one. A rename within a directory is atomic, so a reader sees the old
-/// file or the new one and never a prefix of either.
+/// No `fsync`, which is right for per-session scratch whose loss costs one
+/// repeated injection, paid for otherwise with a disk flush on the path where
+/// the user is waiting.
 ///
-/// The same property is what makes this safe on the hook's abandoned thread:
-/// the injection runs on a thread the binary never joins and process exit takes
-/// it wherever it got to (D-03), so a write cut off at the deadline leaves the
-/// target holding its previous content and at worst a `.inject-*.tmp` beside
-/// it - never a document the next prompt reads half of.
-///
-/// No `fsync`. The rename is what buys the atomicity a reader cares about;
-/// `fsync` would only add durability across a power cut, and this is
-/// per-session scratch whose loss costs one repeated injection - paid for with
-/// a disk flush on the path where the user is waiting.
-///
-/// Pretty-printed, because AC4 asks for a suppression reason a person can read
-/// out of this file and the whole document is a few hundred bytes.
+/// Pretty-printed, because a person reads suppression reasons out of this file
+/// and the whole document is a few hundred bytes.
 fn write_atomically(path: &Path, state: &State) -> Option<()> {
     let dir = path.parent()?;
     // TWO creations, not one. `injection/`'s parent is terminus's own data
     // directory, and a hook that fires before any ingest ever ran is the first
     // thing to make it - so it has to be asked for by name, because the
     // primitive narrows only the leaf it is given and would otherwise leave the
-    // data directory at the umask (D-04). Everything above it - the user's
+    // data directory at the umask. Everything above it - the user's
     // `~/.local/share` - still keeps their own default, which is the whole
     // reason the mode is not applied recursively.
     if let Some(data_dir) = dir.parent() {
@@ -286,57 +250,7 @@ fn write_atomically(path: &Path, state: &State) -> Option<()> {
     crate::owner_only::create_dir_all(dir).ok()?;
     let bytes = serde_json::to_vec_pretty(state).ok()?;
 
-    let (temporary, mut file) = create_temporary(dir)?;
-    let written = file.write_all(&bytes).and_then(|()| file.flush());
-    // Closed before the rename, not after. Nothing needs that order, and
-    // keeping it costs nothing.
-    drop(file);
-
-    let outcome = written.and_then(|()| std::fs::rename(&temporary, path));
-    if outcome.is_err() {
-        // A refusal that left a stray file in the data directory would be its
-        // own small mess, and this one would accumulate one per prompt.
-        let _ = std::fs::remove_file(&temporary);
-        return None;
-    }
-    Some(())
-}
-
-/// A new file in `dir`, created exclusively.
-///
-/// `create_new` and not `File::create`: `O_EXCL` fails on anything already at
-/// the name rather than following it and truncating it, so a stale symlink left
-/// by a killed run cannot turn this write into a truncation of whatever it
-/// points at - and the rename that follows would move the link rather than the
-/// file.
-///
-/// The name can never collide with a session's own file: it starts with a dot
-/// and ends in `.tmp`, and [`file_name`] admits neither.
-///
-/// Owner-only from the moment it exists. The temporary holds the same document
-/// the target does: the turn ids injected and briefed, the suppressions and the
-/// compaction flag, a record of what this person's sessions were given. It is
-/// on disk under its own name for the length of the write, so a mode applied
-/// after the fact would cover the target and miss the bytes.
-fn create_temporary(dir: &Path) -> Option<(PathBuf, std::fs::File)> {
-    /// Enough to step over a stale name or two. Past that, something is wrong
-    /// with the directory rather than with the name.
-    const ATTEMPTS: u32 = 64;
-
-    let pid = std::process::id();
-    for attempt in 0..ATTEMPTS {
-        let path = dir.join(format!(
-            "{TEMPORARY_PREFIX}{pid}-{attempt}{TEMPORARY_SUFFIX}"
-        ));
-        match crate::owner_only::options()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-        {
-            Ok(file) => return Some((path, file)),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(_) => return None,
-        }
-    }
-    None
+    // The temporary can never collide with a session's own file: it starts with a
+    // dot and ends in `.tmp`, and [`super::checked_session_id`] admits neither.
+    crate::owner_only::replace(path, &bytes, TEMPORARY_PREFIX, TEMPORARY_SUFFIX).ok()
 }

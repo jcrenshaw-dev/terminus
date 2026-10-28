@@ -1,4 +1,4 @@
-//! How much of one record the archive stores (ING-07, phase 8 D-05).
+//! How much of one record the archive stores.
 //!
 //! Two things this module is NOT, because both are easy to read into it and
 //! both are wrong.
@@ -27,8 +27,8 @@
 //! are output rather than authorship: a `lean` or `minimal` store keeps every
 //! prompt, every assistant turn, every tool name and every tool argument.
 //!
-//! D-12 is why it has to happen HERE, on the record's JSON line, rather than off
-//! the derived tables: `SELECT count(*) FROM turns WHERE record_type='user' AND
+//! It has to happen HERE, on the record's JSON line, rather than off the
+//! derived tables: `SELECT count(*) FROM turns WHERE record_type='user' AND
 //! tool_name IS NOT NULL` returns 0 on the live store while `user` records hold
 //! 57.3% of the stream, so an implementation filtering on `turns.tool_name`
 //! elides nothing at all.
@@ -86,11 +86,10 @@ pub const ELIDED_FIELDS: [&str; 2] = ["toolUseResult", "attachment"];
 /// elides it.
 ///
 /// 8 KB, which is where the phase CONTEXT measured the corpus splitting -
-/// records over 8 KB are 52.0% of the stream bytes - and which is the reading of
-/// `DESIGN-BRIEF.md:163`'s "elide LARGE tool-result and attachment bodies". It
-/// is also what makes `minimal` strictly smaller than `lean` on any transcript
-/// holding a small tool result: without a threshold the two modes would store
-/// the same bytes.
+/// records over 8 KB are 52.0% of the stream bytes - and which is how `lean`
+/// reads "elide large tool-result and attachment bodies". It is also what makes
+/// `minimal` strictly smaller than `lean` on any transcript holding a small
+/// tool result: without a threshold the two modes would store the same bytes.
 pub const LEAN_THRESHOLD_BYTES: usize = 8_192;
 
 /// The bytes to store for one record's line, under one mode.
@@ -147,8 +146,8 @@ fn elide_fields(object: &mut Map<String, Value>, mode: CaptureMode) -> bool {
         };
         let elide_this = match mode {
             CaptureMode::Full => false,
-            // `DESIGN-BRIEF.md:163`: the LARGE bodies only. Measured on the
-            // compact serialization, which is what a transcript writes.
+            // The large bodies only. Measured on the compact serialization,
+            // which is what a transcript writes.
             CaptureMode::Lean => serialized.len() > LEAN_THRESHOLD_BYTES,
             CaptureMode::Minimal => true,
         };
@@ -190,7 +189,7 @@ fn is_mark(value: &Value) -> bool {
 /// framing exactly.
 ///
 /// The input is a whole-line range - every line terminated by its `\n`, which is
-/// what `Scan::consumed` guarantees by stopping at the last newline (D-14). The
+/// what `Scan::consumed` guarantees by stopping at the last newline. The
 /// output holds the same number of lines in the same order, each still
 /// terminated, so the record count, the turn ordinals and the classification of
 /// every line are unchanged and only the bytes inside some of them are fewer.

@@ -1,4 +1,4 @@
-//! AC6 / ING-02: a second ingest launched while the first holds `LOCK`.
+//! A second ingest launched while the first holds `LOCK`.
 //!
 //! Ten consecutive contended runs must each exit 0 and add no row to any table.
 //! The tenth run proves nothing on its own, so the test ends by releasing the
@@ -19,9 +19,9 @@ use terminus_core::ingest::{self, Attempt, IngestLock};
 use terminus_core::store::{Store, DB_FILE_NAME, TABLES};
 use terminus_core::testkit;
 
-/// ING-02's budget. The hook path spawns this process; a contended run must
-/// cost one file open and one lock syscall, never a wait on SQLite's busy
-/// handler (D-15).
+/// The contended run's budget. The hook path spawns this process; a contended
+/// run must cost one file open and one lock syscall, never a wait on SQLite's
+/// busy handler.
 const BUDGET: Duration = Duration::from_millis(50);
 
 /// Row counts for every table a pass could touch, in a stable order.
@@ -126,7 +126,7 @@ fn a_contended_ingest_exits_zero_and_writes_nothing() {
     );
 }
 
-/// ING-02's budget, over the same ten runs.
+/// The contended run's budget, over the same ten runs.
 #[test]
 fn a_contended_ingest_exits_inside_the_budget() {
     let race = contended();
@@ -156,8 +156,8 @@ fn a_contended_ingest_exits_inside_the_budget() {
 /// kills nothing.
 ///
 /// The lock is an OS lock and not a PID file because it dies with the process
-/// holding it, so a killed ingest leaves no wedge (`DESIGN-BRIEF.md:135`). Real
-/// ingest processes are killed, and the next ingest still runs, in
+/// holding it, so a killed ingest leaves no wedge. Real ingest processes are
+/// killed, and the next ingest still runs, in
 /// `killing_ingest_anywhere_leaves_a_store_that_converges` in
 /// `crates/terminus/tests/crash.rs`.
 #[test]

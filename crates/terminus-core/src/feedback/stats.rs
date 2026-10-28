@@ -1,15 +1,15 @@
-//! Whether injection helps, as numbers rather than as an opinion (FEED-04).
+//! Whether injection helps, as numbers rather than as an opinion.
 //!
 //! Four counts and two sums over `decisions` and `labels`, and the whole point
 //! is what is in the denominators. **Every prompt is a decision, non-fires
-//! included** (D-11), so [`Stats::decisions`] is how often the injector was
+//! included**, so [`Stats::decisions`] is how often the injector was
 //! asked and not how often it answered - a precision computed only over the
 //! prompts that fired would be a number about a subset that flatters itself.
 //! And [`Stats::chars_referenced`] against [`Stats::chars_injected`] is the
 //! question the incumbent cannot ask at all: not "how much context did we add"
 //! but "how much of it was worth adding".
 //!
-//! **Characters, never tokens (D-12).** The same proxy the injection budget is
+//! **Characters, never tokens.** The same proxy the injection budget is
 //! spent in, and the output names them chars - the workspace has no tokenizer
 //! and will not grow one on the cold-start path for a report.
 //!
@@ -26,14 +26,14 @@ use crate::store::Store;
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Stats {
     /// Prompts that produced a record, including every one that injected
-    /// nothing (D-11).
+    /// nothing.
     pub decisions: usize,
-    /// Decisions recorded as made under the compacted pool (INJ-05).
+    /// Decisions recorded as made under the compacted pool.
     pub compacted_decisions: usize,
     /// Decisions recorded as made outside it.
     ///
-    /// A decision drained before the `compacted` column existed is in neither
-    /// count, because whether it ran under the pool is unknown. So `decisions`
+    /// A decision whose `compacted` is null is in neither count, because
+    /// whether it ran under the pool is unknown. So `decisions`
     /// minus these two is exactly the number of those.
     pub ordinary_decisions: usize,
     /// Turns handed to the model across all of them.
@@ -51,7 +51,7 @@ pub struct Stats {
     pub precision: Option<f64>,
     /// Decisions where the model went to recall for something the prompt had
     /// named and the injector had declined to give it. Reads zero on real
-    /// history today (D-13).
+    /// history today.
     pub misses: usize,
     /// Decisions that spent characters and earned no hit.
     pub wasted_budget: usize,
@@ -72,10 +72,6 @@ pub struct Stats {
 /// one table, the decision counts are aggregates over another, and forcing them
 /// into a single query would multiply rows through the join and make every
 /// count wrong in a way that still returns numbers.
-///
-/// A store whose `decisions` table lacks `compacted` has not been opened for
-/// writing since the column was added, and a read cannot add it. The split is
-/// then two zeroes, and the query that would name the column is not run.
 pub fn stats(store: &Store) -> Result<Stats> {
     let conn = store.conn();
     let (decisions, chars_injected) = conn.query_row(
@@ -98,20 +94,12 @@ pub fn stats(store: &Store) -> Result<Stats> {
 
     let mut counted =
         conn.prepare("SELECT label, count(*) FROM labels GROUP BY label ORDER BY label")?;
-    let recorded = !store
-        .missing_columns()
-        .iter()
-        .any(|missing| missing.table == "decisions" && missing.column == "compacted");
-    let (compacted_decisions, ordinary_decisions) = if recorded {
-        conn.query_row(
-            "SELECT coalesce(sum(compacted = 1), 0), coalesce(sum(compacted = 0), 0)
-               FROM decisions",
-            [],
-            |r| Ok((r.get::<_, i64>(0)? as usize, r.get::<_, i64>(1)? as usize)),
-        )?
-    } else {
-        (0, 0)
-    };
+    let (compacted_decisions, ordinary_decisions) = conn.query_row(
+        "SELECT coalesce(sum(compacted = 1), 0), coalesce(sum(compacted = 0), 0)
+           FROM decisions",
+        [],
+        |r| Ok((r.get::<_, i64>(0)? as usize, r.get::<_, i64>(1)? as usize)),
+    )?;
 
     let mut stats = Stats {
         decisions,

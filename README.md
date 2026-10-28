@@ -136,7 +136,7 @@ Every open bug is in the [issues](https://github.com/jcrenshaw-dev/terminus/issu
 
 Issues are welcome: bugs, questions, and reports of anything in the docs that is wrong. Pull requests are by invitation only; open an issue first. Security problems go through [SECURITY.md](SECURITY.md), not a public issue.
 
-The tests run with `cargo test --workspace --all-features`. CI runs them on every push and pull request, on the debug and the release build, on Linux and macOS, on x86_64 and aarch64. `main` takes changes only through pull requests with signed commits, and only once the tests pass.
+The tests run with `cargo test --workspace --all-features`. CI runs them on every pull request and every push to `main`, on the debug and the release build, on Linux and macOS, on x86_64 and aarch64. `main` takes changes only through pull requests with signed commits, and only once the tests pass.
 
 ## Sponsoring
 

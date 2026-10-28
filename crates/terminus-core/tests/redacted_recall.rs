@@ -1,4 +1,5 @@
-//! PRIV-03's opt-in knob, over the derived projections `recall_search` returns.
+//! The opt-in `redact_recall` knob, over the derived projections
+//! `recall_search` returns.
 //!
 //! Every store here is built by the ordinary `ingest::run` path over the whole
 //! fixture corpus, and the knob is turned on the only way anything can turn it
@@ -11,8 +12,8 @@
 //! to do.
 //!
 //! The sentinels are `tests/fixtures/session-secrets.jsonl`'s, planted for the
-//! phase 2 egress work, and `tests/fixtures/session-redaction.jsonl`'s keyed
-//! ones: unrealistic values, because realistic ones in a public repository trip
+//! egress tests, and `tests/fixtures/session-redaction.jsonl`'s keyed ones:
+//! unrealistic values, because realistic ones in a public repository trip
 //! GitHub push protection.
 
 #![cfg(feature = "testkit")]
@@ -149,7 +150,7 @@ fn an_unfiltered_search_returns_the_planted_credential_whole() {
     );
 }
 
-/// AC1's search half. One token of one config file is the only difference.
+/// The search excerpt. One token of one config file is the only difference.
 #[test]
 fn the_knob_takes_every_planted_credential_out_of_the_search_excerpt() {
     let bench = bench();
@@ -208,8 +209,8 @@ fn the_knob_leaves_ordinary_prose_exactly_as_it_was() {
     );
 }
 
-/// D-02, falsifiably: the filter runs over the FULL projection, before the
-/// 240-character window is cut.
+/// The filter runs over the FULL projection, before the 240-character window is
+/// cut, and this test can tell the two orders apart.
 ///
 /// The turn is built so that the two orderings disagree. Its projection opens
 /// with `Authorization: Bearer` and a single unbroken value long enough that the
@@ -264,7 +265,7 @@ fn a_credential_whose_name_falls_outside_the_window_is_still_taken() {
 }
 
 // ---------------------------------------------------------------------------
-// The per-prompt injection (INJ-03), which is the fifth model-facing surface
+// The per-prompt injection, which is the fifth model-facing surface
 
 /// The credential planted on the turn a prompt fires on.
 ///
@@ -321,9 +322,9 @@ fn archive_a_prompt_target(bench: &Bench) -> (String, String) {
 
 /// Every excerpt one prompt would inject, joined.
 ///
-/// The session id is the caller's because INJ-04 suppresses a turn the session
-/// it is asked under has already been given, and every call here asks the same
-/// question of the same turn.
+/// The session id is the caller's because injection suppresses a turn the
+/// session it is asked under has already been given, and every call here asks
+/// the same question of the same turn.
 fn injected(bench: &Bench, config: &Config, session: &str, cwd: &str, prompt: &str) -> String {
     let fired = prompt::select(
         &bench.data_dir,
@@ -350,15 +351,15 @@ fn injected(bench: &Bench, config: &Config, session: &str, cwd: &str, prompt: &s
 
 /// The knob governs the per-prompt injection too.
 ///
-/// This is the fifth model-facing surface and the one phase 4's four acceptance
-/// criteria never name. It reaches the model the same way the others do - hook
-/// stdout, as the next prompt's context - so a knob that left it raw would hand
-/// the secret straight back to the model while the four filtered surfaces made
-/// it look as though the setting had held.
+/// This is the fifth model-facing surface, and the one the golden in
+/// `recall_golden.rs` leaves out. It reaches the model the same way the others
+/// do - hook stdout, as the next prompt's context - so a knob that left it raw
+/// would hand the secret straight back to the model while the four filtered
+/// surfaces made it look as though the setting had held.
 ///
 /// The two calls differ in one token of one config file and in the session id
-/// they are asked under, which INJ-04 requires: the same session asking twice is
-/// asking about suppression instead.
+/// they are asked under, because the same session asking twice is asking about
+/// suppression instead.
 #[test]
 fn the_knob_takes_the_credential_out_of_the_per_prompt_injection() {
     let bench = bench();
@@ -478,7 +479,7 @@ fn the_knob_takes_a_keyed_secret_out_of_its_turns_search_excerpt() {
 }
 
 /// The `tool_use` secret is the one that can reach injected text, through a
-/// prompt naming the file that turn wrote (D-06).
+/// prompt naming the file that turn wrote.
 #[test]
 fn the_knob_takes_a_keyed_secret_out_of_the_per_prompt_injection() {
     let bench = bench();
@@ -541,7 +542,7 @@ fn keyed_record(
 
 /// A secret-named key holding a number, a list of strings or an object with no
 /// secret-named key inside has no keyed string to take, so the projection is
-/// byte-identical with the knob on and off (D-02, D-03).
+/// byte-identical with the knob on and off.
 #[test]
 fn a_secret_named_key_holding_no_string_projects_exactly_as_it_was() {
     let bench = bench();
@@ -562,7 +563,7 @@ fn a_secret_named_key_holding_no_string_projects_exactly_as_it_was() {
 }
 
 /// A secret-named string two levels down is still taken, under an ordinary key
-/// and inside an object under a secret-named key (D-02).
+/// and inside an object under a secret-named key.
 #[test]
 fn a_nested_secret_named_string_is_taken_at_any_depth() {
     let bench = bench();

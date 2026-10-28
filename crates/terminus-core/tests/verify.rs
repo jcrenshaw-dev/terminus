@@ -1,9 +1,9 @@
-//! AC3 / STOR-03: corruption localizes to named sessions.
+//! Corruption localizes to named sessions.
 //!
-//! The fixture set here deliberately includes D-01's colliding pair -
+//! The fixture set here deliberately includes a colliding pair -
 //! `session-basic.jsonl` and `subagents/agent-alpha.jsonl`, which report the
-//! *same* `sessionId`. That is what makes AC3's "and no other" clause able to
-//! fail: a report keyed on the record's session id cannot distinguish the two,
+//! *same* `sessionId`. That is what lets the "and no other" claim fail: a
+//! report keyed on the record's session id cannot distinguish the two,
 //! so naming one would always name the other.
 //!
 //! Process-level assertions (exit code, stdout) live in
@@ -38,8 +38,8 @@ fn bench() -> Bench {
     bench_of(&FIXTURES)
 }
 
-/// The fixture the three AC3 kinds of damage go on: its first record alone
-/// runs past three blocks, so it has a middle block to damage.
+/// The fixture the three block-level kinds of damage go on: its first record
+/// alone runs past three blocks, so it has a middle block to damage.
 const BIG: &str = "session-large-record.jsonl";
 
 /// [`FIXTURES`] and [`BIG`], with `BIG`'s key last.
@@ -88,8 +88,8 @@ impl Bench {
         testkit::damage(&self.conn(), key);
     }
 
-    /// Raise D-13's flag on one session, the way a pass over a shortened
-    /// transcript would.
+    /// Raise the divergence flag on one session, the way a pass over a
+    /// shortened transcript would.
     fn flag_divergence(&self, key: &str) {
         let changed = self
             .conn()
@@ -114,9 +114,9 @@ impl Bench {
     /// Replace a session's stream with different bytes, validly compressed.
     ///
     /// The other half of the corruption space: `damage` makes zstd refuse the
-    /// block, which would let a `verify` that never hashed anything still pass
-    /// AC3. This one writes fresh rows whose bytes match their own hashes, so
-    /// only the session checksum over those hashes can catch it (D-04).
+    /// block, which would let a `verify` that never hashed anything still pass.
+    /// This one writes fresh rows whose bytes match their own hashes, so only
+    /// the session checksum over those hashes can catch it.
     fn rewrite_the_stream(&self, key: &str) {
         let conn = self.conn();
         let mut stream = testkit::stream(&conn, key).unwrap();
@@ -143,7 +143,7 @@ fn a_clean_store_verifies() {
     assert_eq!(report.render(), "");
 }
 
-/// AC3. One damaged session is named and no other.
+/// One damaged session is named and no other.
 #[test]
 fn one_corrupt_session_is_named_and_no_other() {
     let bench = bench();
@@ -164,7 +164,7 @@ fn one_corrupt_session_is_named_and_no_other() {
 
 /// The corrupt session here is the sidecar, whose records report the *parent's*
 /// session id. A report keyed on that id would name both files or the wrong
-/// one; keyed on the transcript path it names exactly one (D-01).
+/// one; keyed on the transcript path it names exactly one.
 #[test]
 fn a_sidecar_and_its_parent_are_told_apart() {
     let bench = bench();
@@ -217,7 +217,7 @@ fn two_corrupt_sessions_are_both_reported() {
     }
 }
 
-/// D-06 from the other side: only the session checksum catches rows that
+/// The session checksum, from the other side: only it catches rows that
 /// decompress cleanly to the wrong bytes and carry hashes of those bytes.
 #[test]
 fn valid_rows_holding_the_wrong_bytes_are_still_a_failure() {
@@ -238,9 +238,9 @@ fn valid_rows_holding_the_wrong_bytes_are_still_a_failure() {
     );
 }
 
-/// D-16. `integrity_check` is `doctor`'s signal (INST-06, phase 4) and never
-/// appears here: a page-level complaint carries no session attribution and
-/// would ride alongside the named session, breaking AC3's "and no other".
+/// `integrity_check` is `doctor`'s signal and never appears here: a page-level
+/// complaint carries no session attribution and would ride alongside the named
+/// session, breaking "one damaged session is named and no other".
 #[test]
 fn the_report_never_mentions_integrity_check() {
     let bench = bench();
@@ -267,8 +267,9 @@ fn a_session_with_no_metadata_row_fails_rather_than_being_skipped() {
     assert_eq!(report.failures[0].session_key, orphan);
 }
 
-/// D-13, at the level `verify` owns: the flag the pass sets is a per-session
-/// failure like every other, attributed by `session_key` and naming no other.
+/// The divergence flag, at the level `verify` owns: the flag the pass sets is
+/// a per-session failure like every other, attributed by `session_key` and
+/// naming no other.
 ///
 /// The flag is set with a direct UPDATE here on purpose. What the pass does to
 /// a truncated file, and what it leaves the archive looking like afterwards, is
@@ -357,7 +358,7 @@ fn clearing_the_flag_makes_the_store_clean_again() {
     assert_eq!(report.render(), "");
 }
 
-/// D-03. An evicted session's block rows were deleted on purpose, so `verify`
+/// An evicted session's block rows were deleted on purpose, so `verify`
 /// counts it and says nothing about it - while a genuinely corrupt session
 /// beside it is still named, and only it.
 ///
@@ -471,7 +472,7 @@ fn an_evicted_session_that_still_has_block_rows_is_one_failure() {
     }
 }
 
-/// AC3, a changed byte: one middle block's compressed bytes are altered and
+/// A changed byte: one middle block's compressed bytes are altered and
 /// its hash is not, so that block fails its own check and the session checksum
 /// over the untouched hashes still holds.
 #[test]
@@ -494,7 +495,7 @@ fn a_changed_byte_in_a_middle_block_names_that_block_and_no_other_session() {
     }
 }
 
-/// AC3, a deleted row: the gap is named by its block number. The checksum over
+/// A deleted row: the gap is named by its block number. The checksum over
 /// the hashes left also fails, as a session-level line beside it.
 #[test]
 fn a_deleted_middle_row_names_that_block_and_no_other_session() {
@@ -527,8 +528,8 @@ fn a_deleted_middle_row_names_that_block_and_no_other_session() {
     }
 }
 
-/// AC3, an altered checksum: every block still matches its own hash, so no one
-/// block is wrong and the failure names none (D-16).
+/// An altered checksum: every block still matches its own hash, so no one
+/// block is wrong and the failure names none.
 #[test]
 fn an_altered_checksum_names_the_session_and_no_block() {
     let bench = big_bench();

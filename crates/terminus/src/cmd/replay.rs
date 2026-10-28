@@ -1,23 +1,22 @@
 //! `terminus replay`: what the logged history would have decided under other
-//! rules (FEED-03).
+//! rules.
 //!
-//! A shipped verb and not a testkit hook (D-09). "Retrieval is measurable
+//! A shipped verb and not a testkit hook. "Retrieval is measurable
 //! against history" is a claim about a user's own archive, and a diff that only
 //! exists inside `cargo test` is a claim about the fixtures.
 //!
 //! **It cannot write.** The store is opened through
 //! [`terminus_core::Store::open_read_only`], exactly as `search`, `show` and
 //! `sessions` open it - so "without touching the live store" is enforced by
-//! connection flags rather than by discipline (D-15), and the engine behind it
+//! connection flags rather than by discipline, and the engine behind it
 //! issues nothing but `SELECT`s.
 //!
 //! **The overrides stop here.** Every threshold flag below reaches
 //! [`terminus_core::inject::prompt::Thresholds`] for this one read-only report
 //! and nothing else: the live injection path constructs `Thresholds::default()`
-//! inline, there is no config key and no environment variable, and
-//! `DESIGN-BRIEF.md:245` keeps the precision-first defaults non-detunable
-//! (D-08). Sweeping variants is what one build is for; shipping one is a code
-//! change.
+//! inline, there is no config key and no environment variable, and the
+//! precision-first defaults are not detunable.
+//! Sweeping variants is what one build is for; shipping one is a code change.
 
 use terminus_core::feedback::replay::{self, Replayed};
 use terminus_core::inject::prompt::Thresholds;
@@ -30,22 +29,21 @@ use super::Failure;
 const COMMAND: &str = "replay";
 
 pub fn run(args: Args) -> Result<(), Failure> {
-    let empty = document(&args.thresholds, &Replayed::default());
     let reader = match read::open()? {
         Opened::Ready(reader) => reader,
         // A machine that has never ingested has no decisions to replay, which
-        // is an answer rather than a failure (RCL-06).
-        Opened::Nothing(reason) => return read::empty(empty, &reason, args.json),
+        // is an answer rather than a failure.
+        Opened::Nothing(reason) => return read::empty(empty(&args), &reason, args.json),
     };
 
-    // The same catch `stats` makes, for the same reason: nothing logged is an
-    // empty diff with a reason, never a raw sqlite line escaping the envelope,
-    // and half a log is a failure rather than a diff of nothing.
+    // The same catch `stats` makes, for the same reason: a damaged log is a
+    // failure rather than a diff of nothing, and never a raw sqlite line.
+    // Under `--json` `main` writes the empty document, thresholds included,
+    // with `ok: false` and this reason (#107).
     match read::decision_log(&reader) {
         read::DecisionLog::Present => {}
-        read::DecisionLog::Absent => return read::empty(empty, read::NO_DECISION_LOG, args.json),
-        read::DecisionLog::Damaged(table) => {
-            return Err(read::unusable(empty, read::damaged(table), args.json))
+        read::DecisionLog::Damaged(tables) => {
+            return Err(Failure::Operational(read::damaged(tables)))
         }
     }
 
@@ -106,6 +104,13 @@ fn thresholds_of(thresholds: &Thresholds) -> serde_json::Value {
         "max_turns": thresholds.max_turns,
         "max_candidates": thresholds.max_candidates,
     })
+}
+
+/// The document for a replay that scored nothing, carrying the thresholds in
+/// force, flags included. The no-store answer, and what `main` writes when the
+/// command fails.
+pub(crate) fn empty(args: &Args) -> Document {
+    document(&args.thresholds, &Replayed::default())
 }
 
 /// The parsed command line for `replay`.

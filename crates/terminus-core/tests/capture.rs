@@ -1,4 +1,4 @@
-//! Capture mode: how much of each record the archive keeps (ING-07, AC7).
+//! Capture mode: how much of each record the archive keeps.
 //!
 //! The elision has to be true of two different things at once, and the tests
 //! split on that line. Here in the first half it is a statement about one JSON
@@ -203,8 +203,8 @@ fn lean_elides_only_what_is_over_the_threshold() {
     assert_eq!(untouched, 4);
 }
 
-/// (d) Strictly decreasing, over the whole fixture, which is AC7's first half
-/// stated about the lines before it is stated about the blobs.
+/// (d) Strictly decreasing, over the whole fixture: each mode keeps fewer
+/// bytes, stated about the lines before it is stated about the blobs.
 #[test]
 fn the_stored_bytes_strictly_decrease_from_full_to_lean_to_minimal() {
     let lines = fixture_lines();
@@ -470,7 +470,7 @@ impl Bench {
     }
 }
 
-/// AC7, at the store: the same transcript into three stores leaves strictly
+/// At the store: the same transcript into three stores leaves strictly
 /// fewer archived bytes each time, compressed AND uncompressed.
 #[test]
 fn the_three_modes_store_strictly_decreasing_blobs() {
@@ -508,7 +508,7 @@ fn full_still_reproduces_the_transcript_byte_for_byte() {
     let pass = bench.ingest();
     let source = std::fs::read(&bench.transcript).unwrap();
 
-    assert!(bench.stream() == source, "AC7, for the capture fixture");
+    assert!(bench.stream() == source, "full mode changed the bytes");
     assert_eq!(pass.watermark, source.len() as u64);
     assert_eq!(bench.mode().as_deref(), Some("full"));
 }
@@ -601,8 +601,8 @@ fn verify_finds_nothing_wrong_with_an_elided_store() {
     }
 }
 
-/// (d) A rebuild derives the same rows from the stored bytes alone - which is
-/// STOR-04's claim, now about a stream that is not the transcript.
+/// (d) A rebuild derives the same rows from the stored bytes alone - the claim
+/// `reindex` makes, now about a stream that is not the transcript.
 #[test]
 fn a_reindex_of_an_elided_store_reproduces_every_derived_row() {
     let bench = bench(CaptureMode::Lean);
@@ -767,8 +767,9 @@ fn two_runs_over_an_unchanged_lean_transcript_repair_nothing() {
 }
 
 /// (b) The arm is narrowed, not removed. A `full` session whose watermark
-/// really is ahead of its blob is still lowered - that is the state phase 1's
-/// crash harness enumerates and STOR-02 says must never survive.
+/// really is ahead of its blob is still lowered - that is the state the crash
+/// harness in `crates/terminus/tests/crash.rs` enumerates, and one that must
+/// never survive.
 #[test]
 fn a_full_session_with_an_overrun_watermark_is_still_lowered() {
     let bench = bench(CaptureMode::Full);

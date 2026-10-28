@@ -1,4 +1,5 @@
-//! D-19's two assertions, made in CI rather than at a user's first ingest.
+//! Two assertions about the bundled SQLite, made in CI rather than at a user's
+//! first ingest.
 //!
 //! Both are facts about the SQLite that `rusqlite`'s `bundled` feature compiles
 //! in, and both are load-bearing for the derived tables. A build that quietly
@@ -17,12 +18,11 @@ fn bundled_sqlite_is_at_least_3_43() {
     );
 }
 
-/// FTS5 is compiled in, and the exact FTS5 shape D-10 requires works.
+/// FTS5 is compiled in, and the exact FTS5 shape `turns_fts` uses works.
 ///
-/// D-19 asserted this needed an `fts5` cargo feature on `rusqlite`. No such
-/// feature exists; `libsqlite3-sys` builds the bundled amalgamation with
-/// `-DSQLITE_ENABLE_FTS5`. This test is what proves the claim either way, which
-/// is why D-19 called for it.
+/// `rusqlite` has no `fts5` cargo feature to ask for it: `libsqlite3-sys`
+/// builds the bundled amalgamation with `-DSQLITE_ENABLE_FTS5`. This test is
+/// what proves FTS5 is there, whichever way the build gets it.
 #[test]
 fn fts5_supports_a_contentless_deletable_table() {
     let conn = Connection::open_in_memory().expect("in-memory sqlite");
@@ -47,7 +47,7 @@ fn fts5_supports_a_contentless_deletable_table() {
     assert_eq!(hits, 1);
 
     // The delete half is the point: a contentless table normally cannot delete,
-    // and a rebuild that cannot delete cannot be idempotent (D-10).
+    // and a rebuild that cannot delete cannot be idempotent.
     conn.execute("DELETE FROM scratch WHERE rowid = 7", [])
         .expect("contentless_delete=1 permits DELETE");
 

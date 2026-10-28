@@ -1,9 +1,8 @@
 //! Ranked search: the `turns_fts` match joined back to the rows that say which
 //! turn, in which session, of which project it was.
 //!
-//! This is the search the phase exists for, and both front ends sit on it -
-//! `terminus search` (PLAN-3) and `recall_search` (PLAN-4) - so there is one
-//! definition of relevance rather than two that drift.
+//! Both front ends, `terminus search` and `recall_search`, sit on this search,
+//! so there is one definition of relevance rather than two that drift.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -21,7 +20,7 @@ use crate::recall::Query;
 /// The most hits one search may return, whatever the caller asks for.
 ///
 /// A caller may lower it and may not raise it. The MCP server needs a
-/// server-side budget it does not have to trust a client to respect (RCL-10),
+/// server-side budget it does not have to trust a client to respect,
 /// and every hit costs an excerpt read out of its session's block rows: the
 /// blocks its turn covers, fetched and decompressed.
 pub const MAX_RESULTS: usize = 50;
@@ -32,14 +31,14 @@ pub const MAX_RESULTS: usize = 50;
 /// wants more asks for more, up to [`MAX_RESULTS`].
 pub const DEFAULT_RESULTS: usize = 20;
 
-/// RCL-07's filters: everything that narrows a search without changing what it
-/// is asking for.
+/// The filters: everything that narrows a search without changing what it is
+/// asking for.
 ///
 /// Each one is independently optional and they combine conjunctively, so a
 /// default [`Filters`] narrows nothing.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Filters {
-    /// `turns.tool_name`. D-16 measured exactly one `tool_use` block on every
+    /// `turns.tool_name`. Exactly one `tool_use` block was measured on every
     /// tool-bearing record of a 19,809-turn sample, so the column is the whole
     /// tool filter and not a first guess at one.
     pub tool: Option<String>,
@@ -89,7 +88,7 @@ pub struct Request {
     /// This is a recall net and not a decision. What may actually be injected
     /// is decided structurally afterwards, on [`Hit::entity_match`] and
     /// [`Hit::entity_count`], so a candidate that matched only as free text
-    /// costs a row here and injects nothing (INJ-03).
+    /// costs a row here and injects nothing.
     pub candidates: Vec<Query>,
     /// Whether every returned hit gets an excerpt cut from its session's block rows.
     ///
@@ -98,7 +97,7 @@ pub struct Request {
     /// excerpt materializes a WHOLE compressed session - p50 273 KB, p90
     /// 1.03 MB, p99 2.6 MB, max 10.1 MB uncompressed over the real corpus -
     /// and the prompt path stays silent most of the time by design, so paying
-    /// for text nobody will read is the one cost D-13 rules out. The caller
+    /// for text nobody will read is the one cost it must not carry. The caller
     /// attaches them itself, through [`excerpt::attach`], for the at-most-three
     /// turns that fired.
     pub excerpts: bool,
@@ -106,7 +105,7 @@ pub struct Request {
     /// come back. `None` for every caller but `terminus replay`, and then this
     /// narrows nothing.
     ///
-    /// **This is how "the index as it stood" is reconstructed (D-10).** A turn
+    /// **This is how "the index as it stood" is reconstructed.** A turn
     /// id is `session_no << TURN_SEQ_BITS | turn_seq`
     /// (`store::schema::turn_id`), and `sessions.session_no` is assigned in
     /// ingest order and survives a rebuild - so every turn of every session up
@@ -119,7 +118,7 @@ pub struct Request {
     /// when it was indexed: a backfill run today archives turns stamped last
     /// month, and a replay filtering on `ts` would score a historic prompt
     /// against rows that did not exist when it was submitted - which is exactly
-    /// the hindsight FEED-03 exists to rule out.
+    /// the hindsight replay exists to rule out.
     pub before_turn_id: Option<i64>,
 }
 
@@ -176,7 +175,7 @@ impl Request {
     /// The limit actually applied.
     ///
     /// Clamping rather than rejecting: an over-large `limit` is a client being
-    /// optimistic, not a caller error, and RCL-10 wants an answer rather than a
+    /// optimistic, not a caller error, and it gets an answer rather than a
     /// refusal.
     pub fn effective_limit(&self) -> usize {
         self.limit.min(MAX_RESULTS)
@@ -186,13 +185,13 @@ impl Request {
 /// One `(kind, value_norm)` pair of the `entities` table that a query matched
 /// on a turn.
 ///
-/// The pair itself rather than a count of pairs, because FEED-01 has to be able
-/// to say WHICH rule produced a candidate: "matched 2 entities" cannot attribute
-/// a replayed label change to a path rule versus a symbol rule, which is the one
-/// question offline replay exists to answer (phase 6 D-05).
-/// `serde` is derived here and on nothing else in this module: a matched pair is
-/// the one part of a hit that outlives the query, because FEED-01 writes it into
-/// a decision record on the prompt path and reads it back at ingest.
+/// The pair itself rather than a count of pairs, because the decision log has
+/// to be able to say WHICH rule produced a candidate: "matched 2 entities"
+/// cannot attribute a replayed label change to a path rule versus a symbol
+/// rule, which is the one question offline replay exists to answer. `serde` is
+/// derived here and on nothing else in this module: a matched pair is the one
+/// part of a hit that outlives the query, because the prompt path writes it
+/// into a decision record and ingest reads it back.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct MatchedEntity {
     /// The `entities.kind`: `path`, `command`, `error`, `symbol`, `tool`.
@@ -212,54 +211,62 @@ pub struct Hit {
     /// The project key ingest resolved for this turn's session, or `None` when
     /// the session has no meta row at all.
     pub project: Option<String>,
-    /// A subagent turn (D-07): its session carries a `parent_session_key`.
+    /// A subagent turn: its session carries a `parent_session_key`.
     pub sidechain: bool,
-    /// What RCL-04's exact-match half added to [`Hit::relevance`]. Zero when the
-    /// query matched this turn only as free text.
+    /// What the exact-match half of the ranking added to [`Hit::relevance`].
+    /// Zero when the query matched this turn only as free text.
     ///
     /// Reported rather than folded away: it is the difference between "this
     /// turn ran that command" and "this turn mentions that word", and a caller
     /// that cannot see it cannot show it or test it.
     pub entity_score: f64,
     /// How the query matched this turn's entities at its strongest, or `None`
-    /// when it matched no entity on this turn at all (D-04).
+    /// when it matched no entity on this turn at all.
     ///
     /// [`EntityMatch::Exact`] outranks [`EntityMatch::Covered`]: a turn
     /// carrying one value the query asked for whole reports `Exact` however
     /// many other values it merely covered. This is the fact
     /// [`Hit::entity_score`] cannot carry - a scalar built from an IDF times a
-    /// weight cannot say which of the two produced it, and phase 5's
+    /// weight cannot say which of the two produced it, and the injection's
     /// structural threshold is written on the kind rather than on a score
-    /// cutoff, which `DESIGN-BRIEF.md:245` forbids outright.
+    /// cutoff, since bm25 scores are not comparable across queries.
     pub entity_match: Option<EntityMatch>,
     /// How many DISTINCT `(kind, value_norm)` pairs on this turn the query
     /// matched.
     ///
     /// Distinct, and that is load-bearing: one path named by three tool calls
-    /// of one turn is one piece of evidence, and INJ-03's second condition is
-    /// about independent entities co-occurring - so counting rows would let a
+    /// of one turn is one piece of evidence, and the injection threshold's
+    /// second condition is about independent entities co-occurring in one
+    /// turn - so counting rows would let a
     /// single repeated value pass a threshold meant for two different facts.
     pub entity_count: usize,
     /// The distinct pairs [`Hit::entity_count`] counts, in `(kind, value)`
     /// order. Empty for a hit the query reached only as free text.
     ///
     /// Reported beside the count rather than instead of it: the count is what
-    /// INJ-03's threshold reads on every prompt and the pairs are what FEED-01
-    /// logs, and `entity_count` must always equal `matched_on.len()`.
+    /// the injection threshold reads on every prompt and the pairs are what the
+    /// decision log records, and `entity_count` must always equal
+    /// `matched_on.len()`.
     pub matched_on: Vec<MatchedEntity>,
     /// Higher is a better match: the negated bm25 (see [`HEAD`]) plus
     /// [`Hit::entity_score`].
     pub relevance: f64,
-    /// The matched text, cut from the session's block rows (D-05). Empty only when the
+    /// The matched text, cut from the session's block rows. Empty only when the
     /// archive would not give it up - see [`crate::recall::excerpt`].
     pub excerpt: String,
+    /// The turn's `turns.is_typed`: `Some(false)` for a `user` row the harness
+    /// wrote, such as a tool result, `Some(true)` for one a person typed, and
+    /// `None` where nothing derived it. Carried so the injection paths can drop
+    /// tool results without a second query (see
+    /// [`crate::inject::prompt::quotable`]).
+    pub is_typed: Option<bool>,
 }
 
 /// What a search answered.
 ///
-/// An empty `hits` with a `reason` is the shape RCL-10 asks for: a search that
-/// could not match anything says so, rather than throwing or looking like an
-/// archive with nothing in it.
+/// An empty `hits` with a `reason` is how an empty answer is given: a search
+/// that could not match anything says so, rather than throwing or looking like
+/// an archive with nothing in it.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Response {
     pub hits: Vec<Hit>,
@@ -288,18 +295,18 @@ const HEAD: &str = "
            t.ts,
            m.project,
            m.parent_session_key IS NOT NULL AS sidechain,
-           -bm25(turns_fts) AS relevance
+           -bm25(turns_fts) AS relevance,
+           t.is_typed
     FROM turns_fts
     JOIN turns t ON t.id = turns_fts.rowid
     LEFT JOIN session_meta m ON m.session_key = t.session_key
     WHERE turns_fts MATCH ?
 ";
 
-/// The order is total, so two runs over an unchanged store agree - phase 5
+/// The order is total, so two runs over an unchanged store agree - injection
 /// reads rank 1..3 and a nondeterministic tie would make its threshold fire on
-/// a different turn each time. Relevance first, then D-07's rule that a
-/// sidechain turn sorts last at equal score, then the newer turn, then the
-/// lower id.
+/// a different turn each time. Relevance first, then the rule that a sidechain
+/// turn sorts last at equal score, then the newer turn, then the lower id.
 ///
 /// This orders the CANDIDATES. The entity weighting below then moves rows
 /// within that set and the same comparison is applied again in Rust, which is
@@ -315,17 +322,24 @@ const TAIL: &str = "
 /// The entity weighting can only re-order rows it was given, so a pool no
 /// larger than the limit would mean a turn that carries the exact command the
 /// user asked for could never climb past a turn that merely says the word.
-/// Four times the maximum is a bounded read - the rows are seven small columns
+/// Four times the maximum is a bounded read - the rows are eight small columns
 /// and no blob is touched until after the truncation - and it is the whole of
 /// what a re-rank can reach.
 const CANDIDATE_POOL: usize = MAX_RESULTS * 4;
 
 /// Run one search.
 ///
-/// A query that reduced to no tokens returns no hits without asking SQLite
-/// anything: `MATCH ''` is itself an fts5 error (D-09), so the empty result is
-/// produced rather than caught, with [`Reason::NothingSearchable`] saying why.
+/// The order is fixed. The time bounds are checked first, through
+/// [`checked_bound`], so a bound that names no instant is
+/// [`crate::error::Error::InvalidTimeFilter`] wherever the caller stands (#24).
+/// Then the scope is resolved, and a scope that leaves nothing to search -
+/// everything excluded, nothing archived, an unknown or excluded project -
+/// answers with its reason. Then a query that reduced to no tokens returns no
+/// hits without asking SQLite anything: `MATCH ''` is itself an fts5 error, so
+/// the empty result is produced rather than caught, with
+/// [`Reason::NothingSearchable`] saying why.
 pub fn run(conn: &Connection, config: &Config, request: &Request) -> Result<Response> {
+    let bounds = request.filters.bounds()?;
     let scoped = scope::resolve(conn, config, &request.scope)?;
     if let Some(reason) = scoped.reason() {
         return Ok(Response {
@@ -346,11 +360,11 @@ pub fn run(conn: &Connection, config: &Config, request: &Request) -> Result<Resp
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(expression)];
 
     scoped.push_filter(&mut sql, &mut params);
-    request.filters.push_onto(&mut sql, &mut params)?;
+    request.filters.push_onto(&bounds, &mut sql, &mut params);
     // Conjunctive with everything above and applied inside the ranking query,
     // not after it: a bound applied to the results would let a later-archived
     // turn take a slot in the candidate pool and push a turn that WAS indexed
-    // out of the window a replay then judges (D-10).
+    // out of the window a replay then judges.
     if let Some(bound) = request.before_turn_id {
         sql.push_str(" AND t.id < ?\n");
         params.push(Box::new(bound));
@@ -374,6 +388,7 @@ pub fn run(conn: &Connection, config: &Config, request: &Request) -> Result<Resp
                 matched_on: Vec::new(),
                 relevance: row.get(6)?,
                 excerpt: String::new(),
+                is_typed: row.get(7)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<Hit>>>()?;
@@ -387,7 +402,7 @@ pub fn run(conn: &Connection, config: &Config, request: &Request) -> Result<Resp
     // And not at all when the caller said so - see [`Request::excerpts`].
     let reads = if request.excerpts {
         // The knob is read HERE, at the entry point that already holds the
-        // config, and travels down as a value (phase 4 D-01).
+        // config, and travels down as a value.
         excerpt::attach(conn, &request.query, &mut hits, &Redaction::of(config))?
     } else {
         excerpt::Reads::default()
@@ -443,9 +458,9 @@ const COVERED_WEIGHT: f64 = 1.0;
 
 /// What the query matched on one candidate turn, beside the score it earned.
 ///
-/// The score is what re-ranks; the other two are what phase 5's structural
-/// threshold reads. They are collected in the same pass because they come off
-/// the same rows: recomputing them later would mean a second scan of
+/// The score is what re-ranks; the other two are what the injection's
+/// structural threshold reads. They are collected in the same pass because they
+/// come off the same rows: recomputing them later would mean a second scan of
 /// `entities` and a second definition of "matched".
 #[derive(Default)]
 struct Matched {
@@ -477,33 +492,33 @@ impl Matched {
     }
 }
 
-/// RCL-04's query-time half: weight each matched entity by how rare its value
-/// is, and add it to the relevance of every candidate carrying it.
+/// The query-time half of entity matching: weight each matched entity by how
+/// rare its value is, and add it to the relevance of every candidate carrying
+/// it.
 ///
 /// Nothing is rejected and there is no stop-list. "Too common" changes as the
-/// corpus grows and an index-time rejection is irreversible, which is why the
-/// requirement puts this here: a value carried by half the archive still
+/// corpus grows and an index-time rejection is irreversible, which is why
+/// commonness is weighed here: a value carried by half the archive still
 /// matches, it just moves a hit almost not at all.
 ///
 /// Deterministic, and dependent only on stored rows: the document frequency is
 /// a count over `entities` and the total is a count over `turns`, so two runs
-/// against an unchanged store produce the same order. Phase 5's structural
-/// threshold reads rank 1..3, and a nondeterministic tie would make it fire on
-/// a different turn each time.
+/// against an unchanged store produce the same order. The injection's
+/// structural threshold reads rank 1..3, and a nondeterministic tie would make
+/// it fire on a different turn each time.
 fn weight_by_entities(conn: &Connection, query: &Query, hits: &mut [Hit]) -> Result<()> {
     if hits.is_empty() || query.is_empty() {
         return Ok(());
     }
 
-    let ids: Vec<i64> = hits.iter().map(|hit| hit.turn_id).collect();
-    let placeholders = std::iter::repeat_n("?", ids.len())
-        .collect::<Vec<_>>()
-        .join(",");
-    let mut statement = conn.prepare(&format!(
-        "SELECT turn_id, kind, value_norm FROM entities WHERE turn_id IN ({placeholders})"
-    ))?;
+    // One JSON array, so the id list is one bound parameter (#108).
+    let ids: serde_json::Value = hits.iter().map(|hit| hit.turn_id).collect();
+    let mut statement = conn.prepare(
+        "SELECT turn_id, kind, value_norm FROM entities
+         WHERE turn_id IN (SELECT value FROM json_each(?1))",
+    )?;
     let rows = statement
-        .query_map(rusqlite::params_from_iter(ids.iter()), |row| {
+        .query_map([ids.to_string()], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, String>(1)?,
@@ -554,7 +569,7 @@ fn weight_by_entities(conn: &Connection, query: &Query, hits: &mut [Hit]) -> Res
         };
         // A match with a zero weight is still a match. The two were one fact
         // while `entity_score` was the only thing reported, and separating
-        // them is the whole of D-04: a value the whole archive carries scores
+        // them means a value the whole archive carries scores
         // almost nothing and is still the query naming a stored value.
         if let Some((matched, weight)) = scored {
             by_turn
@@ -584,13 +599,35 @@ fn weight_by_entities(conn: &Connection, query: &Query, hits: &mut [Hit]) -> Res
     Ok(())
 }
 
+/// The time bounds of one search, each already through [`checked_bound`].
+struct Bounds {
+    since: Option<String>,
+    until: Option<String>,
+}
+
 impl Filters {
-    /// Append every filter that is set, conjunctively.
+    /// Check both time bounds, once per search.
+    fn bounds(&self) -> Result<Bounds> {
+        let check = |field, bound: &Option<String>| {
+            bound
+                .as_deref()
+                .map(|raw| checked_bound(field, raw))
+                .transpose()
+        };
+        Ok(Bounds {
+            since: check(FIELD_SINCE, &self.since)?,
+            until: check(FIELD_UNTIL, &self.until)?,
+        })
+    }
+
+    /// Append every filter that is set, conjunctively, with the time bounds as
+    /// [`Filters::bounds`] checked them.
     fn push_onto(
         &self,
+        bounds: &Bounds,
         sql: &mut String,
         params: &mut Vec<Box<dyn rusqlite::ToSql>>,
-    ) -> Result<()> {
+    ) {
         if let Some(tool) = &self.tool {
             sql.push_str(" AND t.tool_name = ?\n");
             params.push(Box::new(tool.clone()));
@@ -602,41 +639,45 @@ impl Filters {
         if !self.paths.is_empty() {
             // EXISTS rather than a join: a turn carrying three of the named
             // paths is still one hit, and a join would return it three times
-            // and spend three excerpt reads saying so.
+            // and spend three excerpt reads saying so. The list is one JSON
+            // array read through `json_each`, so its length is not bounded by
+            // SQLite's variable limit (#108).
             sql.push_str(
-                " AND EXISTS (SELECT 1 FROM paths p WHERE p.turn_id = t.id AND p.path IN (",
+                " AND EXISTS (SELECT 1 FROM paths p WHERE p.turn_id = t.id \
+                 AND p.path IN (SELECT value FROM json_each(?)))\n",
             );
-            for (index, path) in self.paths.iter().enumerate() {
-                if index > 0 {
-                    sql.push(',');
-                }
-                sql.push('?');
-                params.push(Box::new(path.clone()));
-            }
-            sql.push_str("))\n");
+            let paths: serde_json::Value = self.paths.iter().map(String::as_str).collect();
+            params.push(Box::new(paths.to_string()));
         }
         // A turn with no timestamp is outside every window, because SQL's
         // `NULL >= x` is NULL. That is the wanted answer: a turn that cannot say
         // when it happened cannot be shown as evidence of when something did.
-        if let Some(since) = &self.since {
+        if let Some(since) = &bounds.since {
             sql.push_str(" AND t.ts >= ?\n");
-            params.push(Box::new(bound(FIELD_SINCE, since)?));
+            params.push(Box::new(since.clone()));
         }
-        if let Some(until) = &self.until {
+        if let Some(until) = &bounds.until {
             sql.push_str(" AND t.ts <= ?\n");
-            params.push(Box::new(bound(FIELD_UNTIL, until)?));
+            params.push(Box::new(until.clone()));
         }
-        Ok(())
     }
 }
 
-const FIELD_SINCE: &str = "since";
-const FIELD_UNTIL: &str = "until";
+/// The `field` [`checked_bound`] reads as the lower end of a window.
+pub const FIELD_SINCE: &str = "since";
+/// The `field` [`checked_bound`] reads as the upper end of a window.
+pub const FIELD_UNTIL: &str = "until";
 
-/// One end of a time window, as a string that can be compared against
+/// One end of a time window, checked, as a string that can be compared against
 /// `turns.ts` directly.
 ///
-/// D-23: the comparison is lexicographic and there is no date parsing on the
+/// This is the one date check in the workspace: [`Filters`] runs every bound
+/// through it, and so do `terminus search`, `terminus sessions`, `terminus
+/// observations regenerate` and the MCP server's `recall_search` when they read
+/// their arguments. `field` is [`FIELD_SINCE`] or [`FIELD_UNTIL`]; it names the
+/// bound in the error and decides how a bare date extends.
+///
+/// The comparison is lexicographic and there is no date parsing on the
 /// stored side. All 22,412 turns of a 180-file sample carry exactly the shape
 /// `NNNN-NN-NNTNN:NN:NN.NNNZ` - one format, UTC only - and `turns(ts)` is
 /// already indexed, so a text comparison is both correct and the fast plan.
@@ -647,24 +688,67 @@ const FIELD_UNTIL: &str = "until";
 /// --until 2026-08-12` return the single turn that happened at exactly
 /// 00:00:00.000 and look like an empty day.
 ///
+/// A value of either shape must also be a real date, and in the full form a
+/// real time of day: month 01 to 12, a day within that month's Gregorian
+/// length, hour 00 to 23, minute and second 00 to 59. The milliseconds may be
+/// any three digits. The shape alone is not enough, because the comparison
+/// never parses: `2026-02-30` is well shaped, sorts between 28 February and 1
+/// March, and would answer a plausible window that no calendar has (#24).
+///
 /// Anything else is a caller error. Comparing it would succeed - every string
 /// orders against every other - and return an answer that looks right.
-fn bound(field: &'static str, raw: &str) -> Result<String> {
-    if is_shaped(raw, "NNNN-NN-NNTNN:NN:NN.NNNZ") {
-        return Ok(raw.to_owned());
-    }
-    if is_shaped(raw, "NNNN-NN-NN") {
-        let tail = if field == FIELD_SINCE {
-            "T00:00:00.000Z"
-        } else {
-            "T23:59:59.999Z"
-        };
-        return Ok(format!("{raw}{tail}"));
-    }
-    Err(crate::error::Error::InvalidTimeFilter {
+pub fn checked_bound(field: &'static str, raw: &str) -> Result<String> {
+    let refused = || crate::error::Error::InvalidTimeFilter {
         field,
         value: raw.to_owned(),
-    })
+    };
+    let full = is_shaped(raw, "NNNN-NN-NNTNN:NN:NN.NNNZ");
+    if !full && !is_shaped(raw, "NNNN-NN-NN") {
+        return Err(refused());
+    }
+    if !is_real_date(raw) || (full && !is_real_time(raw)) {
+        return Err(refused());
+    }
+    if full {
+        return Ok(raw.to_owned());
+    }
+    let tail = if field == FIELD_SINCE {
+        "T00:00:00.000Z"
+    } else {
+        "T23:59:59.999Z"
+    };
+    Ok(format!("{raw}{tail}"))
+}
+
+/// Is the `YYYY-MM-DD` that `shaped` starts with a day on the Gregorian
+/// calendar? `shaped` has already passed [`is_shaped`], so every field is
+/// ASCII digits.
+fn is_real_date(shaped: &str) -> bool {
+    let year = digits(shaped, 0, 4);
+    let month = digits(shaped, 5, 2);
+    let day = digits(shaped, 8, 2);
+    let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
+    let length = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=length).contains(&day)
+}
+
+/// Is the `HH:MM:SS` of a full-form timestamp a time of day? No leap second:
+/// transcripts are stamped by a clock that never writes one.
+fn is_real_time(shaped: &str) -> bool {
+    digits(shaped, 11, 2) <= 23 && digits(shaped, 14, 2) <= 59 && digits(shaped, 17, 2) <= 59
+}
+
+/// The number `len` ASCII digits starting at byte `start` spell.
+fn digits(shaped: &str, start: usize, len: usize) -> u32 {
+    shaped.as_bytes()[start..start + len]
+        .iter()
+        .fold(0, |n, byte| n * 10 + u32::from(byte - b'0'))
 }
 
 /// Does `value` match `shape`, where `N` stands for one ASCII digit and every

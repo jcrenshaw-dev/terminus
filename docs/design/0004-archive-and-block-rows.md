@@ -12,7 +12,7 @@ The archive does not decide what goes into it. The ingest pass in [0003: Ingest]
 
 | Term | Meaning |
 |---|---|
-| Session | One transcript file, keyed by `session_key` and numbered by `session_no`, a stable integer assigned when it is first archived. The key is the transcript's path below its project folder: `<uuid>.jsonl`, or `<sessionId>/subagents/[workflows/wf_*/]agent-*.jsonl` for a sidecar. It is read off the shape of the path, which must sit in a project folder inside a `projects` folder, never by stripping a root, so a moved or symlinked `.claude` or a moved project folder does not change it. A transcript that is a symlink takes the key of the file it points at, and a path outside those two shapes, such as a file under no `projects` folder, keeps its canonical path as its key. The absolute path the file was last read from is `session_meta.transcript_path`. Recovery re-keys a session whose stored key is still an absolute path, and merges sessions that reduce to one key into the oldest of them when their streams are provably one, as [0003: Ingest](0003-ingest.md) describes. |
+| Session | One transcript file, keyed by `session_key` and numbered by `session_no`, a stable integer assigned when it is first archived. The key is the transcript's path below its project folder: `<uuid>.jsonl`, or `<sessionId>/subagents/[workflows/wf_*/]agent-*.jsonl` for a sidecar. It is read off the shape of the path, which must sit in a project folder inside a `projects` folder, never by stripping a root, so a moved or symlinked `.claude` or a moved project folder does not change it. A transcript that is a symlink takes the key of the file it points at, and a path outside those two shapes, such as a file under no `projects` folder, keeps its canonical path as its key. The absolute path the file was last read from is `session_meta.transcript_path`. |
 | Session stream | The bytes the archive holds for one session: the transcript as it was read, byte for byte under `[capture] mode` `full`. Offsets in `turns` and `compactions` are offsets in this stream, never in a block. |
 | Block row | One row of `blocks`: block `block_no` of a session's stream, compressed with zstd, with the BLAKE3 hash of its uncompressed bytes. |
 | Block size | How many uncompressed bytes each block of a session holds, recorded per session in `session_meta.block_size`. New sessions are cut at `BLOCK_SIZE`, 65536. |
@@ -30,7 +30,7 @@ The store lives in the library crate, `crates/terminus-core`. The commands that 
 | Module | What it does |
 |---|---|
 | [`crates/terminus-core/src/store/mod.rs`](../../crates/terminus-core/src/store/mod.rs) | The store's public face: `Store`, `turn_id`, `TABLES` and `DERIVED_TABLES`. |
-| [`crates/terminus-core/src/store/open.rs`](../../crates/terminus-core/src/store/open.rs) | `ARCHIVE_FORMAT` and `DERIVED_SCHEMA`, the version gate, the writable and read-only opens, bringing an older store's tables and columns forward, and resolving the data directory. |
+| [`crates/terminus-core/src/store/open.rs`](../../crates/terminus-core/src/store/open.rs) | `ARCHIVE_FORMAT` and `DERIVED_SCHEMA`, the version gate, the writable and read-only opens, creating a table the store lacks, and resolving the data directory. |
 | [`crates/terminus-core/src/store/schema.rs`](../../crates/terminus-core/src/store/schema.rs) | Every table, column and index, in one `CREATE_SQL`, and `TABLES`, `DERIVED_TABLES`, `BRING_FORWARD_COLUMNS` and the turn-id encoding. |
 | [`crates/terminus-core/src/store/archive.rs`](../../crates/terminus-core/src/store/archive.rs) | Every read and write of a session's block rows. A reader asks for a range of the session stream and gets back only the blocks that range covers. It checks no hash. |
 | [`crates/terminus-core/src/blob/mod.rs`](../../crates/terminus-core/src/blob/mod.rs) | `BLOCK_SIZE` and `ZSTD_LEVEL`, and the bounds on a block size read from a column. |
@@ -95,7 +95,7 @@ The truth. They are never dropped, never rebuilt and never converted.
 | `is_evicted` | `INTEGER` | 1 once retention has deleted the session's block rows. |
 | `parent_session_key` | `TEXT` | For a sidecar, the session key of the transcript it belongs to, in the same form, such as `<sessionId>.jsonl`, read from the sidecar's path. |
 | `agent_meta` | `BLOB` | A sidecar's `agent-*.meta.json`, stored as bytes and never parsed into columns. |
-| `transcript_diverged` | `INTEGER` | 1 when the transcript on disk is shorter than what was archived or does not match it. `terminus verify` reports it. |
+| `transcript_diverged` | `INTEGER` | 1 once the transcript on disk is shorter than its watermark. A flagged session's file is compared against the archived prefix on every pass, and the flag clears only when the two match. Null when not flagged. `terminus verify` reports it. |
 | `project_pre_worktree` | `TEXT` | The project key before a worktree was folded into its repository. |
 | `capture_mode` | `TEXT` | `full`, `lean` or `minimal`. Null means `full`. |
 
@@ -119,7 +119,7 @@ They hold what happened at prompt time, or facts read from block rows that reten
 | `injected` | `TEXT` | JSON: the turns injected and the characters each spent. |
 | `suppressed` | `TEXT` | JSON: the turns refused, with the reason. |
 | `thresholds` | `TEXT` | JSON: the thresholds in force. |
-| `compacted` | `INTEGER` | 1 when the prompt used the pool for the first prompt after a compaction, 0 when not. Null for a decision logged before the column existed. |
+| `compacted` | `INTEGER` | 1 when the prompt used the pool for the first prompt after a compaction, 0 when not. |
 | `dropped` | `TEXT` | JSON: the turn ids the compaction dropped. |
 
 `labels`, what each decision turned out to be worth:
@@ -241,7 +241,7 @@ An append, which is how every pass after a session's first adds to it, rewrites 
 
 - An archive format other than 2, older or newer, is refused, and the store is not changed. There is no conversion.
 - A derived schema other than 5, older or newer, opens and is marked as needing a rebuild. The next ingest pass rebuilds every derived table from the block rows before it reads any transcript, and `terminus reindex` does the same.
-- Every writable open of an existing store creates any table in `TABLES` the store lacks and adds any column in `BRING_FORWARD_COLUMNS` it lacks, with `ALTER TABLE ADD COLUMN`. Those columns are `session_meta`'s `agent_meta`, `transcript_diverged`, `project_pre_worktree` and `capture_mode`, `runs`'s `files_committed`, `files_failed` and `notes`, `turns`'s `is_typed`, and `decisions`'s `compacted` and `dropped`. Each is declared last in its table, so a new store and a brought-forward one have the same column order. The same open drops the observation columns in `DROPPED_OBSERVATION_COLUMNS` and the `meta` key in `DROPPED_META_KEY` where a store still has them. A read-only open changes nothing and reports what is missing.
+- Every writable open of an existing store creates any table in `TABLES` the store lacks. A read-only open changes nothing and reports what is missing.
 
 ## 5. Commands and operations
 
@@ -269,7 +269,7 @@ Options are in [commands.md](../commands.md#the-store), and the `--json` fields 
 
 - **Inputs:** the store.
 - **Outputs:** `VACUUM`, which rebuilds the file without its free pages, then `PRAGMA wal_checkpoint(TRUNCATE)`, because on a WAL store the vacuum writes the rebuilt file through the WAL and the checkpoint is what makes the space come back. It prints the size of `terminus.db` and its two sidecars before and after. It deletes no row: only retention deletes sessions, and this gives back the space that left.
-- **Refusals:** it takes `LOCK` before it opens anything, and exits 1 when a pass holds it. With no store, there is nothing to reclaim and it exits 0.
+- **Refusals:** it takes `LOCK` before it opens anything, and exits 1 when a pass holds it. With no store, there is nothing to reclaim and it exits 0. A store it cannot read exits 1.
 
 ### `terminus usage`
 
@@ -429,7 +429,7 @@ erDiagram
 ```mermaid
 stateDiagram-v2
   [*] --> Probe: Store open
-  Probe --> Fresh: no file, or a zero-length one
+  Probe --> Fresh: no file, a zero-length one, or one with no tables
   Fresh --> Current: create every table, set archive_format 2 and derived_schema 5
   Probe --> Gate: a store exists
   Gate --> Refused: archive_format is not 2

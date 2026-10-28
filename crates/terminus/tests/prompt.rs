@@ -1,5 +1,5 @@
 //! The relevance injection at the process boundary: the bytes Claude Code
-//! reads, and the silence it reads most of the time (INJ-03, AC3, AC7).
+//! reads, and the silence it reads most of the time.
 //!
 //! Spawns rather than library calls, for the reason `tests/recall_cli.rs`
 //! gives: the properties under test are the stdout bytes and the exit code, and
@@ -19,7 +19,7 @@
 //!
 //! The store is seeded from `session-edits.jsonl` through
 //! `testkit::copy_rooted_fixture_into` under a root the test owns, never
-//! through a fixture that hardcodes `/data/code/verbatim`: AC3 is about a
+//! through a fixture that hardcodes `/data/code/verbatim`: what is tested is a
 //! prompt naming a file RELATIVE to the payload's `cwd` finding the ABSOLUTE
 //! spelling a past session stored, and both have to be something this test
 //! built.
@@ -156,7 +156,7 @@ fn payload(cwd: &std::path::Path, prompt: &str) -> Value {
 ///
 /// The event name is checked here rather than at each call site because the
 /// harness throws `Hook returned incorrect event name` on a mismatch, which is
-/// a red banner on the user's prompt rather than a wrong injection (D-01).
+/// a red banner on the user's prompt rather than a wrong injection.
 fn injected(out: &Output) -> String {
     assert!(
         out.status.success(),
@@ -201,9 +201,9 @@ fn silent(out: &Output, what: &str) {
     );
 }
 
-/// AC3, end to end. The prompt names the file the way a user types it and the
-/// turn that stored it absolute comes back; the same prompt without the path
-/// writes nothing.
+/// The relative path, end to end. The prompt names the file the way a user
+/// types it and the turn that stored it absolute comes back; the same prompt
+/// without the path writes nothing.
 #[test]
 fn a_prompt_naming_a_file_gets_the_turn_that_edited_it() {
     let bench = bench();
@@ -241,7 +241,7 @@ fn turn_lines(context: &str) -> usize {
         .count()
 }
 
-/// AC7: a prompt whose only match is free text writes nothing.
+/// A prompt whose only match is free text writes nothing.
 ///
 /// Two shapes of it, because they fail differently. The first names nothing
 /// structural at all and never opens the store; the second names an
@@ -262,11 +262,11 @@ fn a_prompt_that_matches_only_free_text_writes_nothing() {
     );
 }
 
-/// D-16: the configured budget reaches the process, in characters.
+/// The configured budget reaches the process, in characters.
 ///
 /// Written to `terminus.toml` and asserted on the spawned binary's own stdout,
 /// because "settings must actually reach the query" is the requirement rather
-/// than a detail (`DESIGN-BRIEF.md:239`).
+/// than a detail.
 ///
 /// 300 is room for the frame, which is 239 characters, and one turn line cut
 /// short.
@@ -291,8 +291,8 @@ fn no_injection_exceeds_the_configured_budget() {
     assert_eq!(turn_lines(&context), 1, "{context}");
 }
 
-/// AC4: a budget too small for the frame writes nothing and exits 0, rather
-/// than a block whose closing tag the backstop cut off (D-06).
+/// A budget too small for the frame writes nothing and exits 0, rather than a
+/// block whose closing tag the backstop cut off.
 #[test]
 fn a_budget_too_small_for_the_frame_writes_nothing() {
     let bench = bench();
@@ -313,7 +313,7 @@ fn a_budget_too_small_for_the_frame_writes_nothing() {
 /// `saffron/limits.txt` under `project-epsilon`.
 const REDACTION_FIXTURE: &str = "session-redaction.jsonl";
 
-/// PRIV-03's knob, written the way `tests/brief.rs` writes it.
+/// `[privacy] redact_recall`, written the way `tests/brief.rs` writes it.
 const KNOB_ON: &str = "[privacy]\nredact_recall = true\n";
 
 /// The prompt hook injects the multi-byte turn with the knob on (#61).

@@ -2,9 +2,9 @@
 //!
 //! Two rules carry this module. Lines are split on `\n` and never trimmed, so
 //! what the ingest hands to the archive stays byte-identical to the source in
-//! capture mode `full` (D-13/AC7); `lean` and `minimal` replace named subtrees
+//! capture mode `full`; `lean` and `minimal` replace named subtrees
 //! with an elision mark (`crate::capture`). And the resume offset is the byte
-//! just past the **last** `\n`, never end-of-file (D-14): all 1,221 top-level
+//! just past the **last** `\n`, never end-of-file: all 1,221 top-level
 //! and 812 sidecar transcripts measured end with a newline, so a trailing
 //! partial line is a record still being written and must not be archived or
 //! indexed until it is complete.
@@ -19,7 +19,7 @@ pub struct Scan {
     /// One entry per complete line, in file order. Empty lines yield nothing.
     pub records: Vec<Record>,
     /// Absolute offset just past the last `\n` in the scanned range: where the
-    /// next pass resumes, and the only offset a watermark may take (D-14).
+    /// next pass resumes, and the only offset a watermark may take.
     ///
     /// Equal to the range's start offset when the range holds no newline at
     /// all, which is the "one long record still being written" case: no
@@ -28,7 +28,7 @@ pub struct Scan {
 }
 
 impl Scan {
-    /// Records that D-03 classifies as turns, in byte order.
+    /// Records the classification rule makes turns, in byte order.
     pub fn turns(&self) -> impl Iterator<Item = (&Record, &Turn)> {
         self.records
             .iter()
@@ -42,7 +42,7 @@ impl Scan {
 }
 
 /// How many leading bytes of `bytes` end at its last `\n`, or 0 when it holds
-/// none. This is the resume rule (D-14): a pass stops just past the last
+/// none. This is the resume rule: a pass stops just past the last
 /// newline, never at end of file.
 pub fn complete_len(bytes: &[u8]) -> usize {
     bytes.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1)
@@ -59,7 +59,7 @@ pub fn scan(bytes: &[u8]) -> Scan {
 /// `first_turn_seq` is what makes an incremental pass agree with a rebuild: a
 /// tail read numbers its turns on from the ones already stored, and a rebuild
 /// over the whole stream from 0 lands on the same numbers, because both count
-/// in byte order (D-02).
+/// in byte order.
 pub fn scan_from(bytes: &[u8], start_offset: u64, first_turn_seq: i64) -> Scan {
     let mut records = Vec::new();
     let mut turn_seq = first_turn_seq;

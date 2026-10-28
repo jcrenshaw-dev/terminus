@@ -567,6 +567,19 @@ fn a_manifest_naming_another_version_is_refused(shell: Shell) {
     );
 }
 
+/// A manifest `install.sh` refuses is refused with `install.sh`'s own message
+/// before anything is signed, so the signer runs its copy of `read_manifest`
+/// (#99). A third line after two correct ones is refused by that copy alone.
+fn a_manifest_install_sh_refuses_is_refused_with_its_message(shell: Shell) {
+    let fx = fixture(shell);
+    let manifest = fx.draft.join("terminus-linux-aarch64.manifest");
+    let mut text = std::fs::read_to_string(&manifest).unwrap();
+    text.push_str("a third line\n");
+    std::fs::write(&manifest, text).unwrap();
+    let stderr = assert_refused_before_signing(&fx);
+    assert_eq!(stderr, "terminus: manifest has content after line 2\n");
+}
+
 /// Beside the shipped `install.sh`, the throwaway key signs but its signature
 /// does not verify against the pinned key, so nothing is uploaded. The run
 /// stops at the first manifest, after one passphrase prompt.
@@ -638,6 +651,25 @@ fn a_published_release_is_refused(shell: Shell) {
     );
 }
 
+/// A signing run executes nothing it reads from `install.sh` (#99). The
+/// fixture's `install.sh` has a `valid_version` that creates a file, and the
+/// run leaves no such file.
+fn a_signing_run_executes_nothing_from_install_sh(shell: Shell) {
+    let fx = fixture(shell);
+    let marker = fx.root.join("ran-from-install-sh");
+    let path = fx.root.join("install.sh");
+    let shipped = std::fs::read_to_string(&path).unwrap();
+    let planted = shipped.replace(
+        "valid_version() (\n",
+        &format!("valid_version() (\n    : > '{}'\n", marker.display()),
+    );
+    assert_ne!(planted, shipped);
+    std::fs::write(&path, planted).unwrap();
+    let output = fx.run(TAG);
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(!marker.exists());
+}
+
 both_shells!(
     a_good_draft_is_signed_and_published,
     a_bad_tag_is_refused,
@@ -645,9 +677,11 @@ both_shells!(
     a_draft_missing_a_file_is_refused,
     a_binary_that_does_not_match_its_manifest_is_refused,
     a_manifest_naming_another_version_is_refused,
+    a_manifest_install_sh_refuses_is_refused_with_its_message,
     a_signature_the_pinned_key_does_not_verify_is_refused,
     a_binary_ci_did_not_attest_is_refused,
     a_published_release_is_refused,
+    a_signing_run_executes_nothing_from_install_sh,
 );
 
 /// The script reads the pinned key from `install.sh` and keeps no copy of it.
@@ -656,4 +690,49 @@ fn sign_release_holds_no_copy_of_the_key() {
     let script = std::fs::read_to_string(repo_file("scripts/sign-release.sh")).unwrap();
     let base64 = PINNED_KEY.split(' ').nth(1).unwrap();
     assert!(!script.contains(base64));
+}
+
+/// The script never evals anything (#99).
+#[test]
+fn sign_release_holds_no_eval() {
+    let script = std::fs::read_to_string(repo_file("scripts/sign-release.sh")).unwrap();
+    assert!(!script.contains("eval"));
+}
+
+/// From the one line equal to `open` through the first line after it equal to
+/// `close`, as text.
+fn cut_function(script: &str, file: &str, open: &str, close: &str) -> String {
+    let lines: Vec<&str> = script.lines().collect();
+    let starts: Vec<usize> = (0..lines.len()).filter(|&i| lines[i] == open).collect();
+    assert_eq!(starts.len(), 1, "{file}: lines equal to {open:?}: {starts:?}");
+    let start = starts[0];
+    let end = lines[start + 1..]
+        .iter()
+        .position(|line| *line == close)
+        .unwrap_or_else(|| panic!("{file}: no line {close:?} closes {open:?}"))
+        + start
+        + 1;
+    assert!(end > start + 1, "{file}: {open:?} holds nothing");
+    lines[start..=end].join("\n")
+}
+
+/// The signer's `valid_version`, `digest` and `read_manifest` are the text of
+/// `install.sh`'s (#99), so it refuses what the installer refuses without
+/// running any of it.
+#[test]
+fn the_signers_copies_are_install_shs_text() {
+    let install = std::fs::read_to_string(repo_file("install.sh")).unwrap();
+    let signer = std::fs::read_to_string(repo_file("scripts/sign-release.sh")).unwrap();
+    for (open, close) in [
+        ("valid_version() (", ")"),
+        ("digest() {", "}"),
+        ("read_manifest() {", "}"),
+    ] {
+        let name = open.trim_end_matches(" {").trim_end_matches(" (");
+        assert_eq!(
+            cut_function(&install, "install.sh", open, close),
+            cut_function(&signer, "scripts/sign-release.sh", open, close),
+            "{name} in scripts/sign-release.sh differs from install.sh's"
+        );
+    }
 }

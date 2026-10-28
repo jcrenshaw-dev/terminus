@@ -1,13 +1,13 @@
-//! `terminus retention --dry-run`: what the next ingest pass would do (RET-03).
+//! `terminus retention --dry-run`: what the next ingest pass would do.
 //!
 //! **It applies nothing, ever.** Retention runs as a bounded step at the end of
-//! every pass (D-10) and that is the only place it acts; this command reports
+//! every pass and that is the only place it acts; this command reports
 //! and returns. A second application path here would race the pass's own, which
 //! is precisely what one shared evaluation exists to prevent - so `--dry-run` is
 //! the documented spelling of the only behaviour this command has rather than a
 //! mode it can be talked out of.
 //!
-//! **One evaluation, shared with the pass (D-04).**
+//! **One evaluation, shared with the pass.**
 //! [`terminus_core::retention::evaluate`] is the function both callers use.
 //! Two independently written evaluations of a `'now'`-relative predicate can
 //! legitimately disagree by one session and there would be no way to tell that
@@ -36,7 +36,7 @@ const COMMAND: &str = "retention";
 
 /// What a store whose `terminus.toml` has no `[retention]` table is told.
 ///
-/// Off is the default and the whole product's posture (RET-01), so this is the
+/// Off is the default and the whole product's posture, so this is the
 /// ordinary answer rather than a complaint. It names the file, because the file
 /// is the only thing that can change it: nothing in this binary writes it.
 const OFF: &str = "retention is off: no `[retention]` table in terminus.toml selects anything, \
@@ -55,7 +55,7 @@ pub fn run(args: Args) -> Result<(), Failure> {
     let reader = match read::open()? {
         Opened::Ready(reader) => reader,
         Opened::Nothing(reason) => {
-            return read::empty(document(&Selection::default()), &reason, args.json)
+            return read::empty(empty(), &reason, args.json)
         }
     };
     let conn = reader.store().conn();
@@ -95,20 +95,20 @@ pub fn run(args: Args) -> Result<(), Failure> {
 
     // Commentary on stderr, so stdout stays the list. `status` reports its own
     // counts the same way.
-    eprintln!(
+    errln!(
         "{} session(s) would be evicted, {} deleted, by the next ingest pass",
         selection.evict.len(),
         selection.delete.len()
     );
     if selection.over > 0 {
-        eprintln!(
+        errln!(
             "{} more are waiting: one pass acts on at most {} per action",
             selection.over,
             retention::MAX_PER_PASS
         );
     }
     if selection.excluded > 0 {
-        eprintln!(
+        errln!(
             "{} session(s) in excluded projects were left alone",
             selection.excluded
         );
@@ -119,7 +119,7 @@ pub fn run(args: Args) -> Result<(), Failure> {
 /// The envelope for this command, with the selection already in it.
 ///
 /// `cutoff` is the evaluation INSTANT and not `now` less some number of days,
-/// because there is no single such number: the age is per project (D-01), so
+/// because there is no single such number: the age is per project, so
 /// what one report can honestly state is the one clock reading every one of
 /// those ages was measured from.
 fn document(selection: &Selection) -> Document {
@@ -150,9 +150,15 @@ fn op(error: terminus_core::Error) -> Failure {
 ///
 /// `--dry-run` is accepted and changes nothing, because there is nothing for it
 /// to change: this command has exactly one behaviour and the flag is the
-/// documented spelling of it (RET-03, D-04). Accepting it silently is what lets
+/// documented spelling of it. Accepting it silently is what lets
 /// the documented command line keep working if a second verb is ever added
 /// here; rejecting every OTHER flag is the rule that stays.
+/// The document for a selection that names nothing. The no-store answer, and
+/// what `main` writes when the command fails.
+pub(crate) fn empty() -> Document {
+    document(&Selection::default())
+}
+
 pub fn parse(parser: &mut lexopt::Parser) -> Result<Args, Failure> {
     use lexopt::prelude::*;
 

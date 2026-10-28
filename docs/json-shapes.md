@@ -9,7 +9,7 @@ holds `doctor`'s shape.
 ## The envelope
 
 Every `--json` run writes at most one JSON document on one line to stdout, and
-nothing else to stdout, ever. The runs that write none are listed under
+nothing else to stdout, ever. Misuse is the one run that writes none; see
 [Exit codes](#exit-codes).
 
 ```json
@@ -49,29 +49,20 @@ A caller that parses `ok` and a caller that checks the exit code never
 disagree. `verify --json` on a damaged store writes its document **and** exits
 1; the document is the evidence and the code is the verdict.
 
-**Most operational failures write no document.** The ones that do are named
-under their commands: `verify` with a failure, `reindex` with a skipped session,
-a held ingest lock in `reindex`, `observations regenerate` and `compact`, a
-decision log missing one of its two tables in `stats` and `replay`, and a
-`problem` check in `doctor`. Every other operational failure is reported on
-stderr with exit 1, and stdout stays empty:
+Under `--json`, every operational failure writes the command's own empty
+document with `ok: false` and the reason. It is the document the command's
+no-store answer carries, with the arguments echoed where the shape echoes them:
+`search`'s `query` and `truncated`, `replay`'s `thresholds`,
+`observations regenerate`'s `since` and `export`'s `destination`. The failure puts nothing on stderr. Warnings still go there, such
+as a store older than this build.
 
-- a data directory that cannot be resolved
-- a `terminus.toml` that does not load
-- a working directory that cannot be read, when `--project` does not name the
-  project
-- a store that is there and cannot be opened or read, including a store in an
-  archive format this build refuses
-- a SQLite error while the command reads or writes the store
-- an ingest lock file that cannot be created or opened
-- an `export` destination that already holds anything, and an export directory
-  or file that cannot be created or written
-- a `VACUUM` or a WAL truncation that fails in `compact`
+Four failure documents carry real data instead of the empty one: `verify` with
+failures, `reindex` with skipped sessions, `doctor` with a `problem` check, and
+`compact`'s held lock with its measured `before` and `after`.
 
-`doctor` reports a data directory, config or store it cannot use as a check
-rather than failing. Misuse (exit 2) never writes a document. Empty stdout with
-a non-zero exit is therefore part of the contract, and a caller must check the
-exit code before it parses.
+Misuse (exit 2) is the one run that writes no document. It is raised before the
+command's output mode is known, so empty stdout with a non-zero exit means exit
+2 only.
 
 ## Streams
 
@@ -88,8 +79,8 @@ stderr is left for warnings and irregularities, which are still printed in JSON
 mode - a store whose derived tables predate this build says so on stderr and
 still writes only the document to stdout.
 
-Without `--json` the split is unchanged from what phase 1 and 2 shipped: the
-data on stdout, the counts and the warnings on stderr.
+Without `--json` the data goes to stdout, and the counts and the warnings go to
+stderr.
 
 ## `data` by command
 
@@ -102,12 +93,7 @@ command and in the `recall_search` and `recall_get` results, and it does not
 change when `.claude` moves or is reached through a symlink, or when a project
 folder moves. A transcript that is a symlink shows the key of the
 file it points at, and a path outside those two shapes, such as a file under no
-`projects` folder, shows its canonical path. A stored key that is still an
-absolute path is shown as it is: the next `terminus ingest` moves it to the form
-above, and a read never does. A session keeps its absolute key when another
-session reduces to the same key and the ingest cannot prove the two are one
-transcript; the ingest tests it again and reports it on every run. It is a key,
-not a path to open.
+`projects` folder, shows its canonical path. It is a key, not a path to open.
 
 ### `search`
 
@@ -124,7 +110,10 @@ not a path to open.
 - `truncated` is true when the query carried more than `MAX_QUERY_TOKENS`
   distinct tokens. The search still ran; the tokens are conjoined, so a
   truncated query is broader than the one asked for rather than wrong in a
-  direction the caller cannot see.
+  direction the caller cannot see. A word made only of letters the index makes
+  no token from is dropped before the count, so it never sets `truncated`.
+- A query with no token left to search has empty `hits` and the `reason` "the
+  query has no words that can be searched".
 - `hits` are ordered by `relevance`, highest first, then turns with `sidechain`
   false before subagent turns, then newer `ts` first with a null `ts` last, then
   lower `turn_id` first.
@@ -145,9 +134,6 @@ not a path to open.
 - `--kind` is matched against `record_type` exactly, and any value is accepted.
   The record types are `user`, `assistant`, `system` and `attachment`; any other
   value matches nothing, so a misspelled kind is an empty result with exit 0.
-  Only `observation` is refused, as misuse (exit 2) from `terminus search` and
-  as `isError` from `recall_search`, because Terminus stores no session
-  summaries.
 
 ### `show`
 
@@ -194,12 +180,16 @@ not a path to open.
   turn's text, cut the way a search `excerpt` is but from the start of the turn
   rather than around a match, and put through the egress filter under
   `redact_recall` the way `body` is. It is empty when the archive would not give
-  the bytes up. `continues_from` is a Claude Code session id, the `sessionId`
-  the transcript names, and not a `session_key`; zero, one or many archived
-  sessions can carry that id. It is null when the session names no session it
-  continues from, or has no `session_meta` row. `reason` is null unless the
-  window came back empty for a reason, and then it says why in the words
-  `absent` uses.
+  the bytes up. `continues_from` is a Claude Code session id and not a
+  `session_key`: the other session's id that a record in the transcript names,
+  or else the session id of the archived file holding the message the first
+  turn's `parentUuid` points to. Zero, one or many archived sessions can carry
+  that id. It is null when the session names no session it continues from, when
+  the session its `parentUuid` points to is not archived yet, or when the
+  session has no `session_meta` row. An ingest pass over the whole tree fills
+  that second kind of null once the predecessor is archived. `reason` is null
+  unless the window came back empty for a reason, and then it says why in the
+  words `absent` uses.
 - `absent` carries every requested id that named no record this caller may see:
   an unknown id, a turn of an excluded project, or a turn outside the scope.
 
@@ -248,9 +238,11 @@ not a path to open.
   its WAL sidecars together.
 - `last_run` is null on a store no pass has ever written to.
 - `error` holds what went wrong on that pass, one line each: a file skipped, a
-  watermark repaired, a step that could not run. `notes` holds what a healthy
-  pass did worth saying, such as labels written and sessions retention evicted.
-  Each is null when there is nothing to say, and `doctor` flags only `error`.
+  step that could not run. `notes` holds what a healthy pass did worth saying,
+  such as labels written, sessions retention evicted, a watermark recovery
+  lowered or removed, and finalized sessions left waiting for the next pass to
+  observe. Each is null when there is nothing to say, and `doctor` flags only
+  `error`.
 - A machine with no store is an ordinary empty answer: exit 0, `ok` true, a
   `reason`, `store`, `excluded` and `last_run` null, every number zero, and no
   data directory created by the asking.
@@ -347,9 +339,9 @@ and unchanged.
   idle rule has closed, which is exactly the set the labeller was allowed to
   judge. A decision of a live session has no stored label to diff against.
 - `labels` is one entry per label, all four in that order, whenever replay ran
-  against the decision log, even one with no decision to score. With no store,
-  or a store with no decision log, `labels` is `[]`, and it is `[]` in the
-  failure document for a damaged log too. `old` is what the store holds, `new`
+  against the decision log, even one with no decision to score. With no store
+  `labels` is `[]`, and it is `[]` in the failure document for a damaged log
+  too. `old` is what the store holds, `new`
   is what the replayed rules produce.
 - `changed` names the decision ids whose label set moved, in id order, so a diff
   can be followed back into the prompts behind it.
@@ -370,7 +362,7 @@ and unchanged.
                   "tools": ["Bash", "Edit"],
                   "commands": ["cargo test -p terminus-core --features testkit"],
                   "errors": ["..."], "commits": ["wire the observation step up"],
-                  "branch": "phase-7", "turns": 47,
+                  "branch": "main", "turns": 47,
                   "first_turn_at": "...", "last_turn_at": "...",
                   "duration_seconds": 5421, "compactions": 1, "truncated": []}}]}
 ```
@@ -380,9 +372,10 @@ and unchanged.
   another, or `*` for every project. A session the idle rule has not closed
   yet has no row, and neither does an excluded project's session - including one archived before the exclusion was
   configured.
-- `mechanical` is the OBS-01 fact set, and every one of its values is
-  parser-derived: **no model is called and no network connection is opened** by
-  the ingest step that wrote it or by this command that reads it back.
+- `mechanical` is the set of facts an observation records, and every one of its
+  values is parser-derived: **no model is called and no network connection is
+  opened** by the ingest step that wrote it or by this command that reads it
+  back.
   `commands` carries whole command lines with their arguments, which is what the
   `entities` table cannot answer - it holds basenames.
 - `truncated` names the fact lists a cap cut, by field name. A list that is
@@ -394,10 +387,8 @@ and unchanged.
   for a session with no `session_meta` row.
 - `session_id` is null when the session's `session_meta` row holds none.
   `generated_at` and `mechanical` are null only when their column is; the ingest
-  step writes both.
-- A store written before this build carries no `observations` table. That is an
-  empty answer with a reason naming the table and exit 0, never a SQLite
-  message: the next `terminus ingest` creates it.
+  step writes both. A `mechanical` column that is not valid JSON comes back as
+  its stored text, a string, rather than an object.
 
 ### `observations regenerate`
 
@@ -557,7 +548,7 @@ other's total is the mistake it exists to prevent.
   `0x40000000` and uses for nothing, present only on a database that has grown
   past 1 GiB. Without those two the sum is short and the reconciliation is a
   claim rather than a property.
-- Exclusion is retroactive (ING-08), so a project excluded after its sessions
+- Exclusion is retroactive, so a project excluded after its sessions
   were archived appears in neither archive total. `footprint` is a property of
   the database file and is not filtered by anything.
 - `usage` is a read: it opens read-only and creates no store.
@@ -579,11 +570,11 @@ read, and it opens without a terminus build. A copy of the store file is a
 snapshot, not an export.
 
 - **`export`'s output is the unredacted transcripts.** Nothing is filtered on
-  the way out. Redaction is keyed on destination and never on operation
-  (PRIV-01), and a directory the user named is not egress - so `notice` is the
-  answer instead: the same words go into the manifest, onto the terminal ahead
-  of the counts, and into this document, because a caller scripting an export is
-  the one most likely to be writing somewhere shared.
+  the way out. Redaction is keyed on destination and never on operation, and a
+  directory the user named is not egress - so `notice` is the answer instead:
+  the same words go into the manifest, onto the terminal ahead of the counts,
+  and into this document, because a caller scripting an export is the one most
+  likely to be writing somewhere shared.
 - `bytes` is the total uncompressed stream written, which is what the files add
   up to - not the compressed size in the archive and not the size of the
   database.
@@ -591,13 +582,14 @@ snapshot, not an export.
   **present, empty file** and named in the manifest with `"evicted": true`, so
   an export never silently drops a session it could not fill.
 - A project the config excludes is in neither the manifest nor the directory.
-  Export is a read path and ING-08 binds every read path alike.
+  Export is a read path and exclusion binds every read path alike.
 - **A destination that already holds anything is refused**, exit 1, with nothing
   written - not merely one that already holds an export. A file this command did
   not write is never overwritten, and every refusal lands before the first byte.
-  With `--json` the refusal writes no document either: stdout stays empty and
-  the reason is on stderr. A missing destination on the command line is misuse (exit 2): there is no
-  default place to put an unredacted copy of every transcript.
+  With `--json` the refusal writes the empty document with `ok: false` and the
+  reason, naming the destination it was given. A missing destination on the
+  command line is misuse (exit 2): there is no default place to put an
+  unredacted copy of every transcript.
 - The manifest carries `notice`, `archive_format` as the store itself reports
   it, the session / turn / evicted counts, the total bytes, the distinct
   projects, the `first_turn_at`..`last_turn_at` range, and a `files` array with
@@ -657,15 +649,14 @@ the same 14 keys: `binary`, `settings_file`, `hook_SessionStart`,
   `autoCompactEnabled` that is neither true nor false.
 - `fix` is a shell command wherever one exists. Where the repair is a value in
   the user's own settings file, it is that edit written out literally, because
-  terminus never changes either of the two Claude Code settings it reports
-  (INST-06).
+  terminus never changes either of the two Claude Code settings it reports.
 - `doctor` writes nothing anywhere: no file, no directory, on any path,
   including the data directory it reports as absent.
 
-`install`, `uninstall` and `data move` deliberately have no `--json` (D-24,
-D-17), and each refuses the flag as misuse. Install prints a receipt written for
-a person, uninstall asks a question before `--purge` deletes the archive, and
-`data move` asks once before it moves the data directory, which a single JSON
+`install`, `uninstall` and `data move` deliberately have no `--json`, and each
+refuses the flag as misuse. Install prints a receipt written for a person,
+uninstall asks a question before `--purge` deletes the archive, and `data move`
+asks once before it moves the data directory, which a single JSON
 document on stdout cannot do.
 
 ## MCP tool results
@@ -687,9 +678,10 @@ tool result:
 - `isError` is true when the call could not be used as asked: `arguments` that
   is not an object; a required argument that is missing or null, or a `query`
   that is empty or only whitespace; an argument of the wrong JSON type; a count
-  that is negative or not a whole number; a `since` or `until` in neither time
-  form; a `limit` of 0; a `kind` of `observation`; a `turn_ids` that is empty
-  or holds anything but integers. The document's `reason` says which.
+  that is negative or not a whole number; a `since` or `until` that is not a
+  real date or time in one of the two time forms; a `limit` of 0; a `turn_ids`
+  that is empty or holds anything but integers. The document's `reason` says
+  which.
 - `isError` is false for everything else, an empty answer included: no store
   yet, a directory no archived project covers, a store that cannot be opened or
   read, a SQLite error, and a server working directory that cannot be read. Each
@@ -713,12 +705,11 @@ tool result:
 
 - Each hit is a `terminus search --json` hit without `matched_on`, read and
   ordered the same way. The document has no `query` and no `truncated`.
-- `query` is required. `limit` defaults to 10 and is lowered to 50, and only
-  the first 25 `paths` are filtered on. `project` defaults to the project the
-  server's working directory sits in.
+- `query` is required. `limit` defaults to 10 and is lowered to 50. `project`
+  defaults to the project the server's working directory sits in.
 - `reason` is one line, the first that applies: why the result is empty, then a
-  `limit` lowered to 50, then a query cut to its first tokens, then `paths` cut
-  to the first 25. It is null when none applies.
+  `limit` lowered to 50, then a query cut to its first tokens. It is null when
+  none applies.
 
 ### `recall_context`
 

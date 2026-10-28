@@ -3,8 +3,8 @@
 //! Two properties are worth more than the rest and they are both about
 //! processes rather than about output. The hook must return to the harness
 //! having written nothing and holding nothing, and the ingest it started must
-//! outlive both of the kills Claude Code aims at a hook it has given up on
-//! (D-03). Neither is provable from a return value, so these tests read the
+//! outlive both of the kills Claude Code aims at a hook it has given up on.
+//! Neither is provable from a return value, so these tests read the
 //! process table.
 //!
 //! Every spawn here sets `TERMINUS_DATA_DIR`, `TERMINUS_CONFIG_DIR` **and**
@@ -30,6 +30,7 @@ use std::sync::{Arc, PoisonError, RwLock, mpsc};
 use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, OpenFlags};
+use terminus_core::ingest::fault;
 use terminus_core::store::DB_FILE_NAME;
 use terminus_core::testkit;
 
@@ -258,7 +259,7 @@ fn await_process(argv: &str) -> Proc {
     }
 }
 
-/// Task 1 / D-03: the process that does the work is in neither set Claude Code
+/// The process that does the work is in neither set Claude Code
 /// kills a hook through.
 ///
 /// It is spawned through the hand-off half of `cmd::spawn` directly - the
@@ -371,7 +372,7 @@ fn drain(argv: &str) {
     }
 }
 
-/// AC1: the four events, the exact payloads, the clean stdout and the budget.
+/// The four events, the exact payloads, the clean stdout and the budget.
 ///
 /// The p99 is printed rather than only asserted, so a regression names a number
 /// a reader can compare against the next run instead of a boolean.
@@ -395,7 +396,7 @@ fn every_event_exits_zero_with_an_empty_stdout_inside_the_budget() {
                 output.status.code(),
                 String::from_utf8_lossy(&output.stderr)
             );
-            // D-15: Claude Code validates any hook stdout that parses as JSON
+            // Claude Code validates any hook stdout that parses as JSON
             // against the event name, so a stray line is a protocol error and
             // not noise.
             assert!(
@@ -448,16 +449,60 @@ fn a_stdin_that_is_opened_and_never_closed_does_not_hold_the_hook() {
 
     let started = Instant::now();
     let deadline = started + Duration::from_secs(10);
+    // A miss is the runner's when a single freeze took half the limit: a
+    // value of its own, so a check that forces the limit down leaves it be.
+    let stall_line = Duration::from_secs(5);
+    let mut last_poll = started;
+    let mut longest_gap = Duration::ZERO;
     let status = loop {
+        let now = Instant::now();
+        longest_gap = longest_gap.max(now - last_poll);
+        last_poll = now;
         if let Some(status) = child.try_wait().expect("poll the hook") {
             break status;
         }
-        assert!(
-            Instant::now() < deadline,
-            "the hook is still running {:?} after a writer stopped writing: it \
-             is blocked in an unbounded read on stdin",
-            started.elapsed()
-        );
+        if Instant::now() >= deadline {
+            let elapsed = started.elapsed();
+            // Timed before the kill, while whatever held the runner may still
+            // be holding it.
+            let spawn = time_a_spawn();
+            // The hook holds its stderr open until it ends, so the kill comes
+            // before the read.
+            let _ = child.kill();
+            let ended = wait_for(&mut child, Duration::from_secs(5));
+            let stderr = match child.stderr.take() {
+                Some(pipe) => read_for(pipe, Duration::from_secs(5)),
+                None => String::new(),
+            };
+            let evidence = if stderr.contains("stopped waiting on a stdin") {
+                "had logged that it stopped waiting on stdin, so it was past \
+                 stdin and had not exited"
+            } else {
+                "had not logged that it stopped waiting on stdin, so it was \
+                 still waiting on stdin"
+            };
+            let verdict = if runner_stalled(longest_gap, &spawn, stall_line) {
+                "the runner stalled"
+            } else {
+                "the hook was blocked"
+            };
+            panic!(
+                "the hook was still running {} after a writer stopped writing; \
+                 the longest gap between polls was {}; a /usr/bin/true spawn \
+                 {}; the hook {evidence}, and after the kill it {}; its \
+                 stderr: {stderr:?}. Verdict: {verdict}",
+                ms(elapsed),
+                ms(longest_gap),
+                spawn
+                    .as_ref()
+                    .map_or_else(Clone::clone, |took| format!("took {}", ms(*took))),
+                if ended {
+                    "had ended"
+                } else {
+                    "was still running 5 s later"
+                },
+            );
+        }
         std::thread::sleep(Duration::from_millis(10));
     };
 
@@ -639,19 +684,75 @@ fn read_for(mut pipe: impl Read + Send + 'static, wait: Duration) -> String {
     }
 }
 
+/// How long one spawn of `/usr/bin/true` takes now, or why it did not run.
+///
+/// Called only once a timing test has missed its limit, to tell a stalled
+/// runner from a blocked hook: a freeze that hits only the disk leaves the
+/// test's polls on time but slows this spawn as much as it slows the hook.
+/// It goes through [`output`] like every spawn in this file, so the time
+/// includes any wait behind a sibling test's binary copy ([`COPYING`]).
+fn time_a_spawn() -> Result<Duration, String> {
+    let started = Instant::now();
+    match output(&mut Command::new("/usr/bin/true")) {
+        Ok(done) if done.status.success() => Ok(started.elapsed()),
+        Ok(done) => Err(format!(
+            "exited {} after {}",
+            done.status,
+            ms(started.elapsed())
+        )),
+        Err(e) => Err(format!("did not run: {e}")),
+    }
+}
+
+/// Whether a missed limit says nothing about the hook: the test's own polls
+/// were held apart, or a trivial spawn took, at least `stall_line`.
+fn runner_stalled(
+    longest_gap: Duration,
+    spawn: &Result<Duration, String>,
+    stall_line: Duration,
+) -> bool {
+    longest_gap >= stall_line || spawn.as_ref().is_ok_and(|took| *took >= stall_line)
+}
+
+/// A duration in milliseconds, the unit every timing message here uses.
+fn ms(duration: Duration) -> String {
+    format!("{:.1} ms", duration.as_secs_f64() * 1000.0)
+}
+
 /// The hook hands the ingest nothing the harness gave it.
 ///
 /// A caller reading the hook's stdout to EOF must get an empty read as soon as
 /// the hook exits. A child holding the inherited write end of that pipe would
 /// keep the read blocked for the whole pass instead - which on a backfill is
 /// minutes of a harness waiting on a hook that already returned.
+///
+/// The ingest is held at the testkit fault point `fault::AFTER_BLOB`, which it
+/// reaches because the hook's spawn passes its environment on unchanged. The
+/// hold is what makes the read an answer rather than a race: a fast pass can
+/// end before any look at the process table, but a held one cannot. Two facts
+/// prove the read returned while the pass was running - the fault point's
+/// ready file appears, so the pass did reach the hold, and no `runs` row
+/// existed when the read returned, so the pass had not ended. A pass writes
+/// its `runs` row only after the walk, so the hold keeps it out.
 #[test]
 fn reading_the_hooks_stdout_to_eof_returns_at_once_while_the_ingest_still_runs() {
+    // How long the ingest gets to reach the hold, as in `crash.rs`.
+    const ARRIVAL_TIMEOUT: Duration = Duration::from_secs(20);
+
     let hook = hook();
-    hook.big_transcript("-p", "22222222-2222-4222-8222-222222222222.jsonl", BIG);
+    // One repeat: the hold keeps the pass running, so the transcript only
+    // needs one file with work in it to reach the fault point.
+    hook.big_transcript("-p", "22222222-2222-4222-8222-222222222222.jsonl", 1);
+    // `fault::stall` drops a failed write, so a ready file whose directory
+    // does not exist would never appear, and the test would blame the fault
+    // points for a missing directory.
+    std::fs::create_dir_all(&hook.data_dir).unwrap();
+    let ready = hook.data_dir.join("fault-ready");
 
     let mut child = spawn(
         hook.command(&["hook", "SessionStart"])
+            .env(fault::AT, fault::AFTER_BLOB)
+            .env(fault::READY, &ready)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped()),
     )
@@ -663,29 +764,126 @@ fn reading_the_hooks_stdout_to_eof_returns_at_once_while_the_ingest_still_runs()
         .write_all(&testkit::fixture_bytes("hooks/session-start.json"))
         .expect("write the payload");
 
+    let limit = Duration::from_millis(250);
+    // A miss is the runner's when a single freeze took half the limit: a
+    // value of its own, so a check that forces the limit down leaves it be.
+    let stall_line = Duration::from_millis(125);
     let started = Instant::now();
-    let mut stdout = Vec::new();
-    child
-        .stdout
-        .take()
-        .expect("the hook's stdout")
-        .read_to_end(&mut stdout)
-        .expect("read the hook's stdout to EOF");
-    let elapsed = started.elapsed();
+    // The read runs on a thread of its own and times itself there, so a poll
+    // below that wakes late does not charge its own delay to the hook. The
+    // thread is never joined: a pipe a held ingest keeps open stays open for
+    // the whole hold, and joining would bring back the wait the limit removes.
+    let mut pipe = child.stdout.take().expect("the hook's stdout");
+    let (done, read) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = pipe.read_to_end(&mut bytes).map(|_| bytes);
+        let _ = done.send((result, started.elapsed()));
+    });
+    let mut last_poll = started;
+    let mut longest_gap = Duration::ZERO;
+    // When a poll first saw the hook gone, counted from `started`. The status
+    // is left for the `wait` below, which returns the one collected here.
+    let mut exited_at = None;
+    let outcome = loop {
+        let now = Instant::now();
+        longest_gap = longest_gap.max(now - last_poll);
+        last_poll = now;
+        if exited_at.is_none() && child.try_wait().expect("poll the hook").is_some() {
+            exited_at = Some(started.elapsed());
+        }
+        match read.try_recv() {
+            Ok(result) => break Some(result),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                panic!("the reading thread ended without saying how the read ended")
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+        }
+        if started.elapsed() >= limit {
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    // Sampled the moment the poll sees the read's result: a pass only ever
+    // adds its row, so none now means none when the read returned.
+    let runs_at_eof = runs(&hook);
 
+    let stdout = match outcome {
+        Some((stdout, elapsed)) if elapsed < limit => stdout,
+        missed => {
+            let read_at = missed.as_ref().map(|(_, elapsed)| *elapsed);
+            let spawn = time_a_spawn();
+            // A hook gone before its stdout reached EOF left the write end
+            // open in something it started.
+            let held = exited_at.is_some_and(|exit| read_at.is_none_or(|read| exit < read));
+            let verdict = if runner_stalled(longest_gap, &spawn, stall_line) {
+                "the runner stalled"
+            } else if held {
+                "a process the hook started held stdout open"
+            } else {
+                "the hook was blocked"
+            };
+            panic!(
+                "reading the hook's stdout to EOF {} against a limit of {}; the \
+                 hook {}; the longest gap between polls was {}; a /usr/bin/true \
+                 spawn {}. Verdict: {verdict}",
+                match read_at {
+                    Some(at) => format!("returned after {}", ms(at)),
+                    None => format!("was still open after {}", ms(started.elapsed())),
+                },
+                ms(limit),
+                match exited_at {
+                    Some(at) => format!("had exited, first seen {} after the read began", ms(at)),
+                    None => "had not exited".to_owned(),
+                },
+                ms(longest_gap),
+                spawn
+                    .as_ref()
+                    .map_or_else(Clone::clone, |took| format!("took {}", ms(*took))),
+            );
+        }
+    };
+    let stdout = stdout.expect("read the hook's stdout to EOF");
     assert!(stdout.is_empty(), "the hook wrote {stdout:?} to stdout");
-    // The pass this hook started runs for roughly 700 ms, so anything near it
-    // means the read was waiting on the ingest and not on the hook.
-    assert!(
-        elapsed < Duration::from_millis(250),
-        "reading the hook's stdout to EOF took {elapsed:?}: the ingest is \
-         holding a handle the hook inherited"
-    );
     assert!(child.wait().expect("wait for the hook").success());
 
-    // And it returned *while* the pass was running, which is what makes the
-    // reading above an answer rather than a coincidence.
-    await_process(&hook.ingest_argv());
+    // The pass reached the hold. Only the ready file is polled for, and there
+    // is no fallback: a build whose fault points are inert fails here.
+    let deadline = Instant::now() + ARRIVAL_TIMEOUT;
+    while !ready.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "the ingest never reached `{}` within {ARRIVAL_TIMEOUT:?}, and {} \
+             `runs` row(s) exist now: the fault points are inert unless \
+             terminus-core is built with its `testkit` feature",
+            fault::AFTER_BLOB,
+            runs(&hook)
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    // Checked after the arrival wait, so an inert build always fails above
+    // with the testkit message, however fast its pass is.
+    assert_eq!(
+        runs_at_eof, 0,
+        "the pass had already recorded its `runs` row when the read returned, \
+         so the read proves nothing about a running pass"
+    );
+
+    // End the hold. The ingest is alive for the whole stall, so this is one
+    // lookup of a process known to be running, not a wait for one to appear.
+    let held: Vec<Proc> = ps()
+        .into_iter()
+        .filter(|p| p.argv == hook.ingest_argv())
+        .collect();
+    assert_eq!(
+        held.len(),
+        1,
+        "expected the one held ingest running {:?}, found {}: {held:?}",
+        hook.ingest_argv(),
+        held.len()
+    );
+    sigkill(held[0].pid as i32);
     drain(&hook.ingest_argv());
 }
 
@@ -712,6 +910,21 @@ fn committed(hook: &Hook) -> usize {
     })
     .map(|n| n as usize)
     .unwrap_or(0)
+}
+
+/// Passes recorded so far, read the way [`committed`] reads sessions: a store
+/// that is missing, will not open read-only or will not answer counts as none.
+fn runs(hook: &Hook) -> usize {
+    let db = hook.data_dir.join(DB_FILE_NAME);
+    if !db.is_file() {
+        return 0;
+    }
+    let Ok(conn) = Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
+        return 0;
+    };
+    conn.query_row("SELECT count(*) FROM runs", [], |row| row.get::<_, i64>(0))
+        .map(|n| n as usize)
+        .unwrap_or(0)
 }
 
 /// Every pid below `root`, breadth first, the way Claude Code 2.1.231 builds
@@ -745,7 +958,7 @@ fn sigkill(pid: i32) {
     unsafe { kill(pid, SIGKILL) };
 }
 
-/// AC2 / D-03: the kill Claude Code actually performs, and an ingest that
+/// The kill Claude Code actually performs, and an ingest that
 /// finishes anyway.
 ///
 /// The hook is left blocked on a stdin nobody closes, which is the only state a
@@ -867,14 +1080,14 @@ fn the_ingest_survives_a_group_kill_and_a_descendant_sweep() {
     assert_eq!(error, None, "the pass recorded an error: {error:?}");
 }
 
-/// PRIV-03's knob, written the only way anything can turn it on.
+/// `[privacy] redact_recall`, written the only way anything can turn it on.
 const KNOB_ON: &str = "[privacy]\nredact_recall = true\n";
 
-/// AC7: the same four events, the same hundred runs, the same budget, with
+/// The same four events, the same hundred runs, the same budget, with
 /// `[privacy] redact_recall = true` on the config the hook loads.
 ///
 /// The knob puts the egress rule set on the `SessionStart` path, between the
-/// projection and the budget, and D-06 measured that at roughly 1.1 ms worst
+/// projection and the budget, and that was measured at roughly 1.1 ms worst
 /// case for the brief's two quotes. That is a claim about a cost, so it is
 /// asserted where the cost is paid: the wall clock of a spawn the harness
 /// waits on, against the same 10 ms the run without the knob is held to.

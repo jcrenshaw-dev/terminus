@@ -1,4 +1,4 @@
-//! What injection refuses to say twice (INJ-04, INJ-05, AC4, AC5).
+//! What injection refuses to say twice.
 //!
 //! At the process boundary, like `tests/prompt.rs` and for the same reason: the
 //! property under test is what the harness receives, and "the second prompt
@@ -8,7 +8,7 @@
 //!
 //! The three suppressions fail in three different ways, so each gets a test and
 //! each gets a control that fires. A suppression test with no control is
-//! indistinguishable from a retrieval that never worked - the whole phase can
+//! indistinguishable from a retrieval that never worked - the whole feature can
 //! be silent for free.
 //!
 //! Every spawn sets `TERMINUS_DATA_DIR`, `TERMINUS_CONFIG_DIR` **and**
@@ -34,7 +34,7 @@ const RELATIVE: &str = "crates/gizmo/lantern.rs";
 ///
 /// Not an empty string and not a fabricated absolute path, but a name under the
 /// bench's own work directory - a path that cannot canonicalize is exactly the
-/// case D-15 says suppresses nothing, and this keeps that case honest without
+/// case that suppresses nothing, and this keeps that case honest without
 /// reaching outside the temporary tree.
 const ABSENT: &str = "no-such-session.jsonl";
 
@@ -43,7 +43,7 @@ const ABSENT: &str = "no-such-session.jsonl";
 const GADGET: &str = "crates/gizmo/gadget.rs";
 const SYMBOL: &str = "gadgetSpin";
 
-/// The archived compaction: where it is, and the two turns AC5 is about.
+/// The archived compaction: where it is, and the two turns the tests are about.
 struct Compacted {
     path: PathBuf,
     /// The turn `preservedMessages.uuids` leaves out.
@@ -157,15 +157,15 @@ impl Bench {
     /// `compact_boundary` record saying which of them survived.
     ///
     /// The two tool turns name one file, and only the LATER one is preserved -
-    /// so the turn INJ-05 is about is the earlier one, and a reading that took
-    /// "everything the prompt matches" or "everything still in the session"
-    /// would return the preserved turn instead and be caught.
+    /// so the turn the compaction dropped is the earlier one, and a reading
+    /// that took "everything the prompt matches" or "everything still in the
+    /// session" would return the preserved turn instead and be caught.
     fn compacted(&self) -> Compacted {
         self.compacted_with(true)
     }
 
     /// [`Bench::compacted`], with the boundary record's `uuid` left off when
-    /// `boundary_uuid` is false, so the boundary is not a turn (#17, D-19).
+    /// `boundary_uuid` is false, so the boundary is not a turn (#17).
     fn compacted_with(&self, boundary_uuid: bool) -> Compacted {
         const SESSION: &str = "dddddddd-0000-4000-8000-000000000000";
         let uuid = |n: usize| format!("{SESSION}-{n}");
@@ -322,7 +322,7 @@ impl Bench {
     /// One session's injection scratch, as JSON.
     ///
     /// Read as bytes off the disk and parsed here rather than through
-    /// `state::State`: AC4 asks for a reason a person can read out of the file,
+    /// `state::State`: the file must give a reason a person can read,
     /// and a deserializer that maps `"already_injected"` back onto the enum it
     /// came from would pass on a file spelling it `3`.
     fn state(&self, session: &str) -> Value {
@@ -382,8 +382,8 @@ fn edits(file: &str) -> Value {
 /// A `user` record the harness wrote, not the person: the result of the tool
 /// call above it, which is what a real session ends on one time in eight.
 ///
-/// The `tool_result` block in `message.content` is the whole discriminator
-/// (D-01) - no top-level `toolUseResult` key, because the block rule is the one
+/// The `tool_result` block in `message.content` is the whole discriminator -
+/// no top-level `toolUseResult` key, because the block rule is the one
 /// ingest reads and adding the key here would let a test pass against a build
 /// that only ever looked at the key.
 fn returns(text: &str) -> Value {
@@ -469,7 +469,7 @@ fn suppressed(state: &Value) -> Vec<(i64, String)> {
         .collect()
 }
 
-/// AC4, end to end: the same entity-bearing prompt twice under one session is
+/// End to end: the same entity-bearing prompt twice under one session is
 /// answered once, and the file says which turn was held back and why.
 #[test]
 fn the_same_prompt_twice_in_one_session_is_answered_once() {
@@ -513,12 +513,12 @@ fn the_same_prompt_twice_in_one_session_is_answered_once() {
     assert_eq!(other, first, "the suppression is not per session");
 }
 
-/// D-15: a turn of the session the user is looking at is never injected, and
+/// A turn of the session the user is looking at is never injected, and
 /// the payload's own `transcript_path` is how that session is recognized.
 ///
 /// The two halves differ in one field. The suppressed run names the transcript
 /// the archive keyed the fixture on; the control names a file that is not
-/// there, which is the case D-15 says suppresses nothing.
+/// there, which is the case that suppresses nothing.
 #[test]
 fn a_turn_of_the_session_on_screen_is_never_injected() {
     const SESSION: &str = "bbbbbbbb-1111-4000-8000-000000000001";
@@ -552,7 +552,7 @@ fn a_turn_of_the_session_on_screen_is_never_injected() {
     );
 }
 
-/// INJ-04's third suppression: the resume brief quoted it, so the prompt does
+/// The third suppression: the resume brief quoted it, so the prompt does
 /// not repeat it back.
 ///
 /// The archived session's LAST assistant turn has to be the entity-bearing one,
@@ -615,17 +615,16 @@ fn a_turn_the_brief_already_quoted_is_not_injected_again() {
     );
 }
 
-/// D-12, at the process boundary: the state file names the turns the brief
-/// actually quoted, now that the quoted prompt is no longer the session's last
-/// `user` record (INJ-07).
+/// At the process boundary: the state file names the turns the brief actually
+/// quoted, though the quoted prompt need not be the session's last `user`
+/// record, because the brief quotes only what a person typed.
 ///
-/// The prediction D-12 makes is that this needs no production change at all -
-/// the ids travel on the `Quote` that was assembled, so INJ-04's suppression
-/// follows the new rule for free. That is only worth anything if something can
-/// falsify it, which is what this is: the session's LAST `user` record is a
-/// tool result and the typed prompt is two turns earlier, so a brief that
-/// recorded what it quoted by position rather than by the turn it assembled
-/// would write the tool result's id here.
+/// The ids travel on the `Quote` that was assembled, so suppressing what the
+/// brief quoted takes no separate bookkeeping. That is only worth anything if
+/// something can falsify it, which is what this is: the session's LAST `user`
+/// record is a tool result and the typed prompt is two turns earlier, so a
+/// brief that recorded what it quoted by position rather than by the turn it
+/// assembled would write the tool result's id here.
 ///
 /// The control comes first for the reason the whole file states: a brief that
 /// rendered no quotation at all would satisfy every `!contains` below.
@@ -707,7 +706,7 @@ fn names(text: &str, turn_id: i64) -> bool {
     text.contains(&format!("turn {turn_id} ("))
 }
 
-/// AC5: the prompt after a compaction is answered out of what fell out of the
+/// The prompt after a compaction is answered out of what fell out of the
 /// model's context, and the one after that is not.
 ///
 /// Four claims in one test because they are one mechanism: the flag is set, it
@@ -825,7 +824,7 @@ fn a_boundary_with_no_uuid_still_offers_back_what_fell_out() {
     );
 }
 
-/// D-08's race, which is the reason the flag persists instead of being read
+/// The ingest race, which is the reason the flag persists instead of being read
 /// off the store: the ingest that commits the boundary row is running against
 /// the prompt that needs it.
 ///

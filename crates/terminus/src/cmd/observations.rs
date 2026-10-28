@@ -1,27 +1,19 @@
-//! `terminus observations`: what happened in every session that has closed
-//! (OBS-01).
+//! `terminus observations`: what happened in every session that has closed.
 //!
 //! **A read command, in the shape of `stats`.** It opens through
 //! [`super::read::open`], so a machine that has never ingested gets an empty
 //! answer with a reason and exit 0 rather than a store created as the side
-//! effect of a question (D-15). Nothing here calls a model or opens a network
+//! effect of a question. Nothing here calls a model or opens a network
 //! connection: the row was written by the ingest pass off the parser, and this
 //! command reads it back.
 //!
 //! **Listed through `config::visible`, never straight off the table.**
-//! Exclusion is retroactive (ING-08) and the observations table is keyed on a
+//! Exclusion is retroactive and the observations table is keyed on a
 //! session, so a read path that selected from `observations` alone would list a
 //! session whose project was excluded after it was archived - which is exactly
 //! the half claude-mem gets wrong. The visible listing is the outer loop here
 //! and the table is looked up inside it, so a session the gate does not return
 //! cannot appear whatever the table holds.
-//!
-//! **A store older than the table is an answer, not a SQLite line.** Left to
-//! the query, a missing table surfaces as `no such table: observations` inside
-//! an operational failure that never learns `--json` was asked for, so the
-//! envelope the contract promises is never written at all.
-//! [`terminus_core::Store::missing_tables`] is asked first, the way
-//! `read::decision_log` asks it.
 
 use std::collections::BTreeMap;
 
@@ -35,7 +27,6 @@ use terminus_core::Store;
 use super::json::Document;
 use super::read::{self, Opened};
 use super::Failure;
-use crate::escape;
 
 /// The command name, which is also what the `--json` envelope reports.
 const COMMAND: &str = "observations";
@@ -43,14 +34,6 @@ const COMMAND: &str = "observations";
 /// The rebuild's own name in the envelope: both words, because both words are
 /// what a caller typed and `docs/json-shapes.md` documents the two shapes apart.
 const REGENERATE_COMMAND: &str = "observations regenerate";
-
-/// What a store written before this build says instead of naming SQLite.
-///
-/// It names the table, because the difference between "nothing has been
-/// observed" and "this build's table is not here yet" is the difference between
-/// waiting for the next ingest and filing a bug.
-const NO_TABLE: &str = "this store predates the `observations` table, so nothing has been \
-                        observed yet; the next `terminus ingest` creates it";
 
 pub fn run(args: Args) -> Result<(), Failure> {
     match args {
@@ -62,18 +45,14 @@ pub fn run(args: Args) -> Result<(), Failure> {
 fn list(args: List) -> Result<(), Failure> {
     let reader = match read::open()? {
         Opened::Ready(reader) => reader,
-        Opened::Nothing(reason) => return read::empty(document(&[]), &reason, args.json),
+        Opened::Nothing(reason) => return read::empty(empty_listing(), &reason, args.json),
     };
     let conn = reader.store().conn();
     let config = reader.config();
 
-    if reader.store().missing_tables().contains(&"observations") {
-        return read::empty(document(&[]), NO_TABLE, args.json);
-    }
-
     let scoped = scope::resolve(conn, config, &read::scope(args.project.as_deref())?)?;
     if let Some(reason) = scoped.reason() {
-        return read::empty(document(&[]), &reason.to_string(), args.json);
+        return read::empty(empty_listing(), &reason.to_string(), args.json);
     }
 
     let mut stored: BTreeMap<String, Row> = {
@@ -123,12 +102,12 @@ fn list(args: List) -> Result<(), Failure> {
     }
     // Commentary on stderr the way `sessions` reports its own, so stdout stays
     // the answer.
-    eprintln!("{} observation(s)", listed.len());
+    errln!("{} observation(s)", listed.len());
     Ok(())
 }
 
 /// `terminus observations regenerate`: recompute the mechanical half of the
-/// selected rows and nothing else (OBS-07).
+/// selected rows and nothing else.
 ///
 /// **A writer, so it opens for writing and takes the ingest lock.** Not
 /// `cmd::read::open`: this rewrites a column. The lock is the same one
@@ -137,7 +116,7 @@ fn list(args: List) -> Result<(), Failure> {
 /// hook-spawned pass would either lose the SQLite write lock to it and die on
 /// the busy timeout, or rewrite a row the pass is inserting.
 ///
-/// **The only rebuild path for this table (D-02).** `reindex` never touches
+/// **The only rebuild path for this table.** `reindex` never touches
 /// `observations` and the pass inserts without overwriting, so a stored fact set
 /// is replaced here or nowhere.
 fn regenerate(args: Regenerate) -> Result<(), Failure> {
@@ -156,22 +135,16 @@ fn regenerate(args: Regenerate) -> Result<(), Failure> {
                     "another terminus process holds {}; try again when it finishes",
                     data_dir.join(lock::LOCK_FILE_NAME).display()
                 );
-                if args.json {
-                    regenerated_document(&args, &Regenerated::default())
-                        .failed()
-                        .because(&held)
-                        .emit();
-                    return Err(Failure::Silent);
-                }
+                // Under `--json` `main` answers with the empty rebuild document,
+                // `ok: false` and this reason (#107).
                 return Err(Failure::Operational(held));
             }
             Attempt::Acquired(guard) => guard,
         };
 
-        // `Store::open` and not the read path: this is the write-mode open that
-        // brings a store older than this build forward through `bring_forward`'s
-        // missing-table arm, which is how a store that predates `observations`
-        // acquires it (D-01).
+        // `Store::open` and not the read path: this is the write-mode open,
+        // which creates a table the store lacks through `bring_forward`'s
+        // missing-table arm.
         let store = Store::open(&data_dir)?;
         observe::regenerate(
             store.conn(),
@@ -189,12 +162,12 @@ fn regenerate(args: Regenerate) -> Result<(), Failure> {
     // Nothing on stdout without `--json`, the way `reindex` reports: this
     // command produces no data, and a caller must not have to filter a progress
     // line out of the document.
-    eprintln!(
+    errln!(
         "regenerated {} of {} selected observation(s)",
         done.rewritten, done.selected
     );
     for note in &done.notes {
-        eprintln!("{note}");
+        errln!("{note}");
     }
     Ok(())
 }
@@ -250,10 +223,11 @@ impl Row {
     /// that ran no command and hit no error would otherwise be six lines of
     /// nothing between the two sessions worth reading.
     ///
-    /// Every archived string goes through [`crate::escape`]. A stored command
-    /// is only clipped, so a heredoc keeps its newlines, which print, and can
-    /// hold a CR, which prints as `\u000d` rather than overprinting the line.
-    /// The stored document keeps its controls; this is a rendering.
+    /// Every line goes out through the default escape in `out.rs` (#72). A
+    /// stored command is only clipped, so a heredoc keeps its newlines, which
+    /// print, and can hold a CR, which prints as `\u000d` rather than
+    /// overprinting the line. The stored document keeps its controls; this is a
+    /// rendering.
     fn print(&self) {
         let facts = self
             .mechanical
@@ -263,8 +237,8 @@ impl Row {
 
         outln!(
             "{}  {}  {} turn(s)  {}  {} compaction(s)",
-            escape::controls(file_name(&self.session_key)),
-            escape::controls(text(&facts["branch"]).unwrap_or("(no branch)")),
+            file_name(&self.session_key),
+            text(&facts["branch"]).unwrap_or("(no branch)"),
             number(&facts["turns"]),
             duration(facts["duration_seconds"].as_i64()),
             number(&facts["compactions"]),
@@ -279,18 +253,14 @@ impl Row {
         ] {
             let values = strings(&facts[field]);
             if !values.is_empty() {
-                outln!("  {label:<15} {}", escape::controls(&values.join(", ")));
+                outln!("  {label:<15} {}", values.join(", "));
             }
         }
         // What the row itself says was cut, so a list a cap shortened is never
         // read as the whole of what the session did.
         let cut = strings(&facts["truncated"]);
         if !cut.is_empty() {
-            outln!(
-                "  {:<15} {}",
-                "truncated",
-                escape::controls(&cut.join(", "))
-            );
+            outln!("  {:<15} {}", "truncated", cut.join(", "));
         }
     }
 }
@@ -328,14 +298,10 @@ fn strings(value: &Value) -> Vec<&str> {
         .unwrap_or_default()
 }
 
-/// Wall-clock seconds as a person reads a duration.
+/// Wall-clock seconds as a person reads a duration, or the words for a session
+/// that recorded none.
 fn duration(seconds: Option<i64>) -> String {
-    match seconds {
-        None => "(no duration)".to_owned(),
-        Some(total) if total < 60 => format!("{total}s"),
-        Some(total) if total < 3600 => format!("{}m {}s", total / 60, total % 60),
-        Some(total) => format!("{}h {}m", total / 3600, (total % 3600) / 60),
-    }
+    seconds.map_or_else(|| "(no duration)".to_owned(), super::duration)
 }
 
 fn file_name(session_key: &str) -> &str {
@@ -343,6 +309,28 @@ fn file_name(session_key: &str) -> &str {
         .rsplit(['/', '\\'])
         .next()
         .unwrap_or(session_key)
+}
+
+/// The empty document for whichever verb was asked for: the listing with no
+/// observation, or the rebuild with nothing selected and `since` echoed. The
+/// no-store answer, and what `main` writes when the command fails.
+pub(crate) fn empty(args: &Args) -> Document {
+    match args {
+        Args::List(_) => empty_listing(),
+        Args::Regenerate(args) => regenerated_document(args, &Regenerated::default()),
+    }
+}
+
+/// Whether `--json` was asked for, on either verb.
+pub(crate) fn json(args: &Args) -> bool {
+    match args {
+        Args::List(args) => args.json,
+        Args::Regenerate(args) => args.json,
+    }
+}
+
+fn empty_listing() -> Document {
+    document(&[])
 }
 
 fn document(observations: &[Value]) -> Document {
@@ -366,15 +354,16 @@ pub struct List {
 /// `terminus observations regenerate`: the rebuild.
 #[derive(Debug, Default)]
 pub struct Regenerate {
-    /// A `cmd::time_bound` bound against `session_meta.last_turn_at`.
+    /// A bound against `session_meta.last_turn_at`, already through
+    /// terminus-core's date check, `recall::checked_bound`.
     pub since: Option<String>,
     pub json: bool,
 }
 
-/// The second word this command routes itself (D-18).
+/// The second word this command routes itself.
 const VERB: &str = "regenerate";
 
-/// The workspace's first two-word subcommand (D-18).
+/// The workspace's first two-word subcommand.
 ///
 /// `main.rs`'s `dispatch` matches a flat set of single-word names, so
 /// `observations` has to consume its own second word: a bare `observations` is
@@ -429,13 +418,11 @@ fn regenerate_args(parser: &mut lexopt::Parser) -> Result<Regenerate, Failure> {
     let mut args = Regenerate::default();
     while let Some(arg) = parser.next().map_err(|e| Failure::Misuse(e.to_string()))? {
         match arg {
-            // `cmd::time_bound`, which is where every other command's date bound
-            // is validated: a malformed bound orders cleanly against every
-            // stored timestamp, so left unvalidated it would rebuild a plausible
-            // wrong set and report success.
-            Long("since") => {
-                args.since = Some(super::time_bound("since", &super::value(parser, "since")?)?)
-            }
+            // Through terminus-core's date check, the one every other date
+            // bound goes through: a malformed or impossible bound orders cleanly
+            // against every stored timestamp, so left unchecked it would rebuild
+            // a plausible wrong set and report success.
+            Long("since") => args.since = Some(super::date_value(parser, "since")?),
             Long(super::JSON_FLAG) => args.json = true,
             other => return Err(Failure::Misuse(crate::unexpected(other))),
         }
@@ -460,11 +447,10 @@ mod tests {
         );
     }
 
+    /// A session with no duration says so, and one of zero seconds is a duration.
     #[test]
-    fn a_duration_reads_as_a_duration() {
+    fn a_missing_duration_has_words_and_zero_seconds_does_not() {
         assert_eq!(duration(None), "(no duration)");
-        assert_eq!(duration(Some(2)), "2s");
-        assert_eq!(duration(Some(201)), "3m 21s");
-        assert_eq!(duration(Some(7_400)), "2h 3m");
+        assert_eq!(duration(Some(0)), "0s");
     }
 }

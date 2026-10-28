@@ -2,24 +2,27 @@
 //! tree across a fixed set of worker threads in [`backfill`].
 //!
 //! The order of the first steps is the design. The path is canonicalized before
-//! anything else, the lock is taken **before** the store is opened (D-15), and
-//! everything the pass writes commits in **one** transaction (STOR-02) so a
-//! killed process leaves no partially indexed session.
+//! anything else, the lock is taken **before** the store is opened, and the
+//! file's bytes, turns and watermark commit in **one** transaction so a killed
+//! process leaves no partially indexed session. The run's `runs` row is written
+//! after that transaction, by the driver every pass runs through, so a kill
+//! between the two leaves a committed file with no row and nothing worse.
 //!
 //! Reads happen outside that transaction and writes inside it, which is safe
 //! for exactly one reason: the `LOCK` guard above is the only writer, so
 //! nothing can change the store between the read and the write. Reading inside
 //! the transaction instead would hold it open across compression, and a write
 //! transaction held for a whole pass stops MCP readers - the reason redb was
-//! rejected (`DESIGN-BRIEF.md:83`).
+//! rejected.
 
 pub mod backfill;
+mod driver;
 pub mod lock;
 pub mod pass;
+pub mod runs;
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 pub use lock::{Attempt, IngestLock, LOCK_FILE_NAME};
 
@@ -38,13 +41,13 @@ use crate::store::{archive, Store};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     /// Another process is mid-pass. Nothing was written, and this is a success:
-    /// the hook spawn is the scheduler and a second invocation is expected
-    /// (ING-02).
+    /// the hook spawn is the scheduler and a second invocation is expected.
     LockHeld,
     /// The transcript has no complete record past the stored watermark, or it
     /// grew after [`Existing::read`] found it no longer than the watermark, so
-    /// its hashes were never fetched and the next pass appends it. No row
-    /// is added anywhere, not even to `runs`. The one write it can make is to
+    /// its hashes were never fetched and the next pass appends it. Nothing is
+    /// added to the archive; the run's one `runs` row records it as one file
+    /// seen and none committed. The one archive write it can make is to
     /// the archived session's `session_meta.transcript_path`, and only when
     /// the file was read from somewhere else than the path stored there, so a
     /// moved file's row names where it is now.
@@ -52,11 +55,25 @@ pub enum Outcome {
     /// The transcript is inside a project the config excludes, named with the
     /// directory that excluded it. Nothing was opened and nothing was written.
     ///
-    /// Only [`run`] produces this: `ingest_locked` is reached from the pass
-    /// only for a file discovery already cleared.
+    /// Only [`run`] produces this, before the lock is taken. The per-file
+    /// result a walk matches, [`Ingested`], cannot carry it: a walk reaches a
+    /// file only once discovery has cleared it.
     Excluded(PathBuf),
     /// The pass committed.
     Committed(Pass),
+}
+
+/// What one file's ingest did, with the lock already held.
+///
+/// Two arms and no more. A held lock and an exclusion are answers about the
+/// run, decided before any file is read, so they live only on the public
+/// [`Outcome`], and a walk that matches this has no arm to wave past for them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Ingested {
+    /// The file's new bytes committed.
+    Committed(Pass),
+    /// Nothing new past the watermark; see [`Outcome::UpToDate`].
+    UpToDate,
 }
 
 /// What a committed pass moved.
@@ -67,10 +84,10 @@ pub struct Pass {
     pub session_key: String,
     pub bytes_read: u64,
     pub turns_added: usize,
-    /// Where the next pass resumes: the byte just past the last `\n` (D-14).
+    /// Where the next pass resumes: the byte just past the last `\n`.
     pub watermark: u64,
     /// Existing block rows whose bytes were fetched for this file: at most the
-    /// tail row, or every row of a session flagged diverged (D-11, D-13).
+    /// tail row, or every row of a session flagged diverged.
     /// Counted where the read happens, so a pass that read more than the tail
     /// shows up in this number and not only in its timing.
     pub block_rows_read: usize,
@@ -92,58 +109,95 @@ pub fn run_with(
     transcript: &Path,
     config: &crate::config::Config,
 ) -> Result<Outcome> {
-    let started = Instant::now();
-
     // Before anything else, and resolving symlinks: `~/.claude` is a symlink
-    // chain on the development machine (`DESIGN-BRIEF.md:406`), so the same
-    // transcript reached by two paths would otherwise get two archive rows.
-    // This resolves CONTEXT's third flagged assumption as "canonicalize".
+    // chain on the development machine, so the same transcript reached by two
+    // paths would otherwise get two archive rows.
     let canonical = transcript
         .canonicalize()
         .map_err(|e| Error::io(transcript, e))?;
 
     // Before the lock, and long before the open. The tree pass decides this at
-    // the project directory it declines to descend into (D-22); named one file,
+    // the project directory it declines to descend into; named one file,
     // there is no walk to decide it, and skipping the test here would make
     // `terminus ingest <path>` the way around an exclusion the pass honors.
     if let Some(project) = crate::discover::excluded_project_of(config, &canonical) {
         return Ok(Outcome::Excluded(project));
     }
 
-    let _guard = match lock::try_acquire(data_dir)? {
-        Attempt::Held => return Ok(Outcome::LockHeld),
-        Attempt::Acquired(guard) => guard,
+    // A list of one, through the same driver as the tree pass: the lock,
+    // recovery, and one `runs` row whether the file commits, is up to date or
+    // fails. A failure comes back as its typed error once the row is written.
+    let mut one = Named {
+        path: &canonical,
+        mode: config.capture_mode(),
+        session_key: String::new(),
+        ingested: Ingested::UpToDate,
     };
+    Ok(match driver::drive(data_dir, &mut one)? {
+        pass::PassOutcome::LockHeld => Outcome::LockHeld,
+        pass::PassOutcome::Ran(_) => match one.ingested {
+            Ingested::Committed(pass) => Outcome::Committed(pass),
+            Ingested::UpToDate => Outcome::UpToDate,
+        },
+    })
+}
 
-    // Recovery first, under the lock, before this transcript is read (ING-03).
-    // `ingest::run` is a run: without this it would proceed against a watermark
-    // ahead of what this file's committed blocks hold, `read_tail` would resume
-    // from an offset the archive never reached, and the gap would be lost from
-    // the archive in silence. It also brings a store older than this build forward
-    // (STOR-05), so a pass never appends turn rows in one shape beside rows
-    // written in another.
-    let (mut store, _recovered) = crate::recover::recover(data_dir)?;
+/// One named file, as the driver walks it: that key's row only, and none of
+/// the tree pass's other steps.
+struct Named<'a> {
+    /// The canonical path, never a link.
+    path: &'a Path,
+    mode: CaptureMode,
+    /// What [`path_key`] made of `path`, once the lock is held.
+    session_key: String,
+    /// What the file did, once the walk has run.
+    ingested: Ingested,
+}
 
-    // This key's row only, after recovery, which rewrites rows. The walk and
-    // backfill read every row through the same query, and `Existing::read`
-    // asks it which file holds the key on all three paths.
-    let session_key = path_key(&canonical)?;
-    let rows = read_rows(store.conn(), Some(&session_key))?;
+impl driver::Walk for Named<'_> {
+    fn only(&mut self) -> Result<Option<String>> {
+        // After the lock, so a path that cannot key a session is this file's
+        // failure and leaves its row. This key's row only, read by the driver
+        // after recovery, which rewrites rows; the walk and backfill read every
+        // row through the same query, and `Existing::read` asks it which file
+        // holds the key on all three paths.
+        self.session_key = path_key(self.path)?;
+        Ok(Some(self.session_key.clone()))
+    }
 
-    // One resolver for one invocation: a single file has one `cwd`, so the memo
-    // buys nothing here and costs nothing either, and `ingest_locked` takes the
-    // same shape whether its caller named one file or walked two thousand.
-    let mut projects = Resolver::new();
-    ingest_locked(
-        &mut store,
-        &rows,
-        &canonical,
-        session_key,
-        started,
-        RunRow::PerFile,
-        &mut projects,
-        config.capture_mode(),
-    )
+    fn walk(&mut self, store: &mut Store, rows: &Rows, summary: &mut pass::Summary) -> Result<()> {
+        summary.files_walked = 1;
+        // One resolver for one invocation: a single file has one `cwd`, so the
+        // memo buys nothing here and costs nothing either, and `ingest_locked`
+        // takes the same shape whether its caller named one file or walked two
+        // thousand.
+        let ingested = ingest_locked(
+            store,
+            rows,
+            self.path,
+            std::mem::take(&mut self.session_key),
+            &mut Resolver::new(),
+            self.mode,
+        )?;
+        if let Ingested::Committed(pass) = &ingested {
+            summary.files_committed = 1;
+            summary.bytes_read = pass.bytes_read;
+            summary.turns_added = pass.turns_added;
+        }
+        self.ingested = ingested;
+        Ok(())
+    }
+
+    /// Anything that failed after recovery is this file's failure, counted as
+    /// one failed file and not repeated as a `pass failed:` line. It sets no
+    /// divergence flag: only the walk flags a divergence.
+    fn failed(&mut self, summary: &mut pass::Summary, e: &Error) -> Option<String> {
+        summary.files_walked = 1;
+        summary
+            .failures
+            .push((self.path.to_path_buf(), e.to_string()));
+        None
+    }
 }
 
 /// A file named like an archived session whose file is gone, and whose first
@@ -184,12 +238,12 @@ pub(crate) enum Claim {
 
 /// Resolve a discovered path once and decide whether this walk ingests it.
 ///
-/// Two paths can share a key: a sidecar link and the file it points at (D-03),
-/// or two project folders, in one root or two, holding the same session file
-/// below the project folder. The first
-/// path a walk meets takes the key, and a later one naming a different file is
-/// refused without being opened, because ingest appends from the watermark and
-/// would mix two files into one stream with nothing to detect it.
+/// Two paths can share a key: a sidecar link and the file it points at, or two
+/// project folders, in one root or two, holding the same session file below the
+/// project folder. The first path a walk meets takes the key, and a later one
+/// naming a different file is refused without being opened, because ingest
+/// appends from the watermark and would mix two files into one stream with
+/// nothing to detect it.
 ///
 /// The archived session's row, read at pass start, is asked before `taken` is:
 /// a file the archived session was not read from, while that one is still
@@ -215,50 +269,30 @@ pub(crate) fn claim(
     })
 }
 
-/// Who owns the `runs` row for this file's transaction.
-///
-/// D-10: one row per pass, not per file. `record_run` inserts the literals
-/// `files_seen` 1, `files_committed` 1 and `files_failed` 0 from inside the
-/// per-file transaction, which is right for a caller that named one file and is
-/// committing it, and wrong for a tree walk - reused unchanged it
-/// would write roughly 2,071 rows per hook-triggered pass, and ING-09's "the
-/// last ingest run" would name one file rather than the pass.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RunRow {
-    /// `ingest::run`: this file IS the run, and its row commits in the same
-    /// transaction as the pass (STOR-02).
-    PerFile,
-    /// The tree pass owns the row and writes one after the whole walk.
-    PassOwns,
-}
-
 /// The pass itself, with the lock already held and the store already open.
 ///
 /// `path` is the file to read, never a link, and `session_key` is what
 /// [`path_key`] made of it. The session is keyed on the transcript's path below
-/// its project folder, never on the record's session id (D-01, D-02): 812 real
-/// sidecar files report their parent's sessionId, and keying on that writes a
-/// 3 KB agent transcript over a parent session's archive. The watermark is
-/// keyed on the same value.
-#[allow(clippy::too_many_arguments)]
+/// its project folder, never on the record's session id: 812 real sidecar files
+/// report their parent's sessionId, and keying on that writes a 3 KB agent
+/// transcript over a parent session's archive. The watermark is keyed on the
+/// same value.
 pub(crate) fn ingest_locked(
     store: &mut Store,
     rows: &Rows,
     path: &Path,
     session_key: String,
-    started: Instant,
-    run_row: RunRow,
     projects: &mut Resolver,
     mode: CaptureMode,
-) -> Result<Outcome> {
+) -> Result<Ingested> {
     let existing = Existing::read(store.conn(), rows, &session_key, path)?;
     let prepared = prepare(path, session_key, &existing, mode)?;
-    apply(store, prepared, started, run_row, projects)
+    apply(store, prepared, projects)
 }
 
 /// Everything one file's pass produces before anything is written.
 ///
-/// The split into [`prepare`] and [`apply`] is what makes D-11's backfill
+/// The split into [`prepare`] and [`apply`] is what makes the parallel backfill
 /// possible: prepare touches no connection at all, so it can run on a worker
 /// thread, and apply is the only half that writes, so one thread can own the
 /// writable connection for the whole run. The sequential path composes them
@@ -267,10 +301,10 @@ pub(crate) fn ingest_locked(
 pub(crate) struct Prepared {
     session_key: String,
     path: PathBuf,
-    /// D-13's flag is clear again: the file was flagged and its archived prefix
-    /// still matches. The clear is a WRITE, so it happens in [`apply`], and it
-    /// happens whether or not there are new bytes - a flagged session with
-    /// nothing new must still stop being flagged.
+    /// The divergence flag is clear again: the file was flagged and its
+    /// archived prefix still matches. The clear is a WRITE, so it happens in
+    /// [`apply`], and it happens whether or not there are new bytes - a flagged
+    /// session with nothing new must still stop being flagged.
     clear_divergence: bool,
     /// The session is archived and `session_meta.transcript_path` names some
     /// other path than this one. Only read when there is no `work`, because
@@ -284,7 +318,7 @@ pub(crate) struct Prepared {
 struct Work {
     /// Where the bytes this pass stores begin in the ARCHIVED stream: the
     /// uncompressed length the session already holds, and zero for a session
-    /// never archived (ING-07, phase 8 D-05).
+    /// never archived.
     ///
     /// Not the watermark. The watermark is a file offset and this is a stream
     /// offset; under `full` they are the same number and under every other mode
@@ -311,10 +345,10 @@ struct Work {
     uncompressed_len: u64,
     parent_session_key: Option<String>,
     agent_meta: Option<Vec<u8>>,
-    /// The mode this pass's bytes were captured under (ING-07, D-13). Carried
-    /// through to `session_meta.capture_mode` rather than re-read at the write,
-    /// so the column records the mode the blocks in this same `Work` were built
-    /// under and cannot drift from it.
+    /// The mode this pass's bytes were captured under. Carried through to
+    /// `session_meta.capture_mode` rather than re-read at the write, so the
+    /// column records the mode the blocks in this same `Work` were built under
+    /// and cannot drift from it.
     capture_mode: CaptureMode,
     pass: Pass,
 }
@@ -338,18 +372,19 @@ pub(crate) fn prepare(
     }
 
     // Before the file is even opened, and the only safe answer for a session
-    // retention emptied (RET-02, phase 8 D-03). An append checks the stored
-    // hashes and tail, and an evicted session has no block rows left, so left
-    // to the ordinary path this file becomes a per-file failure on every pass
-    // forever; writing the tail as a FRESH session instead would resurrect one
-    // that was deliberately emptied and leave every stored `turns.stream_offset`
-    // pointing into bytes that are no longer there.
+    // retention emptied. An append checks the stored hashes and tail, and an
+    // evicted session has no block rows left, so left to the ordinary path this
+    // file becomes a per-file failure on every pass forever; writing the tail
+    // as a FRESH session instead would resurrect one that was deliberately
+    // emptied and leave every stored `turns.stream_offset` pointing into bytes
+    // that are no longer there.
     //
     // So: no work, and `apply` answers `Outcome::UpToDate`. No bytes are read,
     // the watermark does not move, and the walk records no failure - the file
     // is simply one this store has nothing more to do with until the policy
-    // that emptied it changes. D-13's flag is not cleared either, and cannot
-    // be: `prefix_matches` would have to decompress the blocks that are gone.
+    // that emptied it changes. The divergence flag is not cleared either, and
+    // cannot be: `prefix_matches` would have to decompress the blocks that are
+    // gone.
     if existing.evicted {
         return Ok(Prepared {
             session_key,
@@ -361,9 +396,9 @@ pub(crate) fn prepare(
     }
 
     // A flagged session stops being flagged only when the file is provably the
-    // one that was archived (D-13). A length test proves the file is no shorter
-    // than the watermark and NOTHING about its contents: a transcript truncated
-    // to half its length and then written back past the old watermark passes it
+    // one that was archived. A length test proves the file is no shorter than
+    // the watermark and NOTHING about its contents: a transcript truncated to
+    // half its length and then written back past the old watermark passes it
     // while every byte between the truncation point and the watermark is
     // different. Clearing on length alone would then append at the stale offset
     // - splicing a record fragment onto a session whose middle no longer exists
@@ -374,7 +409,7 @@ pub(crate) fn prepare(
     // block row and a read of the whole file, and it is paid only by a session
     // that is actually flagged - the steady state reads the flag, finds it
     // clear, and fetches at most the tail row of a file that grew, and no row
-    // of one that did not (D-13, #85).
+    // of one that did not (#85).
     //
     // A file standing in for one that is gone gets the same comparison: a moved
     // transcript begins with the archived bytes, and any other file named like
@@ -405,9 +440,9 @@ pub(crate) fn prepare(
     // No complete record past the watermark, which is where a rerun on an
     // unchanged file lands. Or there is one, and the file grew after
     // `Existing::read` found it no longer than the watermark, so nothing an
-    // append needs was fetched: it is left for the next pass, which fetches
-    // it, rather than appended without its stored hashes (D-08). Either way
-    // no row is added to any table.
+    // append needs was fetched: it is left for the next pass, which fetches it,
+    // rather than appended without its stored hashes. Either way no row is
+    // added to any table.
     let Some(fetched) = existing.fetched.as_ref().filter(|_| consumed > 0) else {
         return Ok(Prepared {
             session_key,
@@ -419,10 +454,10 @@ pub(crate) fn prepare(
     };
     let fresh = &tail[..consumed];
 
-    // The capture mode acts HERE, between the file and the archive (ING-07, phase 8
-    // D-05), line by line and preserving the framing exactly. Under `full` this
-    // borrows `fresh` and examines not one byte of it, which is what keeps the
-    // default path identical to what it has always been.
+    // The capture mode acts HERE, between the file and the archive, line by
+    // line and preserving the framing exactly. Under `full` this borrows
+    // `fresh` and examines not one byte of it, which is what keeps the default
+    // path identical to what it has always been.
     let stored = crate::capture::elide_stream(fresh, mode);
 
     // Where those bytes land in the archived stream. It is the session's own
@@ -477,8 +512,8 @@ pub(crate) fn prepare(
         }
     };
 
-    // D-03: a sidecar's parent comes from its path and never from its records,
-    // which all report the parent's `sessionId` and so distinguish nothing. The
+    // A sidecar's parent comes from its path and never from its records, which
+    // all report the parent's `sessionId` and so distinguish nothing. The
     // parent's path goes through the same key function the parent's own ingest
     // uses, so the two agree whether or not the parent has been ingested yet.
     let parent_session_key = lineage::sidecar_parent(path).and_then(|p| path_key(&p).ok());
@@ -527,19 +562,17 @@ pub(crate) fn prepare(
     })
 }
 
-/// Write what [`prepare`] produced, in one transaction (STOR-02).
+/// Write what [`prepare`] produced, in one transaction.
 ///
 /// The only half that touches the store, and the only half a backfill runs on
 /// its writer thread. Everything it does that is not the transaction itself
 /// needs the connection: allocating a `session_no`, resolving a predecessor,
-/// clearing D-13's flag.
+/// clearing the divergence flag.
 pub(crate) fn apply(
     store: &mut Store,
     prepared: Prepared,
-    started: Instant,
-    run_row: RunRow,
     projects: &mut Resolver,
-) -> Result<Outcome> {
+) -> Result<Ingested> {
     let Prepared {
         session_key,
         path,
@@ -549,7 +582,7 @@ pub(crate) fn apply(
     } = prepared;
 
     // Before anything else, and on both arms: a session that is whole again
-    // stops being flagged even when the pass has nothing new to add (D-13).
+    // stops being flagged even when the pass has nothing new to add.
     if clear_divergence {
         set_divergence(store.conn(), &session_key, false)?;
     }
@@ -564,7 +597,7 @@ pub(crate) fn apply(
                 rusqlite::params![session_key, path.to_string_lossy()],
             )?;
         }
-        return Ok(Outcome::UpToDate);
+        return Ok(Ingested::UpToDate);
     };
     let Work {
         stream_base,
@@ -588,15 +621,15 @@ pub(crate) fn apply(
     };
     let continues_from = continues_from(store.conn(), &session_key, &scan)?;
 
-    // D-20: the project comes from the session's FIRST `cwd` record, and the
-    // upsert below coalesces it, so a tail pass never revises what the first
-    // pass established - 19 of 1,253 real transcripts carry more than one
-    // distinct `cwd` and belong to the directory the session started in.
-    // Resolution happens here, on the writer, and outside the transaction: it
-    // may spawn git, and a write transaction held across a subprocess would
-    // stop MCP readers. Keeping it off the workers also keeps the memo a plain
-    // `&mut Resolver` rather than a lock every worker would queue on for the
-    // 63 distinct `cwd` values a whole real corpus has.
+    // The project comes from the session's FIRST `cwd` record, and the upsert
+    // below coalesces it, so a tail pass never revises what the first pass
+    // established - 19 of 1,253 real transcripts carry more than one distinct
+    // `cwd` and belong to the directory the session started in. Resolution
+    // happens here, on the writer, and outside the transaction: it may spawn
+    // git, and a write transaction held across a subprocess would stop MCP
+    // readers. Keeping it off the workers also keeps the memo a plain `&mut
+    // Resolver` rather than a lock every worker would queue on for the 63
+    // distinct `cwd` values a whole real corpus has.
     let project = first_cwd(&scan).map(|cwd| projects.resolve(&cwd));
 
     // The fault the crash harness must be able to catch, and the reason that
@@ -611,9 +644,9 @@ pub(crate) fn apply(
         fault::stall(fault::AFTER_SPLIT_WATERMARK);
     }
 
-    // One transaction, and nothing outside it mutates the store (STOR-02). The
-    // `sessions` row goes in before its blocks, because the block table's
-    // reference to it is enforced (D-09).
+    // One transaction, and nothing outside it mutates the store. The `sessions`
+    // row goes in before its blocks, because the block table's reference to it
+    // is enforced.
     let tx = store.conn_mut().transaction()?;
     if existing_session_no.is_none() {
         tx.execute(
@@ -641,11 +674,11 @@ pub(crate) fn apply(
     fault::stall(fault::IN_TX_AFTER_SESSION);
     for (record, turn) in scan.turns() {
         // The seam, not an insert of our own: the rebuild path calls the same
-        // function, which is what stops it from drifting from what ingest wrote
-        // (STOR-04). `stored` starts at `stream_base`, so a record's stream
-        // offset has to be rebased to index it - and the offset and the buffer
-        // are in the SAME coordinate system, which is the whole reason the
-        // scan is of the stored bytes and not the file's.
+        // function, which is what stops it from drifting from what ingest
+        // wrote. `stored` starts at `stream_base`, so a record's stream offset
+        // has to be rebased to index it - and the offset and the buffer are in
+        // the SAME coordinate system, which is the whole reason the scan is of
+        // the stored bytes and not the file's.
         let from = (record.offset - stream_base) as usize;
         derive::derive_turn(
             &tx,
@@ -662,29 +695,25 @@ pub(crate) fn apply(
         )?;
     }
     // A boundary with no `uuid` or `timestamp` is not a turn, so the loop above
-    // never sees it. Its row goes in this same transaction (STOR-02), at its
-    // offset in the stored stream, which is the coordinate `derive_turn` got.
+    // never sees it. Its row goes in this same transaction, at its offset in
+    // the stored stream, which is the coordinate `derive_turn` got.
     for record in &scan.records {
         derive::derive_boundary(&tx, &session_key, record)?;
     }
     fault::stall(fault::IN_TX_AFTER_TURNS);
     write_watermark(&tx, &session_key, pass.watermark)?;
-    if run_row == RunRow::PerFile {
-        record_run(&tx, &pass, started.elapsed())?;
-    }
     fault::stall(fault::IN_TX_BEFORE_COMMIT);
     tx.commit()?;
     fault::stall(fault::AFTER_COMMIT);
 
-    Ok(Outcome::Committed(pass))
+    Ok(Ingested::Committed(pass))
 }
 
-/// The `agent-*.meta.json` that would sit beside a sidecar transcript (D-04).
+/// The `agent-*.meta.json` that would sit beside a sidecar transcript.
 ///
 /// Same directory, same stem, a different extension - which is exactly why
 /// discovery's filename filter never picks it up and it can never become a
-/// session of its own (D-16). `None` for anything that is not an
-/// `agent-*.jsonl`.
+/// session of its own. `None` for anything that is not an `agent-*.jsonl`.
 fn agent_meta_path(transcript: &Path) -> Option<PathBuf> {
     let stem = transcript
         .file_name()?
@@ -697,14 +726,14 @@ fn agent_meta_path(transcript: &Path) -> Option<PathBuf> {
     Some(transcript.with_file_name(format!("{stem}.meta.json")))
 }
 
-/// A sidecar's meta bytes, read verbatim and never parsed (D-04).
+/// A sidecar's meta bytes, read verbatim and never parsed.
 ///
 /// 816 such files carry `agentType`, `description`, `toolUseId`, `spawnDepth`
-/// and `model` against 818 sidecar transcripts, so a missing one is normal:
-/// the column stays null and nothing is recorded. The format is undocumented
-/// and may drift, which is the whole reason the bytes are stored rather than
-/// typed columns - phase 3 can extract `description` for ranking without a
-/// reingest, and the archive stays transcript bytes only (D-13).
+/// and `model` against 818 sidecar transcripts, so a missing one is normal: the
+/// column stays null and nothing is recorded. The format is undocumented and
+/// may drift, which is the whole reason the bytes are stored rather than typed
+/// columns - nothing parses them, `description` can still be extracted later
+/// without a reingest, and the archive stays transcript bytes only.
 ///
 /// Through the counted open, like every other read of the transcript tree, so
 /// an excluded project's meta files are counted the same way its transcripts
@@ -718,7 +747,7 @@ fn read_agent_meta(transcript: &Path) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
-/// Raise D-13's divergence flag on the session this transcript belongs to.
+/// Raise the divergence flag on the session this transcript belongs to.
 ///
 /// Called by the pass, from outside any transaction: the file's own transaction
 /// has already rolled back by then, and this records a fact about the file on
@@ -726,7 +755,7 @@ fn read_agent_meta(transcript: &Path) -> Option<Vec<u8>> {
 ///
 /// The path is the one `open_at_least` refused, so it has already been through
 /// [`path_key`] and is UTF-8 by construction; deriving the key here rather than
-/// taking it keeps one definition of what keys a session (D-01).
+/// taking it keeps one definition of what keys a session.
 pub(crate) fn flag_divergence(conn: &Connection, path: &Path) -> Result<()> {
     let session_key = path_key(path)?;
     set_divergence(conn, &session_key, true)
@@ -744,7 +773,7 @@ fn set_divergence(conn: &Connection, session_key: &str, diverged: bool) -> Resul
     Ok(())
 }
 
-/// The byte offset the next pass resumes from: just past the last `\n` (D-14).
+/// The byte offset the next pass resumes from: just past the last `\n`.
 fn write_watermark(conn: &Connection, session_key: &str, offset: u64) -> Result<()> {
     conn.execute(
         "INSERT INTO watermarks (transcript_path, byte_offset, updated_at)
@@ -813,7 +842,7 @@ pub mod fault {
     /// in the same binary. A name is scoped to the one tree a test built.
     ///
     /// It is spelled as a sidecar (`agent-*.jsonl`) because `discover` admits a
-    /// file on its NAME alone (D-16) - a `<uuid>.jsonl` at project depth, or an
+    /// file on its NAME alone - a `<uuid>.jsonl` at project depth, or an
     /// `agent-*.jsonl` below one, and nothing else. A fault file named anything
     /// more legible is never discovered, so it is never walked, so it never
     /// reaches a worker and the test that armed it passes vacuously.
@@ -849,8 +878,8 @@ pub mod fault {
     pub fn stall_after_files(_committed: usize) {}
 
     /// A file inside the data directory holding a file count. The tree pass
-    /// fails its walk once it has walked that many transcripts, which is how
-    /// D-14's "a pass that died still leaves its `runs` row" becomes testable.
+    /// fails its walk once it has walked that many transcripts, which is how "a
+    /// pass that died still leaves its `runs` row" becomes testable.
     ///
     /// A file rather than an environment variable on purpose: every test owns
     /// its own data directory, so a fault aimed at one pass cannot reach a test
@@ -930,19 +959,19 @@ pub mod fault {
 pub(crate) struct Existing {
     watermark: u64,
     /// Whether `session_meta.agent_meta` already holds this sidecar's meta
-    /// bytes, so a steady-state pass reopens nothing to rewrite them (D-04).
+    /// bytes, so a steady-state pass reopens nothing to rewrite them.
     agent_meta_stored: bool,
     /// Whether a previous pass found this transcript shorter than its watermark
-    /// and flagged the session (D-13). Read so the flag can be *cleared* when
-    /// the file is whole again, and read here so the steady state costs no
-    /// extra query and no write at all.
+    /// and flagged the session. Read so the flag can be *cleared* when the file
+    /// is whole again, and read here so the steady state costs no extra query
+    /// and no write at all.
     diverged: bool,
-    /// Whether retention emptied this session's block rows on purpose (RET-02,
-    /// phase 8 D-03). Read off the same `session_meta` row as the two flags
-    /// above, so the steady state still costs one query and no write.
+    /// Whether retention emptied this session's block rows on purpose. Read off
+    /// the same `session_meta` row as the two flags above, so the steady state
+    /// still costs one query and no write.
     evicted: bool,
     /// How many uncompressed bytes this session already holds - the base of the
-    /// STORED stream's coordinate system (ING-07, phase 8 D-05).
+    /// STORED stream's coordinate system.
     ///
     /// Not the same number as [`Existing::watermark`] once a capture mode elides
     /// anything: the watermark is an offset into the transcript FILE and this is
@@ -968,9 +997,9 @@ pub(crate) struct Existing {
     /// Whether that file is the one this pass reads.
     holder: Holder,
     session: Option<ExistingSession>,
-    /// What an append needs, fetched only when there may be one (D-08).
-    /// `None` is "not fetched", never "nothing archived", so [`prepare`]
-    /// cannot append without the stored hashes.
+    /// What an append needs, fetched only when there may be one. `None` is "not
+    /// fetched", never "nothing archived", so [`prepare`] cannot append without
+    /// the stored hashes.
     fetched: Option<Fetched>,
 }
 
@@ -980,11 +1009,10 @@ pub(crate) struct Existing {
 struct Fetched {
     /// The `turn_seq` the next turn takes: a tail pass numbers on from here and
     /// a rebuild from 0 lands on the same numbers, because both count in byte
-    /// order (D-02).
+    /// order.
     next_turn: i64,
-    /// The hashes and at most the tail row (D-10, D-11), or every row of a
-    /// session flagged diverged or whose file is gone (D-13). Empty for a
-    /// session never archived.
+    /// The hashes and at most the tail row, or every row of a session flagged
+    /// diverged or whose file is gone. Empty for a session never archived.
     archive: archive::AppendState,
 }
 
@@ -1052,13 +1080,13 @@ pub(crate) type Rows = std::collections::HashMap<String, Row>;
 /// join returns no row in two very different situations - this transcript has
 /// never been ingested, and this transcript IS archived but lost its
 /// `session_meta` row - and the caller reads "no row" as "brand new". A pass
-/// over a grown transcript then wrote the TAIL as the whole session,
-/// destroying every archived byte before it, allocated a second `session_no`
-/// that no longer matched the `sessions` row, and left the watermark ahead of
-/// the committed stream: the one state STOR-02 says a store must never reach,
-/// reached by a pass that exits 0. `verify` then certified it, because the
-/// checksum had been minted over the truncated stream - so the obvious response
-/// to `verify` naming a session (re-run ingest) was what destroyed it.
+/// over a grown transcript then wrote the TAIL as the whole session, destroying
+/// every archived byte before it, allocated a second `session_no` that no
+/// longer matched the `sessions` row, and left the watermark ahead of the
+/// committed stream: the one state a store must never reach, reached by a pass
+/// that exits 0. `verify` then certified it, because the checksum had been
+/// minted over the truncated stream - so the obvious response to `verify`
+/// naming a session (re-run ingest) was what destroyed it.
 const ROWS: &str = "SELECT s.session_key, s.session_no, m.checksum, m.agent_meta IS NOT NULL,
         coalesce(m.transcript_diverged, 0) <> 0, coalesce(m.is_evicted, 0) <> 0,
         coalesce(m.uncompressed_len, 0), m.capture_mode, m.block_size, m.transcript_path,
@@ -1118,7 +1146,7 @@ impl Existing {
         let row = rows.get(session_key);
 
         // An archived session with no metadata row is damaged, not absent.
-        // Phase 1 refuses rather than guessing: there is no checksum to verify
+        // Ingest refuses rather than guessing: there is no checksum to verify
         // the stored hashes against, and an append requires one precisely so
         // that a growing session cannot have corruption written into it.
         let session =
@@ -1167,15 +1195,16 @@ impl Existing {
         // byte, the way a flagged one is.
         let whole = diverged || matches!(holder, Holder::Gone(_));
 
-        // D-08, after every refusal above so an unchanged file still gets each
+        // What an append needs, fetched only for a file that may have grown,
+        // and after every refusal above so an unchanged file still gets each
         // one. A stat and not an open: the pass's opens are counted, and the
         // tail read opens the file once anyway. A file no longer than its
         // watermark has nothing to append, and a shorter one still fails at
-        // that open, so neither fetches a row. Nor does a failed stat: the
-        // open fails the same way. No rows at all for an evicted session:
-        // `prepare` never appends to one, and it has none to read. The stat is
-        // skipped for an evicted or `whole` session, where its answer would
-        // not be read.
+        // that open, so neither fetches a row. Nor does a failed stat: the open
+        // fails the same way. No rows at all for an evicted session: `prepare`
+        // never appends to one, and it has none to read. The stat is skipped
+        // for an evicted or `whole` session, where its answer would not be
+        // read.
         let watermark = watermark.unwrap_or(0) as u64;
         let fetched = if !evicted
             && (whole || std::fs::metadata(path).is_ok_and(|m| m.len() > watermark))
@@ -1233,9 +1262,9 @@ impl Existing {
 /// same way. Any other path keys on its own text, which every caller hands
 /// in canonical.
 ///
-/// A path whose last component is a link keys on the file it points at (D-03),
-/// found from link metadata alone. No byte of the file is read (D-02), and a
-/// path that does not exist gets the shape test and is not an error.
+/// A path whose last component is a link keys on the file it points at, found
+/// from link metadata alone. No byte of the file is read, and a path that does
+/// not exist gets the shape test and is not an error.
 pub fn path_key(path: &Path) -> Result<String> {
     let target = link_target(path);
     let path = target.as_deref().unwrap_or(path);
@@ -1317,7 +1346,7 @@ fn below_project_folder(path: &Path) -> Option<String> {
 /// come from the same handle.
 ///
 /// It does not protect against the same file being rewritten in place while it
-/// is read, and adds no identity or length re-check for it (D-09).
+/// is read, and adds no identity or length re-check for it.
 fn read_flagged(path: &Path, existing: &Existing) -> Result<Vec<u8>> {
     let watermark = existing.watermark;
     let (mut file, len) = open_at_least(path, watermark)?;
@@ -1344,20 +1373,20 @@ fn read_flagged(path: &Path, existing: &Existing) -> Result<Vec<u8>> {
 /// treated as matching: the flag was set for a session whose bytes are gone,
 /// and refusing forever would be a permanent failure with nothing to compare.
 ///
-/// A session NOT captured under `full` answers `false` (ING-07, phase 8 D-05).
-/// Its archived stream and the file's first `watermark` bytes are not the same
-/// bytes by construction - elision is what makes them differ - so the comparison
-/// cannot say anything, and the safe answer is the one the surrounding code
-/// already chooses: still divergent. The flag stays set, the file stays skipped,
-/// and `terminus verify` keeps naming it. The alternative is appending at a
-/// stale offset onto a session whose middle no longer exists anywhere, with
-/// `verify` reporting it clean because its checksum still matches itself.
+/// A session NOT captured under `full` answers `false`. Its archived stream and
+/// the file's first `watermark` bytes are not the same bytes by construction -
+/// elision is what makes them differ - so the comparison cannot say anything,
+/// and the safe answer is the one the surrounding code already chooses: still
+/// divergent. The flag stays set, the file stays skipped, and `terminus verify`
+/// keeps naming it. The alternative is appending at a stale offset onto a
+/// session whose middle no longer exists anywhere, with `verify` reporting it
+/// clean because its checksum still matches itself.
 ///
 /// Those two answers, and an archive shorter than the watermark, read no byte
 /// of the file.
 ///
 /// The one reader on the ingest path that decodes every block, from the rows
-/// [`Existing::read`] fetched for a flagged session (D-13).
+/// [`Existing::read`] fetched for a flagged session.
 fn prefix_matches(
     file: &mut std::fs::File,
     path: &Path,
@@ -1402,23 +1431,22 @@ fn read_tail(path: &Path, watermark: u64) -> Result<Vec<u8>> {
 /// Open the transcript and refuse one shorter than the watermark.
 ///
 /// Through `discover::open_transcript` and not `File::open`, so the pass's
-/// opens are the number AC5 measures: "zero opens of any file under an excluded
-/// directory" has to be a fact a test can read off a log.
+/// opens are counted: "zero opens of any file under an excluded directory" has
+/// to be a fact a test can read off a log.
 fn open_at_least(path: &Path, watermark: u64) -> Result<(std::fs::File, u64)> {
     let file = crate::discover::open_transcript(path).map_err(|e| Error::io(path, e))?;
     let len = file.metadata().map_err(|e| Error::io(path, e))?.len();
     if len < watermark {
-        // A transcript never shrinks: compaction appends to the same file
-        // (`DESIGN-BRIEF.md:114`). A shorter file is a different file at the
-        // same path, and guessing which bytes are still ours would corrupt the
-        // archive - so the refusal stands and there is deliberately no fallback to
-        // offset 0, which would overwrite archived bytes on the strength of an
-        // append-only property observed over one 25-day corpus rather than
-        // documented anywhere (D-13).
+        // A transcript never shrinks: compaction appends to the same file. A
+        // shorter file is a different file at the same path, and guessing which
+        // bytes are still ours would corrupt the archive - so the refusal
+        // stands and there is deliberately no fallback to offset 0, which would
+        // overwrite archived bytes on the strength of an append-only property
+        // observed over one 25-day corpus rather than documented anywhere.
         //
-        // What phase 2 adds is not a recovery but a signal: this variant is the
-        // one the pass matches on to flag the session, so `terminus verify`
-        // can say the transcript and the archive have diverged.
+        // What this adds is not a recovery but a signal: this variant is the
+        // one the pass matches on to flag the session, so `terminus verify` can
+        // say the transcript and the archive have diverged.
         return Err(Error::TranscriptDiverged {
             path: path.to_path_buf(),
             len,
@@ -1446,7 +1474,7 @@ fn next_session_no(conn: &Connection) -> Result<i64> {
     )?)
 }
 
-/// D-11's lineage signal, in the session-id namespace ([`lineage`]).
+/// The lineage signal, in the session-id namespace ([`lineage`]).
 ///
 /// The record's foreign `session_id` field is the reliable one: 169 of 1,253
 /// real top-level transcripts name another session that way, an order of
@@ -1455,7 +1483,11 @@ fn next_session_no(conn: &Connection) -> Result<i64> {
 /// through `turns` to the session that holds the parent record, keeping this
 /// column in one namespace.
 ///
-/// Both paths reject a link to this transcript's own session id (D-01).
+/// Both paths reject a link to this transcript's own session id.
+///
+/// A `parentUuid` predecessor that is not archived yet leaves the column NULL
+/// here, and the tree pass's sweep fills it once the predecessor is archived
+/// (#11).
 fn continues_from(conn: &Connection, session_key: &str, scan: &Scan) -> Result<Option<String>> {
     if let Some(foreign) = lineage::foreign_predecessor(scan) {
         return Ok(Some(foreign));
@@ -1473,6 +1505,25 @@ fn continues_from(conn: &Connection, session_key: &str, scan: &Scan) -> Result<O
         return Ok(None);
     };
 
+    parent_session_id(
+        conn,
+        session_key,
+        parent_uuid,
+        lineage::own_session_id(scan),
+    )
+}
+
+/// The session id of the other file holding the message `parent_uuid`, or
+/// `None`: the `parentUuid` half of [`continues_from`], written once so every
+/// caller resolves a predecessor by the same rules.
+///
+/// `own` is the session id the transcript reports for itself.
+fn parent_session_id(
+    conn: &Connection,
+    session_key: &str,
+    parent_uuid: &str,
+    own: Option<&str>,
+) -> Result<Option<String>> {
     let resolved: Option<String> = conn
         .query_row(
             "SELECT m.session_id
@@ -1487,7 +1538,47 @@ fn continues_from(conn: &Connection, session_key: &str, scan: &Scan) -> Result<O
 
     // A different FILE may still report the same session id - every sidecar
     // reports its parent's - so the self-link test applies to the fallback too.
-    Ok(resolved.filter(|id| !lineage::is_self_link(id, lineage::own_session_id(scan))))
+    Ok(resolved.filter(|id| !lineage::is_self_link(id, own)))
+}
+
+/// Fill the continuation link of every session that has none yet, for the
+/// `parentUuid` predecessors that were archived after it (#11).
+///
+/// Ingest resolves the link once, when a session's first turn is written, so a
+/// session archived before its predecessor keeps a NULL link for good unless
+/// something looks again. This looks again: every session with a NULL
+/// `continues_from` whose first turn names a `parentUuid` goes through
+/// [`parent_session_id`], the rule ingest uses. A foreign `session_id` is
+/// recorded at ingest, so such a session is never selected, and the UPDATE
+/// fills a NULL only, so no link is ever overwritten.
+///
+/// The turns are reached through `UNIQUE (session_key, turn_seq)` for the first
+/// turn and `idx_turns_uuid` for the parent, never by scanning `turns`: this
+/// runs on every tree pass, and so on every hook spawn.
+pub(crate) fn fill_continuations(conn: &Connection) -> Result<()> {
+    let pending: Vec<(String, Option<String>, String)> = conn
+        .prepare(
+            "SELECT m.session_key, m.session_id, t.parent_uuid
+             FROM session_meta m CROSS JOIN turns t
+             WHERE m.continues_from IS NULL
+               AND t.session_key = m.session_key AND t.turn_seq = 0
+               AND t.parent_uuid IS NOT NULL",
+        )?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<std::result::Result<_, _>>()?;
+
+    for (session_key, own, parent_uuid) in pending {
+        let resolved = parent_session_id(conn, &session_key, &parent_uuid, own.as_deref())?;
+        let Some(predecessor) = resolved else {
+            continue;
+        };
+        conn.execute(
+            "UPDATE session_meta SET continues_from = ?1
+             WHERE session_key = ?2 AND continues_from IS NULL",
+            rusqlite::params![predecessor, session_key],
+        )?;
+    }
+    Ok(())
 }
 
 /// Everything one `session_meta` upsert writes.
@@ -1500,22 +1591,22 @@ struct MetaRow<'a> {
     path: &'a Path,
     checksum: &'a [u8; 32],
     uncompressed_len: u64,
-    /// Written on the session's first pass and kept after (D-05).
+    /// Written on the session's first pass and kept after.
     block_size: u32,
     /// In the session-id namespace, never the session-key one - see
     /// [`continues_from`].
     continues_from: Option<&'a str>,
-    /// Resolved from the first `cwd` in this scan (D-20), or `None` for a
-    /// transcript that carries no `cwd` at all. One real transcript does.
+    /// Resolved from the first `cwd` in this scan, or `None` for a transcript
+    /// that carries no `cwd` at all. One real transcript does.
     project: Option<&'a Project>,
-    /// The `session_key` of the transcript this sidecar ran under (D-03), or
-    /// `None` for a top-level transcript. In the session-KEY namespace, unlike
+    /// The `session_key` of the transcript this sidecar ran under, or `None`
+    /// for a top-level transcript. In the session-KEY namespace, unlike
     /// [`MetaRow::continues_from`].
     parent_session_key: Option<&'a str>,
-    /// The bytes of the sidecar's `agent-*.meta.json`, stored opaquely (D-04).
+    /// The bytes of the sidecar's `agent-*.meta.json`, stored opaquely.
     agent_meta: Option<&'a [u8]>,
-    /// Which `[capture]` mode produced the bytes this pass is writing (ING-07,
-    /// D-13). Not `coalesce`d like the columns above - see [`write_session_meta`].
+    /// Which `[capture]` mode produced the bytes this pass is writing. Not
+    /// `coalesce`d like the columns above - see [`write_session_meta`].
     capture_mode: CaptureMode,
     scan: &'a Scan,
 }
@@ -1534,15 +1625,15 @@ fn first_cwd(scan: &Scan) -> Option<String> {
 ///
 /// `is_final` is not written here and is not written by any ingest of a file:
 /// it is the idle rule's, evaluated once at the end of a whole pass over
-/// `last_turn_at` (D-06, [`crate::feedback::finalize`]), which is what lets one
+/// `last_turn_at` ([`crate::feedback::finalize`]), which is what lets one
 /// mechanism cover a clean exit and a crash alike. `is_evicted` is not written
-/// here either, and must not be: it is retention's (RET-02), and an ingest that
-/// cleared it would un-evict a session on the pass after the one that emptied
-/// it. `prepare` never reaches this function for an evicted session at all.
+/// here either, and must not be: it is retention's, and an ingest that cleared
+/// it would un-evict a session on the pass after the one that emptied it.
+/// `prepare` never reaches this function for an evicted session at all.
 ///
 /// `capture_mode` is the one column that is neither `coalesce`d onto what is
-/// there nor overwritten outright (ING-07, D-13). It reads `full` only while
-/// EVERY append to the session has been full, so:
+/// there nor overwritten outright. It reads `full` only while EVERY append to
+/// the session has been full, so:
 ///
 /// - a stored null or `full` is replaced by whatever this pass captured under;
 /// - a stored `lean` or `minimal` is never moved back to `full` by a later full
@@ -1557,13 +1648,13 @@ fn write_session_meta(tx: &Connection, row: MetaRow<'_>) -> Result<()> {
     let session_id = scan.records.iter().find_map(|r| r.session_id.clone());
     let cwd = first_cwd(scan);
     let branch = scan.records.iter().find_map(|r| r.git_branch.clone());
-    // Byte order, not clock order (D-02): the "first" turn is the first in the
-    // file even when its timestamp is later than its neighbour's.
+    // Byte order, not clock order: the "first" turn is the first in the file
+    // even when its timestamp is later than its neighbour's.
     let first_turn_at = scan.turns().next().map(|(_, t)| t.timestamp.clone());
     let last_turn_at = scan.turns().last().map(|(_, t)| t.timestamp.clone());
     let project = row.project.map(|p| p.key.as_str());
     // Only when folding actually happened, so the column answers "was this a
-    // worktree" as well as "which one" (D-06, ING-05).
+    // worktree" as well as "which one".
     let pre_worktree = row.project.and_then(|p| p.pre_worktree.as_deref());
 
     tx.execute(
@@ -1617,35 +1708,6 @@ fn write_session_meta(tx: &Connection, row: MetaRow<'_>) -> Result<()> {
     Ok(())
 }
 
-/// Write the one `runs` row a committed pass leaves behind.
-///
-/// There is no log file; `status` (phase 2) surfaces this table. A *failed*
-/// pass needs a second transaction after a rollback and is phase 2's (ING-03,
-/// ING-09): phase 1 records only a pass that committed, and it records it
-/// inside the same transaction as the pass.
-pub(crate) fn record_run(
-    conn: &Connection,
-    pass: &Pass,
-    elapsed: std::time::Duration,
-) -> Result<()> {
-    conn.execute(
-        "INSERT INTO runs (started_at, finished_at, duration_ms, files_seen, files_committed,
-                           files_failed, bytes_read, turns_added)
-         VALUES (
-            strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?1),
-            strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-            ?2, 1, 1, 0, ?3, ?4
-         )",
-        rusqlite::params![
-            format!("-{} seconds", elapsed.as_secs_f64()),
-            elapsed.as_millis() as i64,
-            pass.bytes_read as i64,
-            pass.turns_added as i64,
-        ],
-    )?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1673,9 +1735,9 @@ mod tests {
             .collect()
     }
 
-    /// D-08. A file that grows between `Existing::read`'s length check and the
-    /// tail read is reported up to date with nothing written, and the next
-    /// read fetches what the append needs and commits it.
+    /// A file that grows between `Existing::read`'s length check and the tail
+    /// read is reported up to date with nothing written, and the next read
+    /// fetches what the append needs and commits it.
     #[test]
     fn a_file_that_grows_after_its_check_is_left_for_the_next_pass() {
         let dir = tempfile::tempdir().unwrap();
@@ -1708,30 +1770,16 @@ mod tests {
 
         let mut projects = Resolver::new();
         let prepared = prepare(&path, key.clone(), &existing, CaptureMode::Full).unwrap();
-        let outcome = apply(
-            &mut store,
-            prepared,
-            Instant::now(),
-            RunRow::PassOwns,
-            &mut projects,
-        )
-        .unwrap();
-        assert_eq!(outcome, Outcome::UpToDate);
+        let outcome = apply(&mut store, prepared, &mut projects).unwrap();
+        assert_eq!(outcome, Ingested::UpToDate);
         assert_eq!(watermark(store.conn(), &key), mark);
         assert_eq!(block_rows(store.conn()), rows);
 
         let rows = read_rows(store.conn(), Some(&key)).unwrap();
         let existing = Existing::read(store.conn(), &rows, &key, &path).unwrap();
         let prepared = prepare(&path, key.clone(), &existing, CaptureMode::Full).unwrap();
-        let outcome = apply(
-            &mut store,
-            prepared,
-            Instant::now(),
-            RunRow::PassOwns,
-            &mut projects,
-        )
-        .unwrap();
-        let Outcome::Committed(pass) = outcome else {
+        let outcome = apply(&mut store, prepared, &mut projects).unwrap();
+        let Ingested::Committed(pass) = outcome else {
             panic!("the next read did not commit: {outcome:?}");
         };
         assert_eq!(pass.bytes_read, record.len() as u64);

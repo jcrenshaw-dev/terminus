@@ -1,11 +1,11 @@
-//! Owner-only on disk at the process boundary (PRIV-02, PRIV-04).
+//! Owner-only on disk at the process boundary.
 //!
 //! The library test in `terminus-core` proves what `Store::open` does to a
 //! directory it is handed. This one proves what the shipped binary does to a
 //! data directory an earlier build left readable by group and world: one
 //! writable command repairs it, a second one changes nothing, `verify` still
 //! passes over it, and the read commands - `doctor`, `search`, `show` - leave
-//! every mode and every file exactly as they found them (D-05).
+//! every mode and every file exactly as they found them.
 //!
 //! Regular files only for the ctime comparison. SQLite creates `-wal` and
 //! `-shm` on every open and removes them again when the last connection closes,
@@ -126,9 +126,9 @@ fn assert_unmoved(before: &[(PathBuf, i64, i64)], after_what: &str) {
     }
 }
 
-/// AC3 and AC4 in one pass over one store, because both are claims about the
-/// same widened directory and re-ingesting for the second would only make the
-/// two harder to compare.
+/// The repair and the reads that leave it alone, in one pass over one store,
+/// because both are claims about the same widened directory and re-ingesting
+/// for the second would only make the two harder to compare.
 #[test]
 fn one_writable_command_repairs_a_wide_store_and_no_read_command_touches_one() {
     let bench = bench();
@@ -149,7 +149,7 @@ fn one_writable_command_repairs_a_wide_store_and_no_read_command_touches_one() {
         std::fs::write(dir.join(file), b"{}").unwrap();
     }
 
-    // The first pass takes a snapshot (STOR-06), so `snapshots/` is there with
+    // The first pass takes a snapshot, so `snapshots/` is there with
     // a file in it whose name only the run that wrote it knows.
     let snapshots = data.join(terminus_core::store::snapshot::DIR_NAME);
     let snapshot: PathBuf = std::fs::read_dir(&snapshots)
@@ -183,7 +183,7 @@ fn one_writable_command_repairs_a_wide_store_and_no_read_command_touches_one() {
         data.join("decisions").join("one.json"),
     ];
 
-    // What a build before this phase left behind, reproduced exactly: 755 on
+    // What a build that set no modes left behind, reproduced exactly: 755 on
     // every directory, 644 on every file.
     let widen = || {
         for dir in &directories {
@@ -219,16 +219,16 @@ fn one_writable_command_repairs_a_wide_store_and_no_read_command_touches_one() {
         }
     }
 
-    // D-06: the repair is compare-then-chmod, so the second run finds every bit
+    // The repair is compare-then-chmod, so the second run finds every bit
     // already right and issues no chmod at all.
     let before = ctimes(&files);
     bench.ok(&["observations", "regenerate", "--since", "2999-01-01"]);
     assert_unmoved(&before, "a second writable open");
 
-    // AC3's last clause: the repaired store is still a store.
+    // And the repaired store is still a store.
     bench.ok(&["verify"]);
 
-    // AC4: a read reports on a store, it does not repair one (D-05).
+    // A read reports on a store, it does not repair one.
     widen();
     let wide = ctimes(&files);
     // Not `ok`: `doctor` reports a Problem and exits 1 on a bench with nothing

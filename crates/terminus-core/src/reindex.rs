@@ -1,4 +1,4 @@
-//! Rebuilding every derived table from the block rows alone (STOR-04).
+//! Rebuilding every derived table from the block rows alone.
 //!
 //! The input is the block rows and nothing else. Every table in
 //! `schema::DERIVED_TABLES` - `turns`, `compactions`, `turns_fts`, `entities`
@@ -7,22 +7,26 @@
 //! is the property "everything else is derived" has to mean if it is to mean
 //! anything.
 //!
-//! `sessions` and `session_meta` are never touched. The archive table never
-//! migrates (`DESIGN-BRIEF.md:94`): a derived-schema change rebuilds derived
+//! The per-session clear the preserving path uses, `clear_derived`, is also
+//! the derived half of retention's delete, so the child-first list of derived
+//! tables is written once.
+//!
+//! `sessions` and `session_meta` are never touched by `reindex` itself. The
+//! archive table never migrates: a derived-schema change rebuilds derived
 //! tables *only*, and a store in an older archive format is refused at open
-//! (STOR-10) and never reaches a rebuild.
+//! and never reaches a rebuild.
 //!
 //! Turn ids come out identical because they are derived from `sessions.
-//! session_no` and `turn_seq` (D-10), and `sessions` is never dropped. Without
-//! that, AC4's fixed query set would return the same row count while pointing
-//! at different turns.
+//! session_no` and `turn_seq`, and `sessions` is never dropped. Without that,
+//! a fixed query set run across a rebuild would return the same row count
+//! while pointing at different turns.
 //!
-//! # The one case where the blob cannot answer (phase 8 D-03)
+//! # The one case where the blob cannot answer
 //!
 //! "Every table is dropped before a single row is read" is exactly false for a
 //! store holding an EVICTED session, and the exception is deliberate. Retention
-//! empties such a session's blob on purpose (RET-02) while leaving it listed
-//! and searchable, and its derived rows are the only thing left that can answer
+//! empties such a session's blob on purpose while leaving it listed and
+//! searchable, and its derived rows are the only thing left that can answer
 //! either: `turns_fts` is declared `content=''`, so the projected body text is
 //! not readable back out of it, and the record bytes [`crate::index::project`]
 //! built it from are gone. Dropping the table would destroy them with nothing
@@ -37,7 +41,7 @@
 //!
 //! The two paths produce the same rows for every session that has a blob,
 //! because [`crate::derive::derive_turn`] is idempotent by delete-then-insert
-//! at a known rowid (D-10) rather than by anything the empty tables provided.
+//! at a known rowid rather than by anything the empty tables provided.
 //!
 //! **What the preserved count is honestly saying.** Those rows were written by
 //! whatever build ingested that session, so a future change to a derived
@@ -46,18 +50,6 @@
 //! them inside the ingest lock - `open_up_to_date` runs at the top of every
 //! pass - with a `Rebuilt::failed` note to show for it, which is silent data
 //! loss reporting as retention working correctly.
-//!
-//! # Retiring the old boundary table (D-22)
-//!
-//! Builds before `DERIVED_SCHEMA` 5 kept boundary rows in
-//! `compaction_boundaries`, keyed by `turns.id` with an enforced foreign key to
-//! it. Every rebuild retires that table first, on both paths, before `turns` is
-//! dropped or a session's turns are deleted, either of which the foreign key
-//! would refuse. On the preserving path an evicted session's old rows are first
-//! copied into `compactions` at the `(session_key, stream_offset)` of their
-//! turn, because its emptied blob cannot rebuild them and its derived rows are
-//! the only copy left. On a store that never had the old table both steps do
-//! nothing.
 
 use std::path::Path;
 
@@ -76,17 +68,16 @@ pub struct Rebuilt {
     pub turns: usize,
     /// Sessions whose blob would not decompress, and why.
     ///
-    /// Skipped rather than fatal, and that distinction is the whole of
-    /// `DESIGN-BRIEF.md:98`: one damaged session means "this session is
-    /// damaged", never "the store is gone". A `?` here aborted the entire
-    /// rebuild on the first bad blob, named no session, and - because
-    /// [`open_up_to_date`] runs on the ingest path - stopped every future
-    /// ingest of every other transcript the moment `DERIVED_SCHEMA` was
-    /// bumped. The archive is truth and a corrupt blob is not recoverable
-    /// here, so the rebuild carries on and reports.
+    /// Skipped rather than fatal, and that distinction is the whole point: one
+    /// damaged session means "this session is damaged", never "the store is
+    /// gone". A `?` here aborted the entire rebuild on the first bad blob,
+    /// named no session, and - because [`open_up_to_date`] runs on the ingest
+    /// path - stopped every future ingest of every other transcript the moment
+    /// `DERIVED_SCHEMA` was bumped. The archive is truth and a corrupt blob is
+    /// not recoverable here, so the rebuild carries on and reports.
     pub failed: Vec<(String, String)>,
     /// Evicted sessions whose derived rows were carried across rather than
-    /// rebuilt (phase 8 D-03).
+    /// rebuilt.
     ///
     /// Distinct from [`Rebuilt::failed`], and the distinction is the whole
     /// point: a failure is a session whose blob is damaged and whose index is
@@ -110,8 +101,8 @@ pub fn reindex(store: &mut Store) -> Result<Rebuilt> {
     // every session ever archived - and this runs inside the ingest lock on the
     // first hook-spawned pass after an upgrade, where an allocation failure
     // rolls the rebuild back, leaves `derived_schema` behind, and takes the
-    // pass with it before `record_pass` can say so. One blob at a time bounds
-    // it to the largest single session.
+    // pass with it before the pass's `runs` row can say so. One blob at a time
+    // bounds it to the largest single session.
     //
     // Read BEFORE anything is dropped, which the drop path did not need and
     // costs it nothing: `sessions` and `session_meta` are never touched here,
@@ -132,8 +123,6 @@ pub fn reindex(store: &mut Store) -> Result<Rebuilt> {
         ..Rebuilt::default()
     };
 
-    retire_old_boundaries(&tx, preserved > 0)?;
-
     if preserved == 0 {
         // Every store until a user writes a `[retention]` table, and the
         // stronger guarantee: nothing survives that the block rows did not produce.
@@ -145,8 +134,6 @@ pub fn reindex(store: &mut Store) -> Result<Rebuilt> {
         // says about the pragma, and dropping `turns` while `entities` or
         // `paths` still hold rows fails with a constraint violation.
         // `DERIVED_TABLES` is in creation order, so a rebuild drops in reverse.
-        // The pre-5 boundary table, which also references `turns(id)`, is
-        // already gone: `retire_old_boundaries` ran first.
         for table in schema::DERIVED_TABLES.iter().rev() {
             tx.execute_batch(&format!("DROP TABLE IF EXISTS {table}"))?;
         }
@@ -212,7 +199,7 @@ pub fn reindex(store: &mut Store) -> Result<Rebuilt> {
             rebuilt.turns += 1;
         }
         // The boundaries that are not turns, at their offset in the blob's
-        // scan, through the same seam ingest used (D-19, D-20).
+        // scan, through the same seam ingest used.
         for record in &scan.records {
             derive::derive_boundary(&tx, &session_key, record)?;
         }
@@ -238,21 +225,23 @@ pub fn reindex(store: &mut Store) -> Result<Rebuilt> {
 
 /// Every derived row one session owns, deleted, children first.
 ///
-/// The preserving path's stand-in for `DROP TABLE`, scoped to one session
-/// (phase 8 D-03). Children first for the reason the drop order documents: the
-/// bundled SQLite is compiled with `-DSQLITE_DEFAULT_FOREIGN_KEYS=1`, so
-/// `paths` and `entities` really do reference `turns(id)` on every connection,
-/// and deleting the parent first fails with a constraint violation. `turns_fts`
-/// is contentless with `rowid` IS `turns.id`, so it is cleared by the same
+/// The preserving path's stand-in for `DROP TABLE`, scoped to one session, and
+/// the derived half of retention's delete (`retention::apply::delete_session`),
+/// which is why the list of derived tables and their order lives here and
+/// nowhere else. Children first for the reason the drop order documents: the bundled SQLite
+/// is compiled with `-DSQLITE_DEFAULT_FOREIGN_KEYS=1`, so `paths` and
+/// `entities` really do reference `turns(id)` on every connection, and deleting
+/// the parent first fails with a constraint violation. `turns_fts` is
+/// contentless with `rowid` IS `turns.id`, so it is cleared by the same
 /// subquery rather than by a join it cannot serve. `compactions` is cleared by
 /// `session_key` and never through the turn ids, because its rows are keyed by
-/// position in the stream and need not have a turn behind them (D-20).
+/// position in the stream and need not have a turn behind them.
 ///
 /// The subquery is re-evaluated per statement rather than materialized into a
 /// list: the ids are `turns.id` values this transaction is about to overwrite
 /// anyway, and a `WHERE turn_id IN (SELECT ...)` keeps the whole thing one
 /// statement SQLite plans against the `UNIQUE (session_key, turn_seq)` index.
-fn clear_derived(tx: &rusqlite::Connection, session_key: &str) -> Result<()> {
+pub(crate) fn clear_derived(tx: &rusqlite::Connection, session_key: &str) -> Result<()> {
     const TURN_IDS: &str = "SELECT id FROM turns WHERE session_key = ?1";
     for statement in [
         format!("DELETE FROM paths WHERE turn_id IN ({TURN_IDS})"),
@@ -266,51 +255,16 @@ fn clear_derived(tx: &rusqlite::Connection, session_key: &str) -> Result<()> {
     Ok(())
 }
 
-/// Drop the pre-5 `compaction_boundaries` table, carrying the evicted sessions'
-/// rows into `compactions` first when `preserving` (D-22, phase 8 D-03).
-///
-/// Runs before anything drops `turns` or deletes from it, because the old
-/// table's foreign key to `turns(id)` is enforced and would refuse either. A
-/// session that is not evicted needs nothing carried: the rebuild writes its
-/// rows again from its blob.
-fn retire_old_boundaries(tx: &rusqlite::Connection, preserving: bool) -> Result<()> {
-    let present: bool = tx.query_row(
-        "SELECT count(*) > 0 FROM sqlite_master
-          WHERE type = 'table' AND name = 'compaction_boundaries'",
-        [],
-        |r| r.get(0),
-    )?;
-    if !present {
-        return Ok(());
-    }
-    if preserving {
-        // The new table has to exist to be copied into, and the rebuild runs
-        // the same `IF NOT EXISTS` schema again below.
-        tx.execute_batch(schema::CREATE_SQL)?;
-        tx.execute(
-            "INSERT OR REPLACE INTO compactions (session_key, stream_offset, metadata)
-             SELECT t.session_key, t.stream_offset, b.metadata
-               FROM compaction_boundaries b
-               JOIN turns t ON t.id = b.turn_id
-               JOIN session_meta m ON m.session_key = t.session_key
-              WHERE coalesce(m.is_evicted, 0) <> 0",
-            [],
-        )?;
-    }
-    tx.execute_batch("DROP TABLE compaction_boundaries")?;
-    Ok(())
-}
-
 /// Open a store, rebuilding its derived tables first if its derived schema
 /// differs from this build's.
 ///
-/// An older archive format never gets here: [`Store::open`] refuses it
-/// (STOR-10), because there is no conversion and a rebuild would fail every
-/// session. The rebuild lives here and not in [`Store::open`] on
-/// purpose: opening a store is a read, and a read that silently rewrites four
-/// tables is not one. `Store::open` reports the outcome
-/// ([`Store::rebuild_required`]) and this is the caller that acts on it, so
-/// every code path that can decide "no, refuse instead" still has that choice.
+/// An older archive format never gets here: [`Store::open`] refuses it, because
+/// there is no conversion and a rebuild would fail every session. The rebuild
+/// lives here and not in [`Store::open`] on purpose: opening a store is a read,
+/// and a read that silently rewrites four tables is not one. `Store::open`
+/// reports the outcome ([`Store::rebuild_required`]) and this is the caller
+/// that acts on it, so every code path that can decide "no, refuse instead"
+/// still has that choice.
 ///
 /// The store is reopened after the rebuild rather than reused, so the returned
 /// handle reports the versions the store now actually carries.
@@ -320,8 +274,8 @@ pub fn open_up_to_date(data_dir: &Path) -> Result<Store> {
 
 /// The second half of [`open_up_to_date`], for a store already open.
 ///
-/// Recovery opens the store, re-keys it, and only then brings the derived
-/// tables forward, so a twin the re-key deletes is never rebuilt (phase 4 D-09).
+/// Recovery opens the store and then brings the derived tables forward, before
+/// it sweeps the watermarks.
 pub(crate) fn up_to_date(mut store: Store) -> Result<Store> {
     if store.rebuild_required().is_none() {
         return Ok(store);

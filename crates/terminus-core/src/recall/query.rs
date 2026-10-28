@@ -1,19 +1,30 @@
-//! D-09: the user's string is tokenized and rebuilt in Rust, and a raw query
-//! never reaches `MATCH`.
+//! The user's string is tokenized and rebuilt in Rust, and a raw query never
+//! reaches `MATCH`.
 //!
 //! Measured on sqlite 3.53.4 against the table
 //! `crates/terminus-core/src/store/schema.rs` declares: `MATCH 'src/worker/S.ts'`
 //! fails with `fts5: syntax error near "/"` and exit 1, and `MATCH 'foo AND
 //! (bar'` and `MATCH '"unbalanced'` fail the same way. None of the three returns
-//! an empty result - they return an error - and RCL-06 forbids a non-zero exit
-//! for a query that simply found nothing. Searching for a path is this phase's
-//! own headline case, so the most natural command in the product is exactly the
+//! an empty result - they return an error - and a query that simply found
+//! nothing must never exit non-zero. Searching for a path is search's own
+//! headline case, so the most natural command in the product is exactly the
 //! one that would fail.
 //!
-//! The rule is therefore: split the user's string on the separators the index
-//! tokenizes on, quote each surviving token, and require all of them. Every FTS5
-//! metacharacter is a separator under that split, so there is no operator left
-//! to be unbalanced and no syntax for a user to get wrong.
+//! The rule is therefore: split the user's string on every character that is
+//! not a letter or a digit, quote each surviving token, and require all of
+//! them. Every FTS5 metacharacter is a separator under that split, so there is
+//! no operator left to be unbalanced and no syntax for a user to get wrong.
+//!
+//! A word the tokenizer makes no token from is dropped (#23). `unicode61`
+//! treats some characters Rust counts as letters - the combining mark U+0345,
+//! circled letters such as U+24B6 - as separators, so a word made only of them
+//! is a quoted phrase that matches no row, and conjoined with the rest it would
+//! make the whole search return nothing. The drop happens before repeats are
+//! collapsed and before the [`MAX_QUERY_TOKENS`] cap, so a dropped word takes no
+//! slot and never marks a query truncated. A word with at least one character
+//! the tokenizer does make a token from is kept whole and as typed: inside the
+//! quoted phrase FTS5 splits it itself, which is what keeps a pointed Hebrew,
+//! Arabic or Devanagari word searchable.
 //!
 //! **Query tokens are not expanded.** [`crate::index::expand`] already ran over
 //! the indexed text, so the stored body of a turn containing `SearchManager`
@@ -25,6 +36,7 @@
 
 use std::collections::BTreeSet;
 
+use super::unindexable::makes_no_token;
 use crate::index::expand::separator_components;
 
 /// How many tokens one query may carry into `MATCH`.
@@ -37,7 +49,7 @@ use crate::index::expand::separator_components;
 /// one asked for rather than wrong in an unpredictable direction.
 pub const MAX_QUERY_TOKENS: usize = 32;
 
-/// How a query matched one stored `entities.value_norm` (RCL-04).
+/// How a query matched one stored `entities.value_norm`.
 ///
 /// The comparison is between the query and a WHOLE stored value, never between
 /// one query token and a whole value: `path` and `error` values are multi-token
@@ -74,6 +86,11 @@ impl Query {
         let mut truncated = false;
 
         for piece in separator_components(raw) {
+            // A word the tokenizer makes no token from would match no row, and
+            // conjoined with the rest it would empty the whole search (#23).
+            if piece.chars().all(makes_no_token) {
+                continue;
+            }
             // Case-insensitively, because `unicode61` folds case and asking for
             // `Cargo` and `cargo` as two terms is one term twice.
             let lowered = piece.to_lowercase();
@@ -142,7 +159,8 @@ impl Query {
 
     /// Does this query ask for nothing at all?
     ///
-    /// True for an empty string and for a string of pure punctuation. The
+    /// True for an empty string, for a string of pure punctuation, and for a
+    /// string made only of words the tokenizer makes no token from. The
     /// distinction matters because `MATCH ''` is itself an fts5 error, so the
     /// caller must skip the query rather than run it and catch the failure.
     pub fn is_empty(&self) -> bool {

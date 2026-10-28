@@ -1,4 +1,4 @@
-//! Recovery at the top of every run (ING-03, D-24).
+//! Recovery at the top of every run.
 //!
 //! Every case here is a state a killed pass can leave behind, and the assertion
 //! is always the same shape: the watermark comes back to what the committed
@@ -158,9 +158,10 @@ fn a_pass_lowers_an_overrun_watermark_and_drops_an_orphaned_one() {
     assert!(summary.failures.is_empty(), "{:?}", summary.failures);
 }
 
-/// ING-03 says every run, and single-file `terminus ingest <path.jsonl>` is a
-/// run. Wiring only the pass would leave this entry point resuming from an
-/// offset the archive never reached, losing the gap from the blob in silence.
+/// Recovery runs at the top of every run, and a single-file
+/// `terminus ingest <path.jsonl>` is a run. Wiring only the pass would leave
+/// this entry point resuming from an offset the archive never reached, losing
+/// the gap from the blob in silence.
 #[test]
 fn single_file_ingest_recovers_before_it_reads_the_transcript() {
     let bench = bench();
@@ -174,6 +175,64 @@ fn single_file_ingest_recovers_before_it_reads_the_transcript() {
     }
 
     bench.assert_repaired(committed, &blob, &checksum);
+}
+
+/// A pass that only recovered failed nothing, so its `runs` row leaves `error`
+/// null and carries recovery's lines under `notes` (#96). The same for every
+/// caller, because all three write their row through the one INSERT: the tree
+/// pass, the backfill and a named file.
+#[test]
+fn a_pass_that_only_recovered_writes_its_repairs_as_notes_not_errors() {
+    type Run = fn(&Bench);
+    let callers: [(&str, Run); 3] = [
+        ("the tree pass", |bench| {
+            bench.pass();
+        }),
+        ("the backfill", |bench| {
+            match ingest::backfill::run_with(&bench.data_dir, &bench.config(), 2)
+                .unwrap()
+                .outcome
+            {
+                PassOutcome::Ran(_) => {}
+                PassOutcome::LockHeld => panic!("nothing else holds the lock"),
+            }
+        }),
+        ("a named file", |bench| {
+            match ingest::run(&bench.data_dir, &bench.transcript).unwrap() {
+                ingest::Outcome::UpToDate | ingest::Outcome::Committed(_) => {}
+                other => panic!("{other:?}"),
+            }
+        }),
+    ];
+    for (caller, run) in callers {
+        let bench = bench();
+        bench.damage();
+        run(&bench);
+
+        let (error, notes): (Option<String>, Option<String>) = bench
+            .conn()
+            .query_row(
+                "SELECT error, notes FROM runs ORDER BY id DESC LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(error, None, "{caller} wrote recovery under error");
+        let notes = notes.unwrap_or_else(|| panic!("{caller} wrote no notes"));
+        let lines: Vec<&str> = notes.lines().collect();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains(&bench.key()) && l.ends_with("lowered")),
+            "{caller}'s notes do not name the lowered watermark: {notes}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains(ORPHAN) && l.ends_with("removed")),
+            "{caller}'s notes do not name the removed watermark: {notes}"
+        );
+    }
 }
 
 /// The report names both repairs, which is what lets the pass put them in its
@@ -232,7 +291,7 @@ fn a_zero_watermark_naming_no_session_is_left_alone() {
     assert_eq!(bench.watermarks(), before);
 }
 
-/// A session archived with no `session_meta` row is the damaged state phase 1
+/// A session archived with no `session_meta` row is the damaged state ingest
 /// refuses to guess at and `verify` reports. Recovery must not touch its
 /// watermark either - that would be the same guess, made somewhere quieter.
 #[test]

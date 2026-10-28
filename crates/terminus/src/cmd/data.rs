@@ -1,5 +1,5 @@
 //! `terminus data move <path>`: put the whole data directory somewhere else and
-//! record where it went (STOR-07, D-06).
+//! record where it went.
 //!
 //! **The whole directory, never just the database.** The data directory holds
 //! the `LOCK` file, the per-session injection-state directory
@@ -13,22 +13,22 @@
 //! filesystems fails, and relocating onto another disk is the whole point of
 //! the command.
 //!
-//! **Human-only, no `--json` (D-17).** It shows what it is about to do and asks
+//! **Human-only, no `--json`.** It shows what it is about to do and asks
 //! once, and a single JSON document on stdout cannot be both of those things -
 //! the reason `main.rs` already gives for `install` and `uninstall`. `--yes` is
 //! the way to skip the question, exactly as it is for `uninstall --purge`.
 //!
 //! **It touches no settings file.** The hook entries are written as
 //! `args: ["hook", <event>]` and the MCP registration as `args: ["mcp"]`, so
-//! neither names a store path and there is nothing there to rewrite (D-14).
-//! Rewriting it would break INST-05's "hooks are written once and never
-//! rewritten".
+//! neither names a store path and there is nothing there to rewrite.
+//! Rewriting it would break the rule that hook entries are written once and
+//! never rewritten.
 //!
-//! **It warns about network filesystems and asks anyway (D-16).** No `std` API
+//! **It warns about network filesystems and asks anyway.** No `std` API
 //! detects a network mount on Linux or macOS, and adding one would be a
 //! platform-specific dependency on the hook-path binary. The
 //! command asks regardless of destination, so an unconditional warning costs
-//! nothing and is the mitigation this phase ships.
+//! nothing and is the whole mitigation.
 
 use std::path::{Path, PathBuf};
 
@@ -40,7 +40,7 @@ use super::Failure;
 /// The one verb `data` takes.
 const VERB: &str = "move";
 
-/// The hazard nobody can detect for the user, said every time (D-16).
+/// The hazard nobody can detect for the user, said every time.
 const NETWORK_WARNING: &str =
     "  sqlite is not safe on a network filesystem (nfs, smb, sshfs, or a synced folder\n  \
      that a background agent rewrites). terminus cannot detect one, so if that path is\n  \
@@ -83,7 +83,7 @@ pub fn parse(parser: &mut lexopt::Parser) -> Result<Options, Failure> {
                 )))
             }
             Short('y') | Long("yes") => yes = true,
-            // Including `--json`, deliberately (D-17).
+            // Including `--json`, deliberately.
             other => return Err(Failure::Misuse(crate::unexpected(other))),
         }
     }
@@ -121,7 +121,10 @@ pub fn run(options: Options) -> Result<(), Failure> {
     outln!();
     outln!("  from  {}", source.display());
     outln!("  to    {}", destination.display());
-    outln!("  {} byte(s), including the archive itself", bytes(&source));
+    outln!(
+        "  {} byte(s), including the archive itself",
+        super::directory_bytes(&source)
+    );
     outln!();
     outln!("{NETWORK_WARNING}");
     outln!();
@@ -144,7 +147,7 @@ pub fn run(options: Options) -> Result<(), Failure> {
         }
     };
 
-    // The second check (D-11), as late as it can run: after the answer and the
+    // The second check, as late as it can run: after the answer and the
     // lock, right before the copy. The question can wait as long as the user
     // likes, and `copy_tree` writes into whatever directory is at the path, so
     // a directory swapped or opened up while it waited would otherwise receive
@@ -176,7 +179,7 @@ pub fn run(options: Options) -> Result<(), Failure> {
     // no directory at the top, so this is the only place an absent
     // destination is created.
     if found == Found::Nothing {
-        create_destination(&destination).map_err(|e| {
+        terminus_core::owner_only::create_dir_new(&destination).map_err(|e| {
             if e.kind() == std::io::ErrorKind::AlreadyExists {
                 changed("it was not there and now is".to_owned())
             } else {
@@ -203,7 +206,7 @@ pub fn run(options: Options) -> Result<(), Failure> {
     // locked.
     //
     // Owner-only from the creating open, like the one `ingest::lock` makes at
-    // the source (PRIV-04, D-10): the lock file is short, but a `data move`
+    // the source: the lock file is short, but a `data move`
     // that left one file in the new directory readable by the world would make
     // the destination's mode a lie on the very first listing.
     let lock_file = destination.join(lock::LOCK_FILE_NAME);
@@ -220,7 +223,7 @@ pub fn run(options: Options) -> Result<(), Failure> {
     // and the pointer leaves both directories intact and the store still
     // resolving to the old one, which is recoverable. The other order loses the
     // store's address with the data still on disk.
-    write_pointer(&pointer, &destination)?;
+    store::write_location_pointer(&destination)?;
 
     // Only now, with the pointer naming the destination: holding the lock this
     // long kept an ingest out of the source from the copy until the pointer
@@ -271,13 +274,14 @@ fn refuse_impossible_destinations(
 /// What the destination rule found, for the second check to compare against.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Found {
-    /// Nothing at the path; [`create_destination`] will create it 0700.
+    /// Nothing at the path; [`run`] will create it 0700 with one exclusive
+    /// `mkdir`.
     Nothing,
     /// An empty owner-only directory, named by what a rename cannot carry.
     Directory { device: u64, inode: u64 },
 }
 
-/// The destination rule (D-07): a path that does not exist, or an empty
+/// The destination rule: a path that does not exist, or an empty
 /// directory this account owns that nobody else can reach.
 ///
 /// An existing destination passes only when it is not a symlink, is a
@@ -285,15 +289,15 @@ enum Found {
 /// and is empty. Anything else refuses, including an error other than
 /// `NotFound` from the first look and a directory that cannot be listed, which
 /// is never read as empty. A missing path is accepted and
-/// [`create_destination`] creates it 0700.
+/// [`run`] creates it 0700.
 ///
 /// Only the last part is checked for a symlink, so a symlinked parent such as
 /// macOS's `/var/folders` is fine, and the parent's owner and mode are not
-/// checked (D-09). A wide directory is refused rather than narrowed, because
-/// terminus narrows what it creates and nothing it merely found (D-10). `uid`
+/// checked. A wide directory is refused rather than narrowed, because
+/// terminus narrows what it creates and nothing it merely found. `uid`
 /// is a closure because learning it costs a probe file, and a destination that
 /// does not exist has no owner to compare. What it returns is what the second
-/// check after the question compares against (D-11).
+/// check after the question compares against.
 fn refuse_unchecked_destination(
     destination: &Path,
     uid: impl FnOnce() -> Result<u32, Failure>,
@@ -351,12 +355,13 @@ fn refuse_unchecked_destination(
     }
 }
 
-/// This process's uid, read off a file it has just created (D-13).
+/// This process's uid, read off a file it has just created.
 ///
 /// A new file's owner is the creating process's effective uid on Linux and
 /// macOS, so this needs `std` alone and no `libc`. The probe goes in the
 /// pointer's directory: terminus's own config directory, which this command
-/// has to write the pointer into anyway. A taken name is stepped over rather
+/// has to write the pointer into anyway, so it is made here, 0700, when this
+/// runs before the pointer's writer does. A taken name is stepped over rather
 /// than opened, and a probe that cannot be made refuses the move.
 fn own_uid(pointer: &Path) -> Result<u32, Failure> {
     use std::os::unix::fs::MetadataExt;
@@ -374,29 +379,25 @@ fn own_uid(pointer: &Path) -> Result<u32, Failure> {
         ))
     };
 
-    std::fs::create_dir_all(dir).map_err(|e| failed(dir, e))?;
+    terminus_core::owner_only::create_dir_all(dir).map_err(|e| failed(dir, e))?;
     let pid = std::process::id();
-    for n in 0..100 {
-        let probe = dir.join(format!(".uid-probe-{pid}-{n}"));
-        match terminus_core::owner_only::options()
-            .write(true)
-            .create_new(true)
-            .open(&probe)
-        {
-            Ok(file) => {
-                let owner = file.metadata().map(|m| m.uid());
-                let _ = std::fs::remove_file(&probe);
-                return owner.map_err(|e| failed(&probe, e));
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(failed(&probe, e)),
+    match terminus_core::owner_only::create_temporary(dir, 100, |n| {
+        format!(".uid-probe-{pid}-{n}")
+    }) {
+        Ok((probe, file)) => {
+            let owner = file.metadata().map(|m| m.uid());
+            let _ = std::fs::remove_file(&probe);
+            owner.map_err(|e| failed(&probe, e))
         }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(Failure::Operational(format!(
+                "every probe name under {} for pid {pid} is taken, so this account's uid could \
+                 not be learned; nothing was moved",
+                dir.display()
+            )))
+        }
+        Err(e) => Err(failed(dir, e)),
     }
-    Err(Failure::Operational(format!(
-        "every probe name under {} for pid {pid} is taken, so this account's uid could not be \
-         learned; nothing was moved",
-        dir.display()
-    )))
 }
 
 /// The question, with `--yes` meaning "do it" rather than "take the default".
@@ -405,7 +406,7 @@ fn own_uid(pointer: &Path) -> Result<u32, Failure> {
 /// default for a thing that rewrites where the archive lives is no - so a
 /// `data move --yes` that went through it unchanged would print the question,
 /// decline it and leave. Everything else about the question is install's,
-/// including the refusal when there is no answer to read (INST-08, D-20).
+/// including the refusal when there is no answer to read.
 fn answered(source: &Path, yes: bool) -> Result<bool, Failure> {
     const QUESTION: &str = "  move it?";
 
@@ -422,33 +423,8 @@ fn answered(source: &Path, yes: bool) -> Result<bool, Failure> {
     })
 }
 
-/// The pointer `store::open::data_dir` reads, written through a temporary file
-/// and a rename.
-///
-/// Atomic because the alternative is a truncated pointer: a process killed
-/// mid-write would leave a file naming half a path, and the next command would
-/// resolve a store that does not exist rather than either the old one or the
-/// new one.
-fn write_pointer(pointer: &Path, destination: &Path) -> Result<(), Failure> {
-    let Some(dir) = pointer.parent() else {
-        return Err(Failure::Operational(format!(
-            "{} has no parent directory to write into",
-            pointer.display()
-        )));
-    };
-    let io = |path: &Path, e: std::io::Error| {
-        Failure::Operational(format!("{} could not be written: {e}", path.display()))
-    };
-
-    std::fs::create_dir_all(dir).map_err(|e| io(dir, e))?;
-    let temporary = pointer.with_extension("tmp");
-    std::fs::write(&temporary, format!("{}\n", destination.display()))
-        .map_err(|e| io(&temporary, e))?;
-    std::fs::rename(&temporary, pointer).map_err(|e| io(pointer, e))
-}
-
 /// A relative destination resolved against the working directory, with
-/// trailing slashes and `.` parts dropped (D-08).
+/// trailing slashes and `.` parts dropped.
 ///
 /// The pointer file holds one ABSOLUTE path and the resolver refuses anything
 /// else, because a relative pointer would resolve against whatever directory a
@@ -478,43 +454,26 @@ fn absolute(path: &Path) -> Result<PathBuf, Failure> {
     Ok(joined.components().collect())
 }
 
-/// The destination, created 0700 by this process or not at all.
-///
-/// The parents are made at the process default, the way
-/// `owner_only::create_dir_all` makes them, but the leaf is one exclusive
-/// `mkdir`: anything already at the path, a directory or a symlink, fails it
-/// with `AlreadyExists` instead of being taken as the destination.
-fn create_destination(destination: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::DirBuilderExt;
-
-    if let Some(parent) = destination.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::DirBuilder::new()
-        .mode(terminus_core::owner_only::DIR_MODE)
-        .create(destination)
-}
-
 /// Everything under `from`, copied into `to`, directories included.
 ///
 /// `to` is already there: [`run`] found it as an empty owner-only directory or
-/// made it with [`create_destination`], and nothing here makes a directory at
+/// made it with one exclusive `mkdir`, and nothing here makes a directory at
 /// the top that could stand in for either. Each directory below it is one
-/// exclusive `mkdir`, for the reason [`copy_file`] uses `create_new`.
+/// exclusive `mkdir` too: a taken name is something else writing mid-move. No
+/// parent is made, so a `to` renamed away mid-copy fails the move instead of
+/// being made again with half the store in it.
 ///
 /// The `LOCK` file is skipped at the top level: this process is holding it, and
 /// [`run`] creates an empty one at the destination instead.
 fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
-    use std::os::unix::fs::DirBuilderExt;
-
     let failed =
         |path: &Path, e: std::io::Error| format!("{} could not be copied: {e}", path.display());
 
-    // Every directory 0700 and every file 0600, written rather than reproduced
-    // (D-10). A plain byte-for-byte copy carries the SOURCE's mode across with
-    // it, which makes this the one command that can undo the whole phase: a
-    // store the user moved off a build that predates this, or restored out of
-    // a tar, would arrive as wide as it was at the old location.
+    // Every directory 0700 and every file 0600, written rather than reproduced.
+    // A plain byte-for-byte copy carries the SOURCE's mode across with it,
+    // which would make this the one command that can undo owner-only storage:
+    // a store restored out of a tar, or opened up by hand, would arrive as
+    // wide as it was at the old location.
     // What the destination gets is the mode this build writes, from the
     // creating syscall, whatever the source happens to be.
     let entries = std::fs::read_dir(from).map_err(|e| failed(from, e))?;
@@ -528,10 +487,7 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
         let destination = to.join(&name);
         let kind = entry.file_type().map_err(|e| failed(&source, e))?;
         if kind.is_dir() {
-            std::fs::DirBuilder::new()
-                .mode(terminus_core::owner_only::DIR_MODE)
-                .create(&destination)
-                .map_err(|e| failed(&source, e))?;
+            terminus_core::owner_only::create_dir(&destination).map_err(|e| failed(&source, e))?;
             copy_tree(&source, &destination)?;
         } else {
             copy_file(&source, &destination).map_err(|e| failed(&source, e))?;
@@ -542,40 +498,16 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
 
 /// One file copied into a destination this process creates at 0600.
 ///
-/// `create_new`, because [`refuse_unchecked_destination`] has established
-/// that the destination was absent, or an empty owner-only directory this
-/// account owns: a name already taken here means something else is writing
-/// into the directory mid-move, and truncating it would destroy a file this
-/// command never wrote.
+/// Exclusive, because [`refuse_unchecked_destination`] has established that the
+/// destination was absent, or an empty owner-only directory this account owns:
+/// a name already taken here means something else is writing into the
+/// directory mid-move, and truncating it would destroy a file this command
+/// never wrote.
 fn copy_file(source: &Path, destination: &Path) -> std::io::Result<()> {
     let mut reader = std::fs::File::open(source)?;
-    let mut writer = terminus_core::owner_only::options()
-        .write(true)
-        .create_new(true)
-        .open(destination)?;
+    let mut writer = terminus_core::owner_only::create_new(destination)?;
     std::io::copy(&mut reader, &mut writer)?;
     Ok(())
-}
-
-/// What the move is about to carry, in bytes.
-///
-/// Every file under the directory rather than the three `cmd::status` sums:
-/// what moves here is the injection-state directory (`decision::DIR_NAME`) and
-/// the snapshots too, and a size that named only the database would understate
-/// a directory holding three rolling copies of it by a factor of four.
-fn bytes(dir: &Path) -> u64 {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return 0;
-    };
-    let mut total = 0;
-    for entry in entries.flatten() {
-        match entry.file_type() {
-            Ok(kind) if kind.is_dir() => total += bytes(&entry.path()),
-            Ok(_) => total += entry.metadata().map(|m| m.len()).unwrap_or(0),
-            Err(_) => {}
-        }
-    }
-    total
 }
 
 #[cfg(test)]
@@ -587,6 +519,20 @@ mod tests {
             Ok(path) => path,
             Err(_) => panic!("{path} did not resolve"),
         }
+    }
+
+    /// The destination renamed away between two entries of the copy: the next
+    /// directory fails, and nothing is made at the old path.
+    #[test]
+    fn a_destination_gone_mid_copy_is_not_made_again() {
+        let root = tempfile::tempdir().unwrap();
+        let from = root.path().join("from");
+        std::fs::create_dir_all(from.join("snapshots")).unwrap();
+        std::fs::write(from.join("snapshots/terminus-1.db"), "snapshot").unwrap();
+        let to = root.path().join("to");
+
+        assert!(copy_tree(&from, &to).is_err());
+        assert!(!to.exists(), "the copy made the missing destination again");
     }
 
     #[test]
@@ -667,32 +613,6 @@ mod tests {
         let file = dir.path().join("file");
         std::fs::write(&file, "").unwrap();
         assert!(refusal(&file.join("store"), owner).contains("could not be checked"));
-    }
-
-    #[test]
-    fn a_destination_is_created_owner_only_with_its_parents() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("parent").join("store");
-        create_destination(&path).unwrap();
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o700, "the destination was created at {mode:o}");
-    }
-
-    #[test]
-    fn a_directory_already_at_the_destination_is_not_taken() {
-        let (_dir, path, _owner) = owner_only_dir();
-        let e = create_destination(&path).unwrap_err();
-        assert_eq!(e.kind(), std::io::ErrorKind::AlreadyExists);
-    }
-
-    #[test]
-    fn a_symlink_already_at_the_destination_is_not_taken() {
-        let (dir, target, _owner) = owner_only_dir();
-        let link = dir.path().join("link");
-        std::os::unix::fs::symlink(&target, &link).unwrap();
-        let e = create_destination(&link).unwrap_err();
-        assert_eq!(e.kind(), std::io::ErrorKind::AlreadyExists);
     }
 
     #[test]

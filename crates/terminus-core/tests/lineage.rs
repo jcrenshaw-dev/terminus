@@ -1,6 +1,6 @@
-//! Session lineage through a real pass (ING-04, D-01, D-02, D-19).
+//! Session lineage through a real pass.
 //!
-//! AC2 is the shape of this file: after a pass, the count of rows whose
+//! One claim shapes this file: after a pass, the count of rows whose
 //! `continues_from` equals their own session id must be zero while the count of
 //! non-null `continues_from` values must not be.
 
@@ -106,9 +106,9 @@ fn record(n: u8, own: &str, foreign: Option<&str>) -> String {
     )
 }
 
-/// D-01. 253 of the 433 real transcripts carrying a `session_id` carry only
-/// their own, so an uncompared read makes one in five sessions continue from
-/// itself.
+/// A session never continues from itself. 253 of the 433 real transcripts
+/// carrying a `session_id` carry only their own, so an uncompared read makes
+/// one in five sessions continue from itself.
 #[test]
 fn a_transcript_naming_only_its_own_session_id_continues_from_nothing() {
     let tree = tree();
@@ -142,7 +142,7 @@ fn a_transcript_carrying_both_ids_records_the_foreign_one() {
     assert_eq!(tree.continues_from(&path), Some(other));
 }
 
-/// D-02: continuation is a fan-out. Session `ebd78c2b` is named as predecessor
+/// Continuation is a fan-out. Session `ebd78c2b` is named as predecessor
 /// by four separate later transcripts in one real project, so nothing may
 /// assume a single successor.
 #[test]
@@ -173,9 +173,9 @@ fn one_predecessor_named_by_three_successors_produces_three_links() {
     );
 }
 
-/// D-19: 2 of the 173 real files naming a foreign session name one that was
-/// aged out by `cleanupPeriodDays` and is not on disk at all. No foreign key,
-/// no ingest-order requirement.
+/// A predecessor need not be archived: 2 of the 173 real files naming a foreign
+/// session name one that was aged out by `cleanupPeriodDays` and is not on disk
+/// at all. No foreign key, no ingest-order requirement.
 #[test]
 fn a_predecessor_that_was_never_ingested_is_recorded_anyway() {
     let tree = tree();
@@ -196,7 +196,7 @@ fn a_predecessor_that_was_never_ingested_is_recorded_anyway() {
     assert_eq!(known, 0, "the link names a session the store does not hold");
 }
 
-/// AC2 over a tree: zero self-links, and more than zero links.
+/// Over a tree: zero self-links, and more than zero links.
 #[test]
 fn over_a_tree_no_session_continues_from_itself_and_some_continue() {
     let tree = tree();
@@ -228,7 +228,7 @@ fn over_a_tree_no_session_continues_from_itself_and_some_continue() {
     assert_eq!(links, 2);
 }
 
-/// The `parentUuid` fallback stays exactly what D-11 made it: message-level
+/// The `parentUuid` fallback stays exactly as it was: message-level
 /// threading, resolved through `turns` to the session holding that record, and
 /// used only when no foreign `session_id` is present.
 #[test]
@@ -256,8 +256,64 @@ fn the_parent_uuid_fallback_still_links_a_fork() {
     );
 }
 
+impl Tree {
+    /// A later session whose first record names the message of `record(1, ..)`
+    /// as its `parentUuid`, with its own `sessionId` and, when `foreign` is
+    /// set, a `session_id` naming another session.
+    fn continuing(&self, foreign: Option<&str>) -> PathBuf {
+        let foreign = match foreign {
+            Some(id) => format!("\"session_id\":\"{id}\","),
+            None => String::new(),
+        };
+        self.write(
+            &format!("{}.jsonl", uuid(2)),
+            &format!(
+                "{{\"type\":\"user\",\"uuid\":\"dddddddd-0000-4000-8000-000000000001\",\
+                  \"parentUuid\":\"cccccccc-0000-4000-8000-000000000001\",\
+                  \"timestamp\":\"2026-08-12T11:00:00.000Z\",\"sessionId\":\"{}\",{foreign}\
+                  \"cwd\":\"/data/code/verbatim\"}}\n",
+                session(2)
+            ),
+        )
+    }
+}
+
+/// A session archived before its predecessor gets its link on the next pass,
+/// though its own file did not change and was not committed again (#11).
+#[test]
+fn a_continuing_session_is_linked_once_its_predecessor_is_archived() {
+    let tree = tree();
+    let later = tree.continuing(None);
+
+    // Pass one: the later session alone, so the parent message resolves to nothing.
+    assert_eq!(tree.pass().files_committed, 1);
+    assert_eq!(tree.continues_from(&later), None);
+
+    // Pass two commits only the predecessor, so the later session was not
+    // ingested again and only the sweep can have linked it.
+    tree.transcript(1, &session(1), None);
+    assert_eq!(tree.pass().files_committed, 1);
+    assert_eq!(tree.continues_from(&later), Some(session(1)));
+}
+
+/// The sweep fills NULLs only: a foreign `session_id` recorded at ingest wins
+/// over the `parentUuid` the sweep would resolve (#11).
+#[test]
+fn a_link_already_recorded_survives_the_sweep() {
+    let tree = tree();
+    let foreign = session(9);
+    let later = tree.continuing(Some(&foreign));
+
+    assert_eq!(tree.pass().files_committed, 1);
+    assert_eq!(tree.continues_from(&later), Some(foreign.clone()));
+
+    tree.transcript(1, &session(1), None);
+    assert_eq!(tree.pass().files_committed, 1);
+    assert_eq!(tree.continues_from(&later), Some(foreign));
+}
+
 // ---------------------------------------------------------------------------
-// A sidecar's parent (D-03), which comes from the path and never the records.
+// A sidecar's parent, which comes from the path and never the records.
 // ---------------------------------------------------------------------------
 
 impl Tree {
@@ -323,12 +379,12 @@ fn both_sidecar_depths_carry_their_parents_session_key() {
     );
 
     // The link cannot have come from the records: the sidecar reports exactly
-    // the same session id as its parent, which is D-01's collision case.
+    // the same session id as its parent, which is the self-link case.
     assert_eq!(tree.session_id_of(&shallow), tree.session_id_of(&parent));
     assert_eq!(tree.session_id_of(&deep), tree.session_id_of(&parent));
 }
 
-/// Ingest order does not matter (D-19): the key is stored whether or not the
+/// Ingest order does not matter: the key is stored whether or not the
 /// parent transcript has been ingested, or exists at all.
 #[test]
 fn a_sidecar_ingested_before_its_parent_records_the_same_key() {
@@ -360,7 +416,7 @@ fn a_sidecar_ingested_before_its_parent_records_the_same_key() {
 }
 
 // ---------------------------------------------------------------------------
-// The sidecar's `agent-*.meta.json`, stored unparsed (D-04).
+// The sidecar's `agent-*.meta.json`, stored unparsed.
 // ---------------------------------------------------------------------------
 
 impl Tree {
@@ -387,9 +443,9 @@ impl Tree {
     }
 }
 
-/// D-04. The meta file's bytes land in `session_meta.agent_meta` unparsed, the
-/// meta file itself never becomes a session, and the blob still holds only
-/// transcript bytes (D-13).
+/// The meta file's bytes land in `session_meta.agent_meta` unparsed, the meta
+/// file itself never becomes a session, and the blob still holds only
+/// transcript bytes.
 #[test]
 fn a_sidecars_meta_file_is_stored_verbatim_and_never_becomes_a_session() {
     let tree = tree();

@@ -1,4 +1,4 @@
-//! The three tools, and nothing else ever (RCL-07 .. RCL-09).
+//! The three tools, and nothing else ever.
 //!
 //! **Three, by decision.** Every tool description sits in every session's
 //! context forever, so `stats`, `usage`, `verify`,
@@ -22,7 +22,7 @@
 //! compactly, because a tool result sits in the model's context and indentation
 //! is tokens spent on whitespace.
 //!
-//! **Every failure the server understood is a result, never a throw (RCL-10).**
+//! **Every failure the server understood is a result, never a throw.**
 //! A missing argument, an argument of the wrong JSON type, an unparseable date,
 //! an unknown turn id, a store that does not exist yet: all of them come back as
 //! this tool's own empty document carrying a `reason`. A JSON-RPC error is
@@ -34,10 +34,8 @@ use std::collections::HashSet;
 use serde_json::{json, Map, Value};
 
 use terminus_core::recall::{self, context, get, search, Filters, Query, Request, Scope};
-use terminus_core::Error;
 
 use crate::cmd::read::{self, Opened, Reader};
-use crate::cmd::Failure;
 
 use super::rpc;
 
@@ -59,23 +57,11 @@ pub const MAX_CONTEXT_SIDE: usize = recall::MAX_CONTEXT_SIDE;
 ///
 /// This is the budget the terminal path does not need. `terminus show` is
 /// bounded by what a person types; `recall_get` is where a *client-supplied*
-/// list arrives, and `recall::get::records` binds one SQL placeholder per id, so
-/// an unbounded list is an operational failure rather than a bounded answer.
-/// Each id can also cost a whole decompressed session (D-20), which is what puts
-/// the number in the tens rather than the hundreds.
+/// list arrives, and each id can cost a whole decompressed session, so an
+/// unbounded list would let one call pull the archive into the client's
+/// context. That cost is what puts the number in the tens rather than the
+/// hundreds.
 pub const MAX_IDS: usize = 25;
-
-/// How many `paths` one `recall_search` call may filter on.
-///
-/// The same hazard [`MAX_IDS`] closes, on the other tool: `Filters::push_onto`
-/// binds one SQL placeholder per path, so a client-supplied array past
-/// SQLITE_MAX_VARIABLE_NUMBER turned into an operational SQLite failure handed
-/// back as an ordinary empty result - which a model reads as "no matches"
-/// rather than "your filter was rejected" - carrying the whole generated
-/// statement as its reason. A 1,000,000-element array produced a 2 MB tool
-/// result, defeating the budget that exists so a client cannot pull the archive
-/// into its context one call at a time.
-pub const MAX_PATHS: usize = 25;
 
 /// How many hits `recall_search` returns when the caller does not say.
 ///
@@ -89,9 +75,9 @@ pub const DEFAULT_CONTEXT_SIDE: usize = 5;
 
 /// The `annotations` object every tool here carries.
 ///
-/// All four hints, not only the one the acceptance criterion names: a client
-/// that reads `destructiveHint` and finds it absent has to assume the default,
-/// and the default for a tool that does not say is the cautious one.
+/// All four hints are set: a client that reads `destructiveHint` and finds it
+/// absent has to assume the default, and the default for a tool that does not
+/// say is the cautious one.
 fn read_only() -> Value {
     json!({
         "readOnlyHint": true,
@@ -125,11 +111,7 @@ pub fn descriptors() -> Vec<Value> {
                     "paths": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "maxItems": MAX_PATHS,
-                        "description": format!(
-                            "Only turns that structurally touched one of these files, \
-                             at most {MAX_PATHS} per call."
-                        )
+                        "description": "Only turns that structurally touched one of these files."
                     },
                     "tool": {
                         "type": "string",
@@ -316,30 +298,18 @@ fn nothing(name: &str, reason: &str) -> Value {
 }
 
 // ---------------------------------------------------------------------------
-// recall_search (RCL-07)
+// recall_search
 // ---------------------------------------------------------------------------
 
 fn run_search(args: &Map<String, Value>) -> Result<Value, Refused> {
     let raw = required_string(args, "query")?;
     let project = optional_string(args, "project")?;
-    let asked_paths = optional_strings(args, "paths")?;
-    let asked_path_count = asked_paths.len();
-    // `get` and not a slice expression, for the same reason `recall_get` uses
-    // one: the length came from a client and a panic here writes a backtrace
-    // onto the transport.
-    let paths = asked_paths
-        .get(..MAX_PATHS)
-        .map(<[String]>::to_vec)
-        .unwrap_or(asked_paths);
-    let served_paths = paths.len();
-    let kind = optional_string(args, "kind")?;
-    if kind.as_deref() == Some(crate::cmd::search::RETIRED_KIND) {
-        return Err(Refused::caller(crate::cmd::search::RETIRED_KIND_MESSAGE));
-    }
+    // Every path reaches the filter, which binds the list as one parameter;
+    // the answer is bounded by `MAX_HITS`, not by how many paths were sent.
     let filters = Filters {
         tool: optional_string(args, "tool")?,
-        kind,
-        paths,
+        kind: optional_string(args, "kind")?,
+        paths: optional_strings(args, "paths")?,
         since: optional_time(args, "since")?,
         until: optional_time(args, "until")?,
     };
@@ -347,8 +317,8 @@ fn run_search(args: &Map<String, Value>) -> Result<Value, Refused> {
     if asked == 0 {
         return Err(Refused::caller("limit 0 asks for no results"));
     }
-    // Lowered, never raised: RCL-10's budget is the server's, and a caller's own
-    // limit may only narrow it.
+    // Lowered, never raised: `MAX_HITS` is the server's budget, and a caller's
+    // own limit may only narrow it.
     let limit = asked.min(MAX_HITS);
 
     let query = Query::parse(&raw);
@@ -362,15 +332,6 @@ fn run_search(args: &Map<String, Value>) -> Result<Value, Refused> {
 
     let response = match search::run(reader.store().conn(), reader.config(), &request) {
         Ok(response) => response,
-        // A malformed bound is the caller's, not the archive's. Every string
-        // orders against every other, so the alternative is a plausible wrong
-        // answer nothing reports (D-23).
-        Err(Error::InvalidTimeFilter { field, value }) => {
-            return Err(Refused::caller(format!(
-                "{field} {value:?} is not a time; expected YYYY-MM-DD or \
-                 YYYY-MM-DDTHH:MM:SS.mmmZ"
-            )))
-        }
         Err(other) => return Err(Refused::archive(other.to_string())),
     };
 
@@ -387,12 +348,6 @@ fn run_search(args: &Map<String, Value>) -> Result<Value, Refused> {
             "only the first {tokens} tokens of the query were used"
         ));
     }
-    if reason.is_none() && served_paths < asked_path_count {
-        reason = Some(format!(
-            "only the first {served_paths} of {asked_path_count} paths were \
-             filtered on; this server caps one request at {MAX_PATHS}"
-        ));
-    }
 
     let hits: Vec<Value> = response
         .hits
@@ -404,7 +359,7 @@ fn run_search(args: &Map<String, Value>) -> Result<Value, Refused> {
                 "project": hit.project,
                 "record_type": hit.record_type,
                 "ts": hit.ts,
-                // D-07: a subagent turn is in the result and ranked below a
+                // A subagent turn is in the result and ranked below a
                 // top-level turn of equal score, and said out loud so a reader
                 // knows it is looking at work it never watched.
                 "sidechain": hit.sidechain,
@@ -419,16 +374,16 @@ fn run_search(args: &Map<String, Value>) -> Result<Value, Refused> {
 }
 
 // ---------------------------------------------------------------------------
-// recall_context (RCL-08)
+// recall_context
 // ---------------------------------------------------------------------------
 
 /// The conversation around one turn, in the order it happened.
 ///
-/// **`turn_seq` order, never timestamp (D-22).** 31 of 62 sampled real
+/// **`turn_seq` order, never timestamp.** 31 of 62 sampled real
 /// transcripts carry a record whose timestamp goes backwards, so a timestamp
 /// sort would show a reply before the prompt it answers in half of all sessions.
 ///
-/// **The window stops at the session (D-06)** and says which end it stopped at.
+/// **The window stops at the session** and says which end it stopped at.
 /// It does not follow `continues_from` and it does not follow
 /// `parent_session_key`: continuation is a fan-out with zero, one or many
 /// successors, so a lineage walk here could return turns from a conversation
@@ -494,7 +449,7 @@ fn run_context(args: &Map<String, Value>) -> Result<Value, Refused> {
 }
 
 // ---------------------------------------------------------------------------
-// recall_get (RCL-09)
+// recall_get
 // ---------------------------------------------------------------------------
 
 /// The whole verbatim record behind each id.
@@ -502,19 +457,19 @@ fn run_context(args: &Map<String, Value>) -> Result<Value, Refused> {
 /// **This is the one path that hands the truth back.** A search returns an
 /// excerpt and a context window returns projections; this returns the record's
 /// own archived bytes, and each session's blob is decompressed once per request
-/// however many of its turns were asked for (D-20).
+/// however many of its turns were asked for.
 ///
 /// **Unless `[privacy] redact_recall` is set**, and then `body` is that line
 /// with the egress filter run over it, because an MCP result is the model's
-/// context and phase 4 makes that its own egress boundary. The archive is
+/// context and so an egress boundary of its own. The archive is
 /// untouched either way - the filter is applied to the copy this answer carries,
 /// in `recall::get::records` and not here, so the terminal `body` and this one
 /// cannot disagree.
 ///
-/// **The id list is bounded here and nowhere else.** `recall::get::records`
-/// binds one SQL placeholder per id, so a client-supplied list of thousands is
-/// an operational failure rather than an answer; the terminal path is bounded by
-/// what a person types, and this is where a list arrives that nobody typed.
+/// **The id list is bounded here and nowhere else.** Each id can cost a whole
+/// decompressed session, so a client-supplied list of thousands would read
+/// thousands of sessions into one answer; the terminal path is bounded by what
+/// a person types, and this is where a list arrives that nobody typed.
 /// Over-long is truncated and reported rather than refused, so a caller that
 /// asked for too much still gets the first [`MAX_IDS`] of what it wanted and is
 /// told the rest were not read.
@@ -523,7 +478,7 @@ fn run_context(args: &Map<String, Value>) -> Result<Value, Refused> {
 /// that names one id 30 times names one record, and counting it as over the cap
 /// dropped real ids that came after the repeats.
 ///
-/// **An evicted body is a flag, not an error (D-08).** It is read off
+/// **An evicted body is a flag, not an error.** It is read off
 /// `session_meta.is_evicted` and never off a failed blob read: a blob that will
 /// not decompress is archive damage for `terminus verify` to report, and letting
 /// it look like an eviction would report silent data loss as retention working.
@@ -609,7 +564,7 @@ fn run_get(args: &Map<String, Value>) -> Result<Value, Refused> {
 // The store, the scope, and the arguments
 // ---------------------------------------------------------------------------
 
-/// Open the store for one call, read-only (D-10).
+/// Open the store for one call, read-only.
 ///
 /// The same entry point `search`, `show` and `sessions` use, so there is one
 /// implementation of "a read never creates a store" rather than two - and a
@@ -627,15 +582,12 @@ fn reader() -> Result<Box<Reader>, Refused> {
         // ingested is the ordinary starting state, and a model told "error"
         // would report a broken tool instead of an empty archive.
         Ok(Opened::Nothing(reason)) => Err(Refused::archive(reason)),
-        Err(Failure::Operational(message) | Failure::Misuse(message)) => {
-            Err(Refused::archive(message))
-        }
-        Err(Failure::Silent) => Err(Refused::archive("the store could not be read")),
+        Err(failure) => Err(Refused::archive(failure.text())),
     }
 }
 
 /// The project a call works in: the one named, or the one this process is
-/// standing in (D-12).
+/// standing in.
 ///
 /// Claude Code spawns the server with the session's own working directory, so
 /// the default scope is the project the user is in - resolved by a longest-prefix
@@ -796,21 +748,20 @@ fn optional_count(args: &Map<String, Value>, name: &str) -> Result<Option<usize>
 
 /// One end of a time window, validated before it can reach a comparison.
 ///
-/// Through the CLI's own rule, so `--since` typed at a terminal and `since`
-/// passed by a model mean the same thing (D-23) - including that a bare
-/// `YYYY-MM-DD` extends to the first instant of its day for `since` and the last
-/// for `until`.
+/// Through terminus-core's date check, [`recall::checked_bound`], the one the
+/// CLI uses, so `--since` typed at a terminal and `since` passed by a model mean
+/// the same thing - including that a bare `YYYY-MM-DD` extends to the first
+/// instant of its day for `since` and the last for `until`, and that a value no
+/// calendar or clock has is refused. Run before the store is opened, so a bad
+/// date is a caller error with no store too. The core message starts with the
+/// field, which is the argument's name as MCP spells it.
 fn optional_time(args: &Map<String, Value>, name: &'static str) -> Result<Option<String>, Refused> {
     let Some(raw) = optional_string(args, name)? else {
         return Ok(None);
     };
-    match crate::cmd::time_bound(name, &raw) {
-        Ok(bound) => Ok(Some(bound)),
-        Err(Failure::Misuse(message) | Failure::Operational(message)) => {
-            Err(Refused::caller(message))
-        }
-        Err(Failure::Silent) => Err(Refused::caller(format!("{name} is not a time"))),
-    }
+    recall::checked_bound(name, &raw)
+        .map(Some)
+        .map_err(|error| Refused::caller(error.to_string()))
 }
 
 #[cfg(test)]
@@ -818,8 +769,8 @@ mod tests {
     use super::*;
 
     /// Exactly three, each named, each `readOnlyHint`, each with an object
-    /// schema - the shape AC7 asserts at the process boundary, checked here
-    /// where a failure names the field rather than the spawn.
+    /// schema - the shape `tests/mcp.rs` asserts at the process boundary,
+    /// checked here where a failure names the field rather than the spawn.
     #[test]
     fn there_are_exactly_three_read_only_tools() {
         let tools = descriptors();

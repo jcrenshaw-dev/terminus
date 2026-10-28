@@ -28,12 +28,16 @@ pub struct Applied {
     /// Counted and said out loud because it is the one thing a delete destroys
     /// that no rebuild reproduces: an observation's facts come off the session's
     /// block rows, and the delete takes those too, which is why `reindex`
-    /// deliberately does not touch that table (phase 7 D-02).
+    /// deliberately does not touch that table.
     pub observations_lost: usize,
     /// Eligible sessions the per-pass bound left for the next pass.
     pub over: usize,
     /// Sessions an excluded project holds, which retention passed over.
     pub excluded: usize,
+    /// Sessions selected for deletion whose transcript was back on disk when
+    /// the delete came, so [`apply`] kept them (#43). Not a failure and not in
+    /// `notes`: the session is simply still archived.
+    pub kept: usize,
     /// Whatever could not be done, said rather than raised. There is no log
     /// file, so these travel into `runs.error` with the pass's other failures.
     pub notes: Vec<String>,
@@ -46,6 +50,7 @@ impl Applied {
             && self.deleted.is_empty()
             && self.over == 0
             && self.excluded == 0
+            && self.kept == 0
             && self.notes.is_empty()
     }
 
@@ -90,6 +95,13 @@ impl Applied {
                 self.excluded
             ));
         }
+        if self.kept > 0 {
+            out.push(format!(
+                "{} session(s) selected for deletion were kept because their transcript was back \
+                 on disk when the delete came; they are still archived",
+                self.kept
+            ));
+        }
         out
     }
 }
@@ -107,12 +119,13 @@ pub fn apply(store: &mut Store, selection: &super::Selection) -> Applied {
     }
     for session_key in &selection.delete {
         match delete_one(store.conn_mut(), session_key) {
-            Ok(observation) => {
+            Ok(Some(observation)) => {
                 out.deleted.push(session_key.clone());
                 if observation {
                     out.observations_lost += 1;
                 }
             }
+            Ok(None) => out.kept += 1,
             Err(e) => out
                 .notes
                 .push(format!("{session_key}: the deletion failed: {e}")),
@@ -121,7 +134,7 @@ pub fn apply(store: &mut Store, selection: &super::Selection) -> Applied {
     out
 }
 
-/// Delete one session's block rows and mark it evicted (RET-02, D-09).
+/// Delete one session's block rows and mark it evicted.
 ///
 /// The `sessions` row stays, so `session_no` and every derived row keyed on
 /// it stay too.
@@ -144,53 +157,59 @@ fn evict_one(conn: &mut Connection, session_key: &str) -> Result<()> {
 }
 
 /// Remove one session and everything keyed on it, answering whether an
-/// `observations` row went with it.
+/// `observations` row went with it, or `None` when the session was kept.
 ///
-/// **Child first, and that is not tidiness.** The bundled SQLite is compiled
-/// with `-DSQLITE_DEFAULT_FOREIGN_KEYS=1`, so the references declared in
-/// `schema::CREATE_SQL` really are enforced on every connection whatever the
-/// pragma comment there says - `reindex` records the same fact and drops in
-/// reverse for the same reason. `paths` and `entities` hang off `turns(id)`;
-/// `turns_fts` is contentless with `rowid` IS `turns.id`; `compactions`,
-/// `observations` and `session_meta` hang off `sessions(session_key)`, and
-/// `blocks` off `sessions(session_no)`. `compactions` is deleted by
-/// `session_key` and never through the turn ids, because its rows are keyed by
-/// position in the stream and need not have a turn behind them (D-20).
+/// **It asks about the transcript again first (#43).** [`super::evaluate`] named
+/// this session when its transcript was gone, and a transcript can come back
+/// between that and now. So the stored `session_meta.transcript_path` is read
+/// again, in the same transaction as the delete it guards, and a session whose
+/// transcript is back is left untouched and counted on [`Applied::kept`]. The
+/// stored path, never the key: after a moved `.claude` directory the key names a
+/// path that is gone. The check is per session, not once at the top of
+/// [`apply`], so a transcript that comes back partway through a batch is still
+/// caught. It narrows the window between selection and delete without closing
+/// it, because the ingest lock guards the store and not the transcript tree.
+///
+/// **Child first, and that is not tidiness.** The derived tables and their
+/// order are `reindex::clear_derived`'s, which this calls first. The bundled
+/// SQLite is compiled with `-DSQLITE_DEFAULT_FOREIGN_KEYS=1`, so the references
+/// declared in `schema::CREATE_SQL` really are enforced on every connection
+/// whatever the pragma comment there says. What is retention's own:
+/// `observations` and `session_meta` hang off `sessions(session_key)` and
+/// `blocks` off `sessions(session_no)`, so they go after the derived rows and
+/// before `sessions`.
 ///
 /// **`decisions` and `labels` are deliberately untouched.** `decisions` is
 /// keyed on `session_id` with no declared reference and `labels.turn_id`
-/// carries no foreign key on purpose (phase 6 D-03), and FEED-03's replay
-/// history has to survive a deletion - it is the record of what injection
-/// decided, which the archive never contained and no reingest can rebuild.
+/// carries no foreign key on purpose, and the replay history has to survive a
+/// deletion - it is the record of what injection decided, which the archive
+/// never contained and no reingest can rebuild.
 ///
 /// The watermark goes last, keyed on the session key: `watermarks` is keyed on
 /// the transcript path, and the session key IS that path (`recover::recover`
 /// joins them on exactly that equality). Leaving it would let a row claim bytes
 /// for a session that is gone - and `recover`'s orphan sweep would delete it on
 /// the next pass and report a repair for damage retention caused.
-fn delete_one(conn: &mut Connection, session_key: &str) -> Result<bool> {
+fn delete_one(conn: &mut Connection, session_key: &str) -> Result<Option<bool>> {
     let tx = conn.transaction()?;
+    let transcript_path: String = tx.query_row(
+        "SELECT transcript_path FROM session_meta WHERE session_key = ?1",
+        [session_key],
+        |r| r.get(0),
+    )?;
+    if !super::transcript_is_gone(&transcript_path) {
+        return Ok(None);
+    }
     let observations = delete_session(&tx, session_key)?;
     tx.commit()?;
-    Ok(observations > 0)
+    Ok(Some(observations > 0))
 }
 
-/// Delete one session and every row keyed on it, in [`delete_one`]'s order,
-/// inside the caller's transaction. Answers how many `observations` rows went.
-///
-/// Shared with recovery, which deletes a twin it merged into an older session
-/// (phase 4 D-11), so the order has one definition.
+/// Delete one session and every row keyed on it, inside the caller's
+/// transaction: the derived rows through `reindex::clear_derived`, then the
+/// rows retention owns, child first. Answers how many `observations` rows went.
 pub(crate) fn delete_session(tx: &Connection, session_key: &str) -> Result<usize> {
-    const TURN_IDS: &str = "SELECT id FROM turns WHERE session_key = ?1";
-    for statement in [
-        format!("DELETE FROM paths WHERE turn_id IN ({TURN_IDS})"),
-        format!("DELETE FROM entities WHERE turn_id IN ({TURN_IDS})"),
-        "DELETE FROM compactions WHERE session_key = ?1".to_owned(),
-        format!("DELETE FROM turns_fts WHERE rowid IN ({TURN_IDS})"),
-        "DELETE FROM turns WHERE session_key = ?1".to_owned(),
-    ] {
-        tx.execute(&statement, [session_key])?;
-    }
+    crate::reindex::clear_derived(tx, session_key)?;
     let observations = tx.execute(
         "DELETE FROM observations WHERE session_key = ?1",
         [session_key],

@@ -1,12 +1,12 @@
-//! `terminus compact`: reclaim the space retention already freed (RET-04).
+//! `terminus compact`: reclaim the space retention already freed.
 //!
 //! **It deletes nothing and has no opinion about what should be kept.** Deleting
-//! a session is retention's job and retention's only, inside the ingest pass
-//! (D-10); this command reclaims the pages a delete left behind. That split is
+//! a session is retention's job and retention's only, inside the ingest pass;
+//! this command reclaims the pages a delete left behind. That split is
 //! why `compact` takes no age, no project and no policy: there is nothing here
 //! to configure, because there is no choice here to make.
 //!
-//! **`VACUUM` and then `PRAGMA wal_checkpoint(TRUNCATE)`, always both (D-08).**
+//! **`VACUUM` and then `PRAGMA wal_checkpoint(TRUNCATE)`, always both.**
 //! `VACUUM` rebuilds the database file without its free pages - and on a WAL
 //! store it writes the whole rebuilt file THROUGH the WAL, so the pages it just
 //! reclaimed reappear in `terminus.db-wal`. Measured 2026-08-22 on a synthetic
@@ -27,7 +27,7 @@
 //! that did not happen is an operational failure rather than an empty answer.
 
 use terminus_core::ingest::{lock, Attempt};
-use terminus_core::store::{Store, DB_FILE_NAME};
+use terminus_core::store::Store;
 
 use super::json::Document;
 use super::{footprint, human, read, Failure, Footprint};
@@ -42,16 +42,12 @@ pub fn run(json: bool) -> Result<(), Failure> {
     // it locks in. A machine that has never ingested must not acquire a data
     // directory by being asked to compact one, and "there is nothing to
     // reclaim" is a true answer to the question rather than a failure of it.
-    if !data_dir.join(DB_FILE_NAME).exists() {
+    if !super::has_store(&data_dir)? {
         let reason = format!(
             "no terminus store at {}; there is nothing to reclaim",
             data_dir.display()
         );
-        return read::empty(
-            document(Footprint::default(), Footprint::default()),
-            &reason,
-            json,
-        );
+        return read::empty(empty(), &reason, json);
     }
 
     let _guard = match lock::try_acquire(&data_dir)? {
@@ -128,6 +124,13 @@ pub fn run(json: bool) -> Result<(), Failure> {
         human(reclaimed(before, after).max(0) as u64)
     );
     Ok(())
+}
+
+/// The document for a store that was never measured: both footprints at zero.
+/// The no-store answer, and what `main` writes when the command fails before it
+/// has measured anything.
+pub(crate) fn empty() -> Document {
+    document(Footprint::default(), Footprint::default())
 }
 
 /// The envelope for this command.

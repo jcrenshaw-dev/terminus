@@ -1,9 +1,9 @@
-//! AC4 / STOR-04: the derived tables come back from the blobs alone.
+//! The derived tables come back from the blobs alone.
 //!
 //! The comparison is byte-identical JSON for a fixed query set, and it carries
 //! turn ids rather than counts: a rebuild that renumbered turns would return
 //! the same number of hits pointing at different records, which is precisely
-//! what D-10's deterministic `turns.id` exists to prevent.
+//! what the deterministic `turns.id` exists to prevent.
 //!
 //! `terminus reindex` invoked as a *command* is asserted in
 //! `crates/terminus/tests/cli.rs`; this crate cannot spawn the binary.
@@ -16,15 +16,11 @@ use rusqlite::Connection;
 use terminus_core::store::{
     schema, Store, DB_FILE_NAME, DERIVED_SCHEMA, META_ARCHIVE_FORMAT, META_DERIVED_SCHEMA,
 };
-use terminus_core::{ingest, reindex, testkit, verify};
+use terminus_core::{ingest, reindex, testkit};
 
 struct Bench {
     _dir: tempfile::TempDir,
     data_dir: PathBuf,
-    /// Where the transcripts were copied to. Removable, which is how a test
-    /// makes "the rebuild read no transcript" a fact about the filesystem
-    /// rather than an inference about the code.
-    work: PathBuf,
 }
 
 /// A store with every transcript fixture ingested.
@@ -45,7 +41,6 @@ fn bench() -> Bench {
     Bench {
         _dir: dir,
         data_dir,
-        work,
     }
 }
 
@@ -58,7 +53,7 @@ impl Bench {
         Store::open(&self.data_dir).unwrap()
     }
 
-    /// Drop every derived table outright, as AC4 specifies.
+    /// Drop every derived table outright.
     ///
     /// Children first, so in reverse: `DERIVED_TABLES` is in creation order and
     /// the bundled SQLite enforces foreign keys, so dropping `turns` while
@@ -79,8 +74,8 @@ fn count(conn: &Connection, table: &str) -> i64 {
         .unwrap()
 }
 
-/// AC4. Drop `turns`, `turns_fts`, `entities` and `paths`, rebuild, and the
-/// fixed query set's JSON is byte-identical.
+/// Drop `turns`, `turns_fts`, `entities` and `paths`, rebuild, and the fixed
+/// query set's JSON is byte-identical.
 #[test]
 fn the_fixed_query_set_is_byte_identical_across_a_rebuild() {
     let bench = bench();
@@ -92,9 +87,9 @@ fn the_fixed_query_set_is_byte_identical_across_a_rebuild() {
     let hits: usize = before.matches(", ").count();
     assert!(hits > 10, "the query set returns too little to compare");
 
-    // And the same premise for the sections phase 3 added. Two empty sections
+    // And the same premise for the entity and path sections. Two empty sections
     // compare byte-identically across a rebuild that extracted nothing at all,
-    // which is exactly the extractor failure AC3 is meant to catch.
+    // which is exactly the extractor failure this comparison is meant to catch.
     let section = |name: &str| {
         let body = before
             .split_once(&format!("\"{name}\": [\n"))
@@ -122,7 +117,7 @@ fn the_fixed_query_set_is_byte_identical_across_a_rebuild() {
 
     assert_eq!(rebuilt.sessions, testkit::TRANSCRIPT_FIXTURES.len());
     assert!(rebuilt.turns > 0);
-    assert_eq!(testkit::query_set_json(&bench.conn()), before, "AC4");
+    assert_eq!(testkit::query_set_json(&bench.conn()), before, "the rebuild changed the query set");
     assert_eq!(
         testkit::archive_digest(&bench.conn()),
         archive_before,
@@ -131,7 +126,7 @@ fn the_fixed_query_set_is_byte_identical_across_a_rebuild() {
 }
 
 /// A rebuild over an intact index changes nothing either: the seam is
-/// idempotent, so `reindex` is safe to run whenever (D-10).
+/// idempotent, so `reindex` is safe to run whenever.
 #[test]
 fn rebuilding_an_intact_index_changes_nothing() {
     let bench = bench();
@@ -142,8 +137,8 @@ fn rebuilding_an_intact_index_changes_nothing() {
     assert_eq!(testkit::query_set_json(&bench.conn()), before);
 }
 
-/// STOR-04's actual claim: the blobs are the only input. If the derived tables
-/// were consulted, dropping them would change what comes back.
+/// What a rebuild actually claims: the blobs are the only input. If the derived
+/// tables were consulted, dropping them would change what comes back.
 #[test]
 fn the_rebuild_reads_nothing_but_the_blobs() {
     let bench = bench();
@@ -171,9 +166,8 @@ fn the_rebuild_reads_nothing_but_the_blobs() {
     }
 
     // The invented rows are counted BEFORE the rebuild, so "they are gone" is a
-    // claim about these rows and not about the table being empty - which it no
-    // longer is, since phase 3 fills `paths` from the blobs like everything
-    // else.
+    // claim about these rows and not about the table being empty - which it is
+    // not, since the rebuild fills `paths` from the blobs like everything else.
     let invented: i64 = bench
         .conn()
         .query_row(
@@ -207,7 +201,7 @@ fn the_rebuild_reads_nothing_but_the_blobs() {
     );
 }
 
-/// STOR-05's older-format branch, in the caller rather than in `Store::open`:
+/// The older-schema branch, in the caller rather than in `Store::open`:
 /// opening a store older than this build rebuilds its derived tables, leaves
 /// the archive alone and brings `meta` forward.
 ///
@@ -307,7 +301,7 @@ fn an_ingest_brings_an_older_store_forward_first() {
 /// to date whose rebuild rolled back is the state this must not produce.
 ///
 /// Only `derived_schema` is lowered: an older `archive_format` is refused by the
-/// open itself (STOR-10) and never reaches a rebuild.
+/// open itself and never reaches a rebuild.
 #[test]
 fn the_version_integers_move_with_the_rebuild() {
     let bench = bench();
@@ -336,8 +330,8 @@ fn the_version_integers_move_with_the_rebuild() {
 /// A `?` on the decompression aborted the whole rebuild on the first bad blob
 /// and named no session. Worse, `open_up_to_date` runs on the ingest path, so
 /// once `DERIVED_SCHEMA` was bumped a single corrupt session stopped every
-/// future ingest of every other transcript, with no repair path in phase 1.
-/// `DESIGN-BRIEF.md:98`: "this session is damaged", never "the store is gone".
+/// future ingest of every other transcript, with no repair path.
+/// One damaged session is "this session is damaged", never "the store is gone".
 #[test]
 fn a_corrupt_blob_is_skipped_and_named_rather_than_stopping_the_rebuild() {
     let bench = bench();
@@ -397,8 +391,8 @@ fn a_corrupt_blob_is_skipped_and_named_rather_than_stopping_the_rebuild() {
     );
 }
 
-/// D-02, as the failure it prevents: a `reindex` must leave every observation
-/// row exactly where it was.
+/// `observations` is an archival table: a `reindex` must leave every
+/// observation row exactly where it was.
 ///
 /// The facts in these rows come off the session's block rows, and retention
 /// eviction deletes those rows, so a `reindex` that dropped the table would silently lose
@@ -454,7 +448,7 @@ fn a_reindex_leaves_every_observation_row_untouched() {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 8 D-03: the one case where the blob cannot answer.
+// The one case where the blob cannot answer.
 //
 // An evicted session has no blob and its `turns_fts` row cannot be
 // reconstructed by any other means - the table is `content=''`, so the
@@ -693,277 +687,4 @@ fn rebuilding_twice_with_an_evicted_session_changes_nothing() {
 
     assert_eq!(twice.preserved, 1);
     assert_eq!(testkit::query_set_json(&bench.conn()), after_one);
-}
-
-/// Does this table carry this column?
-fn has_column(conn: &Connection, table: &str, column: &str) -> bool {
-    conn.prepare(&format!("PRAGMA table_info({table})"))
-        .unwrap()
-        .query_map([], |r| r.get::<_, String>(1))
-        .unwrap()
-        .map(Result::unwrap)
-        .any(|name| name == column)
-}
-
-fn count_where(conn: &Connection, predicate: &str) -> i64 {
-    conn.query_row(
-        &format!("SELECT count(*) FROM turns WHERE {predicate}"),
-        [],
-        |r| r.get(0),
-    )
-    .unwrap()
-}
-
-/// AC5, end to end: a store the PREVIOUS build wrote - no `turns.is_typed`, an
-/// older `derived_schema` - opens, acquires the column, is filled from the
-/// blobs with no transcript on disk to read, and then keeps working.
-///
-/// The evicted session is what makes this more than a schema test. Its rows
-/// send `reindex` down the preserving path, which skips the DROP loop and runs
-/// only `CREATE TABLE IF NOT EXISTS` - a no-op on a table that already exists -
-/// so nothing there would create the column and `derive_turn`'s explicit INSERT
-/// list would fail with `no such column` on the rebuild itself and on every
-/// pass afterwards, permanently, since `open_up_to_date` runs at the top of
-/// each one. The `turns` entry in `BRING_FORWARD_COLUMNS` is the only thing
-/// standing between this store and that; delete it and this test fails with
-/// exactly that message.
-#[test]
-fn a_previous_builds_store_gains_is_typed_and_is_filled_from_the_blobs() {
-    let bench = bench();
-    let evicted = bench.key_ending("session-basic.jsonl");
-    bench.evict(&evicted);
-
-    // The premise for the untouched claim below: there is something to lose.
-    let rows_before = derived_rows(&bench.conn(), &evicted);
-    let ids_before = turn_ids(&bench.conn(), &evicted);
-    // `turns` and its FTS row, which is what this test is about; the
-    // all-four-tables claim is
-    // `a_reindex_carries_an_evicted_session_across_rather_than_losing_its_index`'s,
-    // and it picks a different fixture for it because `session-basic.jsonl`
-    // produces no `paths` row.
-    for table in ["turns", "turns_fts"] {
-        let count = rows_before
-            .iter()
-            .find(|(name, _)| *name == table)
-            .map(|(_, count)| *count)
-            .unwrap_or_else(|| panic!("no {table} count"));
-        assert!(count > 0, "{table} has nothing to preserve");
-    }
-    let evicted_users = count_where(
-        &bench.conn(),
-        &format!("record_type = 'user' AND session_key = '{evicted}'"),
-    );
-    assert!(
-        evicted_users > 0,
-        "the evicted session must hold a user turn for its nulls to mean anything"
-    );
-
-    // Age it to what the previous build wrote.
-    {
-        let conn = bench.conn();
-        conn.execute_batch("ALTER TABLE turns DROP COLUMN is_typed")
-            .unwrap();
-        conn.execute(
-            "UPDATE meta SET value = ?1 WHERE key = ?2",
-            rusqlite::params![(DERIVED_SCHEMA - 1).to_string(), META_DERIVED_SCHEMA],
-        )
-        .unwrap();
-        assert!(
-            !has_column(&conn, "turns", "is_typed"),
-            "the premise: the column has to be gone"
-        );
-    }
-
-    // AC5's "with no transcript read", as a fact about the filesystem: every
-    // file the store was built from is deleted, so anything that comes back
-    // came out of `sessions.blob`.
-    std::fs::remove_dir_all(&bench.work).unwrap();
-
-    let store = reindex::open_up_to_date(&bench.data_dir)
-        .expect("a store written by the previous build still opens for work");
-    assert_eq!(
-        store.meta_int(META_DERIVED_SCHEMA).unwrap(),
-        Some(DERIVED_SCHEMA),
-        "the store was not stamped forward"
-    );
-    drop(store);
-
-    let conn = bench.conn();
-    assert!(
-        has_column(&conn, "turns", "is_typed"),
-        "the column is missing"
-    );
-
-    // Every rebuilt session's user rows are classified, and nothing else is.
-    assert_eq!(
-        count_where(
-            &conn,
-            &format!("record_type = 'user' AND session_key <> '{evicted}' AND is_typed IS NULL"),
-        ),
-        0,
-        "a rebuilt user turn carries no classification"
-    );
-    assert!(
-        count_where(
-            &conn,
-            &format!("record_type = 'user' AND session_key <> '{evicted}'"),
-        ) > 0,
-        "the rebuild classified nothing, so the count above is empty"
-    );
-    assert_eq!(
-        count_where(&conn, "record_type <> 'user' AND is_typed IS NOT NULL"),
-        0
-    );
-
-    // The evicted session: rows carried across untouched, and null is what its
-    // classification stays, because nothing re-derived it (D-04).
-    assert_eq!(derived_rows(&conn, &evicted), rows_before);
-    assert_eq!(turn_ids(&conn, &evicted), ids_before);
-    assert_eq!(
-        count_where(
-            &conn,
-            &format!("session_key = '{evicted}' AND is_typed IS NOT NULL")
-        ),
-        0,
-        "a preserved evicted row was given a classification nothing derived"
-    );
-    drop(conn);
-
-    // And the store still ingests: this is where `no such column` would land
-    // if the column had not reached `turns`.
-    let more = bench.data_dir.parent().unwrap().join("more");
-    std::fs::create_dir_all(&more).unwrap();
-    let path = testkit::copy_fixture_into("session-recall.jsonl", &more);
-    match ingest::run(&bench.data_dir, &path).unwrap() {
-        ingest::Outcome::Committed(_) => {}
-        other => panic!("a further ingest must commit: {other:?}"),
-    }
-    assert_eq!(
-        count_where(
-            &bench.conn(),
-            &format!("record_type = 'user' AND session_key <> '{evicted}' AND is_typed IS NULL"),
-        ),
-        0,
-        "the newly ingested session left a user turn unclassified"
-    );
-    // The evicted session is the exception and stays one: its rows were never
-    // re-derived, so they are still the only NULLs in the table (D-04).
-    assert_eq!(
-        count_where(&bench.conn(), "record_type = 'user' AND is_typed IS NULL"),
-        evicted_users
-    );
-
-    // A regression guard rather than new work: `verify` reads `sessions` and
-    // `session_meta` and never touches `turns` (D-09), so it must be as clean
-    // over this store as over any other.
-    let store = bench.store();
-    let report = verify::verify(&store).unwrap();
-    assert!(report.is_ok(), "{}", report.render());
-    assert!(report.checked > 0);
-}
-
-// ---------------------------------------------------------------------------
-// D-22: a store at derived schema 4 keeps its boundary rows in the old
-// `compaction_boundaries` table, keyed by turn id.
-// ---------------------------------------------------------------------------
-
-/// Put a store into the shape a version-4 build left: the boundary rows in
-/// `compaction_boundaries` under its old DDL, no `compactions` table, and
-/// `derived_schema` 4.
-fn into_version_4(conn: &Connection) {
-    conn.execute_batch(
-        "CREATE TABLE compaction_boundaries (
-             turn_id  INTEGER PRIMARY KEY REFERENCES turns(id),
-             metadata BLOB
-         );
-         INSERT INTO compaction_boundaries (turn_id, metadata)
-             SELECT t.id, c.metadata FROM compactions c
-               JOIN turns t
-                 ON t.session_key = c.session_key AND t.stream_offset = c.stream_offset;
-         DROP TABLE compactions;",
-    )
-    .unwrap();
-    conn.execute(
-        "UPDATE meta SET value = '4' WHERE key = ?1",
-        [META_DERIVED_SCHEMA],
-    )
-    .unwrap();
-}
-
-fn has_table(conn: &Connection, name: &str) -> bool {
-    conn.query_row(
-        "SELECT count(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = ?1",
-        [name],
-        |r| r.get(0),
-    )
-    .unwrap()
-}
-
-/// Every boundary row, as `(session_key, stream_offset, metadata)`.
-fn boundary_rows(conn: &Connection) -> Vec<(String, i64, Vec<u8>)> {
-    conn.prepare(
-        "SELECT session_key, stream_offset, metadata FROM compactions
-          ORDER BY session_key, stream_offset",
-    )
-    .unwrap()
-    .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-    .unwrap()
-    .map(Result::unwrap)
-    .collect()
-}
-
-/// Sets up the version-4 shape and checks it took, answering the boundary
-/// rows the store held before.
-fn version_4_bench(evict: Option<&str>) -> (Bench, Vec<(String, i64, Vec<u8>)>) {
-    let bench = bench();
-    let before = boundary_rows(&bench.conn());
-    assert!(
-        !before.is_empty(),
-        "the compacted fixture must archive a boundary"
-    );
-    if let Some(suffix) = evict {
-        bench.evict(&bench.key_ending(suffix));
-    }
-    into_version_4(&bench.conn());
-    let conn = bench.conn();
-    assert!(has_table(&conn, "compaction_boundaries"));
-    assert!(!has_table(&conn, "compactions"));
-    (bench, before)
-}
-
-/// D-22 on the drop-and-recreate path: the old table is gone and the new one
-/// holds the same rows at the same offsets with the same metadata.
-#[test]
-fn a_version_4_store_moves_its_boundary_rows_to_compactions() {
-    let (bench, before) = version_4_bench(None);
-
-    let store = reindex::open_up_to_date(&bench.data_dir).unwrap();
-    assert_eq!(store.meta_int(META_DERIVED_SCHEMA).unwrap(), Some(5));
-    drop(store);
-
-    let conn = bench.conn();
-    assert!(!has_table(&conn, "compaction_boundaries"));
-    assert_eq!(boundary_rows(&conn), before);
-}
-
-/// D-22 on the preserving path. The evicted session's blob is empty, so its
-/// boundary row can only come from the old table, and it is carried across.
-#[test]
-fn a_version_4_store_carries_an_evicted_sessions_boundary_rows_across() {
-    let (bench, before) = version_4_bench(Some("session-compacted.jsonl"));
-
-    let store = reindex::open_up_to_date(&bench.data_dir).unwrap();
-    assert_eq!(store.meta_int(META_DERIVED_SCHEMA).unwrap(), Some(5));
-    drop(store);
-
-    let conn = bench.conn();
-    assert!(!has_table(&conn, "compaction_boundaries"));
-    assert_eq!(boundary_rows(&conn), before);
-    drop(conn);
-
-    // Still evicted and still preserved, and its row survives a rebuild that
-    // has no old table to copy from.
-    let rebuilt = reindex::reindex(&mut bench.store()).unwrap();
-    assert_eq!(rebuilt.preserved, 1);
-    assert_eq!(boundary_rows(&bench.conn()), before);
 }

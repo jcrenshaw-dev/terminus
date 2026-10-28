@@ -1,5 +1,4 @@
-//! `terminus uninstall`: take out what install put in, and nothing else
-//! (INST-07).
+//! `terminus uninstall`: take out what install put in, and nothing else.
 //!
 //! Install adds four hook entries to `settings.json`, a version file in the
 //! versions folder, and a link to it at the stable path. Uninstall removes the
@@ -37,13 +36,12 @@
 //! lock first so it never pulls the store out from under a running pass. It
 //! never deletes the versions folder.
 //!
-//! Human-only, no `--json` (D-24).
+//! Human-only, no `--json`.
 
 use std::cell::Cell;
 use std::path::Path;
 
 use terminus_core::ingest::lock;
-use terminus_core::store::DB_FILE_NAME;
 
 use super::install::json_file::{self, Document, Json};
 use super::install::{self, binary, claude, targets};
@@ -65,7 +63,7 @@ pub fn parse(parser: &mut lexopt::Parser) -> Result<Options, Failure> {
         match arg {
             Short('y') | Long("yes") => options.yes = true,
             Long("purge") => options.purge = true,
-            // Including `--json`, deliberately (D-24).
+            // Including `--json`, deliberately.
             other => return Err(Failure::Misuse(crate::unexpected(other))),
         }
     }
@@ -132,7 +130,7 @@ fn clean(path: &Path, stable: &Path) -> bool {
     let document = match Document::read(path) {
         Ok(document) => document,
         Err(failure) => {
-            outln!("    left alone: {}", detail(failure));
+            outln!("    left alone: {}", failure.text());
             return false;
         }
     };
@@ -155,7 +153,7 @@ fn clean(path: &Path, stable: &Path) -> bool {
     let before = backup.as_ref().map(Document::value);
     let edit = |root: &mut Json| strip_hooks(root, &stable, before, &removed);
     if let Err(failure) = document.apply(&edit) {
-        outln!("    left alone: {}", detail(failure));
+        outln!("    left alone: {}", failure.text());
         return false;
     }
     let Some(count) = std::num::NonZeroUsize::new(removed.get()) else {
@@ -180,7 +178,7 @@ fn clean(path: &Path, stable: &Path) -> bool {
     restore(path, backup_path.as_deref(), backup)
 }
 
-/// Put install's backup back when nothing else has changed since (AC7).
+/// Put install's backup back when nothing else has changed since.
 ///
 /// The comparison is of *values*: both sides are re-rendered and the strings
 /// compared, so a file that differs from the backup only in the formatting this
@@ -193,14 +191,14 @@ fn restore(path: &Path, backup_path: Option<&Path>, backup: Option<Document>) ->
         return true;
     };
     // Fresh, because the removal above just wrote it - and because Claude Code
-    // may have written it since (D-06).
+    // may have written it since.
     let current = match Document::read(path) {
         Ok(current) => current,
         Err(failure) => {
             outln!(
                 "    backup kept at {}: {}",
                 backup_path.display(),
-                detail(failure)
+                failure.text()
             );
             return false;
         }
@@ -217,7 +215,7 @@ fn restore(path: &Path, backup_path: Option<&Path>, backup: Option<Document>) ->
         outln!(
             "    backup kept at {}: {}",
             backup_path.display(),
-            detail(failure)
+            failure.text()
         );
         return false;
     }
@@ -305,20 +303,19 @@ fn empty(value: &Json) -> bool {
     }
 }
 
-/// Remove the MCP registration with `claude mcp remove`, when there is one
-/// (D-13).
+/// Remove the MCP registration with `claude mcp remove`, when there is one.
 ///
 /// Always `--scope user`: without it the remove fails when a local entry of the
 /// same name exists too. With no entry, no `claude` runs. An old
 /// `.claude.json.terminus-backup` is reported, even when the file does not
-/// parse, and never restored or deleted (D-15).
+/// parse, and never restored or deleted.
 fn unregister(path: &Path) -> bool {
     const REMOVE: [&str; 5] = ["mcp", "remove", "--scope", "user", targets::MCP_SERVER_KEY];
 
     outln!("  {}", path.display());
     let ok = match Document::read(path) {
         Err(failure) => {
-            outln!("    left alone: {}", detail(failure));
+            outln!("    left alone: {}", failure.text());
             false
         }
         Ok(document) => {
@@ -359,7 +356,7 @@ fn unregister(path: &Path) -> bool {
     ok
 }
 
-/// Remove the link at the stable path, and only if it is terminus's (D-07).
+/// Remove the link at the stable path, and only if it is terminus's.
 ///
 /// `remove_file` takes the link and not the file it names. A marked plain file
 /// an older install left there goes the same way.
@@ -382,7 +379,7 @@ fn unplace(stable: &Path, versions: &Path) -> bool {
             true
         }
         Err(failure) => {
-            outln!("    left alone: {}", detail(failure));
+            outln!("    left alone: {}", failure.text());
             false
         }
     }
@@ -440,7 +437,7 @@ fn unplace_dangling(stable: &Path, versions: &Path) -> bool {
 /// it, because the answer is the last moment either of them can change
 /// anything.
 fn purge(data_dir: &Path, yes: bool) -> Result<(), Failure> {
-    if !data_dir.join(DB_FILE_NAME).exists() {
+    if !super::has_store(data_dir)? {
         // Either nothing was ever ingested here or this is not a data
         // directory. Either way there is no store to delete, and
         // `remove_dir_all` on a directory terminus cannot recognize is not a
@@ -448,10 +445,14 @@ fn purge(data_dir: &Path, yes: bool) -> Result<(), Failure> {
         outln!("  no store at that path, so there is nothing to purge");
         return Ok(());
     }
-    let bytes = size_bytes(data_dir);
+    // Every file under the directory, because `remove_dir_all` below deletes
+    // every file under it: the snapshots, the injection state and `LOCK` as
+    // well as the store (#95). Measured once, with nothing open, so the number
+    // shown and the number reported after the delete are the same.
+    let bytes = super::directory_bytes(data_dir);
     outln!("  --purge deletes the archive itself. this cannot be undone.");
     outln!("    {}", data_dir.display());
-    outln!("    {bytes} byte(s) ({})", human(bytes));
+    outln!("    {bytes} byte(s) ({})", super::human(bytes));
     outln!();
 
     match answered(data_dir, yes) {
@@ -494,7 +495,7 @@ fn purge(data_dir: &Path, yes: bool) -> Result<(), Failure> {
 /// leave, which is not what anyone typing it asked for.
 ///
 /// The rest is [`install::confirm`]: the same reading of y/n, and a refusal
-/// rather than an assumed answer when there is nothing to read (INST-08, D-20).
+/// rather than an assumed answer when there is nothing to read.
 fn answered(data_dir: &Path, yes: bool) -> Result<bool, Failure> {
     const QUESTION: &str = "  delete it?";
 
@@ -509,50 +510,4 @@ fn answered(data_dir: &Path, yes: bool) -> Result<bool, Failure> {
             data_dir.display()
         ))
     })
-}
-
-/// The store's footprint on disk: the database and its two sidecars.
-///
-/// The same three files and the same rule as `cmd::status`'s `size_bytes`, and
-/// deliberately so. `status` measures while its own connection is open, and
-/// this opens nothing. `status`'s read-only open leaves the 32 KiB `-shm` and
-/// an empty `-wal` on disk when it exits, so after a `status` run this counts
-/// them too, while a writable open that closes cleanly removes both.
-///
-/// What `--purge` shows is therefore what is on disk at that moment, which is
-/// the number that is about to go.
-fn size_bytes(data_dir: &Path) -> u64 {
-    let mut total = 0u64;
-    for name in [
-        DB_FILE_NAME.to_owned(),
-        format!("{DB_FILE_NAME}-wal"),
-        format!("{DB_FILE_NAME}-shm"),
-    ] {
-        if let Ok(meta) = std::fs::metadata(data_dir.join(name)) {
-            total += meta.len();
-        }
-    }
-    total
-}
-
-fn human(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit + 1 < UNITS.len() {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{bytes} {}", UNITS[0])
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
-    }
-}
-
-fn detail(failure: Failure) -> String {
-    match failure {
-        Failure::Operational(message) | Failure::Misuse(message) => message,
-        Failure::Silent => "it could not be read".to_owned(),
-    }
 }

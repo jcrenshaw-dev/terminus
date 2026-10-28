@@ -1,10 +1,10 @@
-//! `terminus usage`: where the bytes went (RET-05).
+//! `terminus usage`: where the bytes went.
 //!
-//! **Two independent tables, and they are never mixed (D-09).**
+//! **Two independent tables, and they are never mixed.**
 //!
 //! The ARCHIVE table is each session's block byte lengths summed, by project
 //! and, separately, by month. Its totals reconcile to `sum(length(bytes))` over
-//! the `blocks` table (phase 7 D-17) and to nothing else - never to the size of
+//! the `blocks` table and to nothing else - never to the size of
 //! the file on disk, which on the live store measured 2026-08-22 is
 //! 1,103,396,864 bytes against 465,985,120 bytes of archive, 2.4x everything
 //! the projects account for. The rest is the derived tables, and attributing
@@ -25,7 +25,7 @@
 //! It opens through [`super::read`] because it is a read: a question about how
 //! big the store is must not create one, and every per-project number goes
 //! through `config::visible` for the same reason every other read does -
-//! exclusion is retroactive (ING-08), so a project excluded after its sessions
+//! exclusion is retroactive, so a project excluded after its sessions
 //! were archived must not appear in a report of what is stored.
 
 use std::collections::BTreeMap;
@@ -44,7 +44,7 @@ const COMMAND: &str = "usage";
 pub fn run(json: bool) -> Result<(), Failure> {
     let reader = match read::open()? {
         Opened::Ready(reader) => reader,
-        Opened::Nothing(reason) => return read::empty(document(&Usage::default()), &reason, json),
+        Opened::Nothing(reason) => return read::empty(empty(), &reason, json),
     };
     let usage = measure(&reader).map_err(op)?;
 
@@ -239,6 +239,12 @@ fn ordered(buckets: BTreeMap<Option<String>, Bucket>) -> Vec<Bucket> {
             .then(a.key.cmp(&b.key))
     });
     out
+}
+
+/// The document for a store with nothing in it. The no-store answer, and what
+/// `main` writes when the command fails.
+pub(crate) fn empty() -> Document {
+    document(&Usage::default())
 }
 
 fn document(usage: &Usage) -> Document {

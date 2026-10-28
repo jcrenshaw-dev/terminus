@@ -1,48 +1,46 @@
-//! Walking every session's block rows and the checksum recorded for it
-//! (STOR-03).
+//! Walking every session's block rows and the checksum recorded for it.
 //!
-//! D-06 fixes what is compared: hashes over the **uncompressed** bytes, so
-//! neither a codec-level bug nor a format bump invalidates a stored hash and
-//! `verify` can still tell corruption from a decoder change. Since phase 7
-//! (D-16) each session gets three checks, and every one that fails is
-//! reported: the rows are numbered 0 to the count `uncompressed_len` and the
-//! block size give, with no gap; each block decodes to its length and its
-//! stored hash; and `session_meta.checksum` is BLAKE3 over the stored hashes in
-//! `block_no` order (D-04). The first two name the block. The checksum names
-//! none, because it covers every hash at once.
+//! What is compared is hashes over the **uncompressed** bytes, so neither a
+//! codec-level bug nor a format bump invalidates a stored hash and `verify` can
+//! still tell corruption from a decoder change. Each session gets three checks,
+//! and every one that fails is reported: the rows are numbered 0 to the count
+//! `uncompressed_len` and the block size give, with no gap; each block decodes
+//! to its length and its stored hash; and `session_meta.checksum` is BLAKE3
+//! over the stored hashes in `block_no` order. The first two name the block.
+//! The checksum names none, because it covers every hash at once.
 //!
-//! D-16 fixes what is *not* compared: `PRAGMA integrity_check` belongs to
-//! `doctor` (INST-06, phase 4). A page-level complaint carries no session
-//! attribution, so it would ride alongside the named session and break AC3's
-//! "and no other" on a store that is otherwise fine.
+//! What is *not* compared is SQLite's own pages: `PRAGMA integrity_check`
+//! belongs to `doctor`. A page-level complaint carries no session attribution,
+//! so it would ride alongside the named session and break the report's "this
+//! session and no other" on a store that is otherwise fine.
 //!
-//! Phase 2 adds one further failure, and it passes the same test: D-13's
-//! divergence, raised when the transcript on disk turned out shorter than the
-//! bytes the archive holds. It is read off `session_meta.transcript_diverged`,
-//! which the pass sets against exactly one session, so it is attributed by
-//! `session_key` like every other failure here and names no other. It is a
-//! statement about the *file*, not about the archive - the archive is intact,
-//! and saying so is most of the message.
+//! One further failure passes the same test: the divergence raised when the
+//! transcript on disk turned out shorter than the bytes the archive holds. It
+//! is read off `session_meta.transcript_diverged`, which the pass sets against
+//! exactly one session, so it is attributed by `session_key` like every other
+//! failure here and names no other. It is a statement about the *file*, not
+//! about the archive - the archive is intact, and saying so is most of the
+//! message.
 //!
-//! Phase 8 adds one *silence*, on the same terms: a session
-//! `session_meta.is_evicted` marks (RET-02, D-03) has had its block rows
-//! deleted on purpose, so there is nothing to decompress and nothing to hash. It
-//! is counted and never checked block by block. Eviction does promise that no
-//! block rows are left, and that is checked: an evicted session that still has
-//! rows is one failure for the whole session, saying how many remain, and one
-//! with none is never named. The divergence check stays independent of it,
-//! exactly as it is independent of the checksum verdict - "the file on disk is
-//! shorter than what was archived" is a statement about the FILE, and an
-//! evicted session's file can still be wrong about it.
+//! One *silence* holds on the same terms: a session `session_meta.is_evicted`
+//! marks has had its block rows deleted on purpose, so there is nothing to
+//! decompress and nothing to hash. It is counted and never checked block by
+//! block. Eviction does promise that no block rows are left, and that is
+//! checked: an evicted session that still has rows is one failure for the whole
+//! session, saying how many remain, and one with none is never named. The
+//! divergence check stays independent of it, exactly as it is independent of
+//! the checksum verdict - "the file on disk is shorter than what was archived"
+//! is a statement about the FILE, and an evicted session's file can still be
+//! wrong about it.
 //!
 //! # Which identifier names a failure
 //!
 //! The `session_key` - the transcript's path below its project folder - and
-//! never the record's `session_id`. D-01 is the reason: 812 real sidecar files
-//! report their *parent's* `sessionId`, so a report naming session ids cannot
-//! say which of two sessions is corrupt, and "prints no other session id" is
-//! unfalsifiable when two sessions share one. The key is the primary key of
-//! `sessions` and is unique by construction.
+//! never the record's `session_id`, because 812 real sidecar files report their
+//! *parent's* `sessionId`, so a report naming session ids cannot say which of
+//! two sessions is corrupt, and "prints no other session id" is unfalsifiable
+//! when two sessions share one. The key is the primary key of `sessions` and is
+//! unique by construction.
 
 use rusqlite::Connection;
 
@@ -98,13 +96,13 @@ impl Report {
 ///
 /// A session that fails is a failure for *that* session and never an abort: a
 /// second corrupt session must still be reported, which is the whole
-/// difference between "these two sessions are damaged" and "the store is gone"
-/// (`DESIGN-BRIEF.md:98`).
+/// difference between "these two sessions are damaged" and "the store is
+/// gone".
 pub fn verify(store: &Store) -> Result<Report> {
     walk(store.conn())
 }
 
-/// What a diverged session is told (D-13).
+/// What a diverged session is told.
 ///
 /// "The archive was left untouched" is the load-bearing half. The obvious
 /// response to `verify` naming a session is to re-run ingest, and for this
@@ -154,11 +152,11 @@ fn walk(conn: &Connection) -> Result<Report> {
     let mut report = Report::default();
     for (session_key, meta, diverged, evicted) in sessions {
         report.checked += 1;
-        // An evicted session's block rows were deleted on purpose (RET-02,
-        // phase 8 D-03), so checking it block by block would report every block
-        // as missing - the confusion the divergence arm exists to prevent,
-        // arriving from the other side. What eviction does promise is that no
-        // rows are left, so rows still there are one failure for the session.
+        // An evicted session's block rows were deleted on purpose, so checking
+        // it block by block would report every block as missing - the confusion
+        // the divergence arm exists to prevent, arriving from the other side.
+        // What eviction does promise is that no rows are left, so rows still
+        // there are one failure for the session.
         if evicted {
             let remaining: i64 = conn.query_row(
                 "SELECT count(*) FROM blocks JOIN sessions USING (session_no)
@@ -199,11 +197,11 @@ fn walk(conn: &Connection) -> Result<Report> {
     Ok(report)
 }
 
-/// Every failing check for one session, each with the block it names (D-16).
+/// Every failing check for one session, each with the block it names.
 /// The outer error is the database's and ends the walk.
 fn check(conn: &Connection, session_key: &str, meta: &Meta) -> Result<Vec<(Option<i64>, String)>> {
     let Some(expected) = meta.checksum.as_deref() else {
-        // The archive's tables are written in one transaction (STOR-02), so a
+        // The archive's tables are written in one transaction, so a
         // session with no metadata row is not a state ingest can produce.
         return Ok(vec![(
             None,
@@ -246,7 +244,7 @@ fn check(conn: &Connection, session_key: &str, meta: &Meta) -> Result<Vec<(Optio
         }
     }
 
-    // D-04: BLAKE3 over the stored hashes in `block_no` order, the definition
+    // BLAKE3 over the stored hashes in `block_no` order, the definition
     // `blob::block::checksum` writes, taken over the rows as they are.
     let mut hasher = blake3::Hasher::new();
     for row in &rows {

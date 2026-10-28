@@ -1,15 +1,15 @@
-//! `terminus stats`: whether injection helps (FEED-04).
+//! `terminus stats`: whether injection helps.
 //!
-//! A CLI data command and never an MCP tool (D-14). Every tool description sits
+//! A CLI data command and never an MCP tool. Every tool description sits
 //! in every session's context forever, and the model does not need to know how
-//! its own recall is scoring - the three recall tools are the whole surface
-//! `DESIGN-BRIEF.md:187` allows.
+//! its own recall is scoring - the three recall tools are the whole MCP
+//! surface.
 //!
 //! It reads through the shared read path, so a machine that has never ingested
 //! gets an empty answer with a reason and exit 0 rather than a store created as
-//! the side effect of a question (D-15).
+//! the side effect of a question.
 //!
-//! The numbers are characters, never tokens (D-12), and the output says so.
+//! The numbers are characters, never tokens, and the output says so.
 
 use terminus_core::feedback::stats::{self, Stats};
 
@@ -23,26 +23,19 @@ const COMMAND: &str = "stats";
 pub fn run(json: bool) -> Result<(), Failure> {
     let reader = match read::open()? {
         Opened::Ready(reader) => reader,
-        Opened::Nothing(reason) => return read::empty(document(&Stats::default()), &reason, json),
+        Opened::Nothing(reason) => return read::empty(empty(), &reason, json),
     };
 
-    // A store older than the decision log is the same answer as a machine that
-    // has never ingested, and it has to be caught here: the query below would
-    // hand `no such table: decisions` to an operational failure that never
-    // learns `--json` was asked for. Half a log is the other thing - zeroes
-    // reported as a clean answer would read as "injection has recorded
-    // nothing", which is exactly what a damaged store must not be able to say.
+    // A decision log missing either table is damage, caught here so the
+    // failure names it: the query below would fail with a raw
+    // `no such table: decisions`. Zeroes reported as a clean answer would read
+    // as "injection has recorded nothing", which a damaged store must not say.
+    // Under `--json` `main` writes the empty document with `ok: false` and this
+    // reason (#107).
     match read::decision_log(&reader) {
         read::DecisionLog::Present => {}
-        read::DecisionLog::Absent => {
-            return read::empty(document(&Stats::default()), read::NO_DECISION_LOG, json)
-        }
-        read::DecisionLog::Damaged(table) => {
-            return Err(read::unusable(
-                document(&Stats::default()),
-                read::damaged(table),
-                json,
-            ))
+        read::DecisionLog::Damaged(tables) => {
+            return Err(Failure::Operational(read::damaged(tables)))
         }
     }
 
@@ -55,8 +48,8 @@ pub fn run(json: bool) -> Result<(), Failure> {
     }
 
     outln!("decisions         {}", stats.decisions);
-    // Indented as a split of the line above. Decisions logged before the split
-    // was recorded are in neither, so the two need not add up to it.
+    // Indented as a split of the line above. A decision whose `compacted` is
+    // null is in neither, so the two need not add up to it.
     outln!("  compacted       {}", stats.compacted_decisions);
     outln!("  ordinary        {}", stats.ordinary_decisions);
     outln!("injected turns    {}", stats.injected_turns);
@@ -73,6 +66,12 @@ pub fn run(json: bool) -> Result<(), Failure> {
     outln!("chars injected    {}", stats.chars_injected);
     outln!("chars referenced  {}", stats.chars_referenced);
     Ok(())
+}
+
+/// The document with every count at zero and no precision. The no-store answer,
+/// and what `main` writes when the command fails.
+pub(crate) fn empty() -> Document {
+    document(&Stats::default())
 }
 
 /// The envelope for this command, with the numbers already in it.

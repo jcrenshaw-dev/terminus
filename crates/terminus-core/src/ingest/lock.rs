@@ -1,19 +1,18 @@
 //! Exclusivity for an ingest pass: one `LOCK` file, one immediate-fail OS lock.
 //!
-//! D-15 fixes both halves. It is a **dedicated file** in the data directory,
+//! Both halves are fixed. It is a **dedicated file** in the data directory,
 //! created by the process itself, and never `BEGIN EXCLUSIVE`: a second process
-//! blocking on SQLite's busy handler would blow the 50 ms budget ING-02 states,
-//! and a write transaction held open for a whole pass stops MCP readers, which
-//! is the reason redb was rejected (`DESIGN-BRIEF.md:83`). And the lock is an
-//! **OS** lock rather than a PID file, so it is released by process death as
-//! well as by drop - no stale-lock wedging, no orphan to reap
-//! (`DESIGN-BRIEF.md:135`).
+//! blocking on SQLite's busy handler would blow the 50 ms budget a contended
+//! run has, and a write transaction held open for a whole pass stops MCP
+//! readers, which is the reason redb was rejected. And the lock is an **OS**
+//! lock rather than a PID file, so it is released by process death as well as
+//! by drop - no stale-lock wedging, no orphan to reap.
 //!
 //! [`std::fs::File::try_lock`] is the whole implementation and pulls in no
-//! dependency: it is `flock(2)` with `LOCK_EX | LOCK_NB`, which is D-15 named
-//! exactly. D-20 records why that holds off Linux: APFS honors `flock` with
-//! `LOCK_NB`, and the overlayfs hazard (pre-copy-up shared inodes) cannot arise
-//! for a file this process creates in its own data directory.
+//! dependency: it is `flock(2)` with `LOCK_EX | LOCK_NB`, an exclusive lock
+//! that fails at once rather than waits. That holds off Linux too: APFS honors
+//! `flock` with `LOCK_NB`, and the overlayfs hazard (pre-copy-up shared inodes)
+//! cannot arise for a file this process creates in its own data directory.
 
 use std::fs::{File, TryLockError};
 use std::path::{Path, PathBuf};
@@ -52,7 +51,7 @@ pub enum Attempt {
     Acquired(IngestLock),
     /// Another process is mid-pass. Exit 0 immediately, having written nothing:
     /// the hook spawn is the scheduler, and a second invocation is normal
-    /// rather than an error (ING-02).
+    /// rather than an error.
     Held,
 }
 
@@ -64,8 +63,8 @@ pub fn try_acquire(data_dir: &Path) -> Result<Attempt> {
     // This is the FIRST thing to create the data directory on a machine that
     // has never ingested - `ingest` and `data move` both take the lock before
     // they open the store - so it is where the directory gets its owner-only
-    // mode (PRIV-02, PRIV-04). The leaf alone: `~/.local/share` above it keeps
-    // whatever mode the user's own umask gives it (D-04).
+    // mode. The leaf alone: `~/.local/share` above it keeps whatever mode the
+    // user's own umask gives it.
     crate::owner_only::create_dir_all(data_dir).map_err(|e| Error::io(data_dir, e))?;
     let path = data_dir.join(LOCK_FILE_NAME);
 

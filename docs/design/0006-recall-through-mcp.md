@@ -36,7 +36,7 @@ The server lives in the binary crate, `crates/terminus`, under `cmd/mcp/`. The r
 |---|---|
 | [`crates/terminus/src/cmd/mcp/mod.rs`](../../crates/terminus/src/cmd/mcp/mod.rs) | `terminus mcp`: the read loop over stdin, one response line per request, flushed per message, the era check that refuses a request on another revision, and the methods `initialize`, `server/discover`, `ping`, `tools/list` and `tools/call`. `PROTOCOL_VERSIONS`, `DEFAULT_PROTOCOL_VERSION` and `MODERN_PROTOCOL_VERSION`. It denies `unwrap`, `expect`, `panic!` and slice indexing outside tests, because a panic would put a backtrace on the transport. |
 | [`crates/terminus/src/cmd/mcp/rpc.rs`](../../crates/terminus/src/cmd/mcp/rpc.rs) | Classifies each message as a request, a notification or an invalid message, and builds the result and error envelopes. `rpc::result` is the one place every result passes through, and it adds `resultType` and `_meta` to each. Hand-written over `serde_json`, with no MCP SDK and no async runtime. The five error codes it sends are `-32700`, `-32600`, `-32601`, `-32602` and `-32022`. |
-| [`crates/terminus/src/cmd/mcp/tools.rs`](../../crates/terminus/src/cmd/mcp/tools.rs) | The three tool descriptors and their `annotations`, the argument checks, the per-call store open, and each tool's document. `MAX_HITS`, `DEFAULT_HITS`, `MAX_PATHS`, `MAX_CONTEXT_SIDE`, `DEFAULT_CONTEXT_SIDE` and `MAX_IDS`. |
+| [`crates/terminus/src/cmd/mcp/tools.rs`](../../crates/terminus/src/cmd/mcp/tools.rs) | The three tool descriptors and their `annotations`, the argument checks, the per-call store open, and each tool's document. `MAX_HITS`, `DEFAULT_HITS`, `MAX_CONTEXT_SIDE`, `DEFAULT_CONTEXT_SIDE` and `MAX_IDS`. |
 | [`crates/terminus/src/cmd/read.rs`](../../crates/terminus/src/cmd/read.rs) | The read-only open and the default scope, shared with `terminus search`, `show` and `sessions`. A missing store is an answer with a reason, and a store older than the build prints one warning on stderr. |
 | [`crates/terminus-core/src/recall/context.rs`](../../crates/terminus-core/src/recall/context.rs) | `recall::context::window`: the turns around an anchor, in `turn_seq` order, inside one session, with `MAX_CONTEXT_SIDE`, 25, a side. It serves `recall_context`. |
 | [`crates/terminus-core/src/recall/get.rs`](../../crates/terminus-core/src/recall/get.rs) | `recall::get::records`: the archived line behind each turn id, read from only the block rows it covers, each row decompressed once per request. It serves `recall_get`. |
@@ -124,7 +124,7 @@ The opening on 2026-07-28. It replaces `initialize` for that revision, and nothi
 - **Inputs:** `params.name`, one of the three tool names, and `params.arguments`, an object. Absent or null arguments read as an empty object, so a call with none is told which argument it needed.
 - **Outputs:** a tool result. The server reads only the argument names below and ignores any other key. A tool call opens the store read-only through `cmd/read.rs`; `initialize`, `server/discover`, `ping` and `tools/list` never open it.
 - **Refusals:** a `tools/call` can get two protocol errors. `-32022` when `_meta` names a revision other than `2026-07-28`, checked before the tool name is read, so an unknown tool on another revision gets this one. And `-32602` for a missing `params.name`, or a name that is not one of the three tools. Everything else a call cannot do comes back as the tool's own empty document with a `reason`:
-  - With `isError` true when the arguments could not be used as given: `arguments` that is not an object, a required argument that is missing, null, blank or of the wrong JSON type, a count that is negative or not a whole number, a `limit` of 0, a time bound that is not one of the two forms, and a `kind` of `observation`.
+  - With `isError` true when the arguments could not be used as given: `arguments` that is not an object, a required argument that is missing, null, blank or of the wrong JSON type, a count that is negative or not a whole number, a `limit` of 0, and a time bound that is not a real date or time in one of the two forms.
   - With `isError` false when the archive had no answer: no store yet, a store that cannot be read, a working directory the server cannot read, nothing archived, no archived project covering the scope's path, or a scope whose project is excluded. These are answers, not mistakes to retry.
 
 Each tool's empty document has the same keys as its full one, with every list empty, so a client reads one shape either way.
@@ -139,10 +139,10 @@ The search `terminus search` runs, with the same ranking, in [0005: Search](0005
   |---|---|---|
   | `query` | string, required | The words, identifier, path, error line or command to find. It may not be blank. Only its first 32 tokens are used. |
   | `project` | string | A path inside one project, or `"*"` for every project. Absent means the project the server's working directory is in. |
-  | `paths` | array of strings | Only turns that touched one of these files, as recorded in `paths`. At most `MAX_PATHS`, 25: a longer list is cut to its first 25. |
+  | `paths` | array of strings | Only turns that touched one of these files, as recorded in `paths`. |
   | `tool` | string | Only turns using this tool, such as `Bash` or `Read`. |
-  | `kind` | string | Only turns of this record type: `user`, `assistant`, `system` or `attachment`. `observation` is refused. |
-  | `since` | string | Inclusive lower bound, `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SS.mmmZ`. A bare date means the start of that day. |
+  | `kind` | string | Only turns of this record type: `user`, `assistant`, `system` or `attachment`. |
+  | `since` | string | Inclusive lower bound, `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SS.mmmZ`, naming a real calendar date and, in the long form, a real time of day. A bare date means the start of that day. |
   | `until` | string | Inclusive upper bound, in the same two forms. A bare date means the end of that day. |
   | `limit` | integer | How many hits, `DEFAULT_HITS`, 10, when absent. A larger number than `MAX_HITS`, 50, is lowered to 50. |
 
@@ -160,7 +160,7 @@ The search `terminus search` runs, with the same ranking, in [0005: Search](0005
   | `entity_score` | The part of `relevance` that came from the turn's entities matching the query, 0 for a match on free text alone. |
   | `excerpt` | Up to 240 characters of the turn's text around the match, with `...` before them, after them or both where text was cut, so at most 246 characters in all, cut from its block rows, filtered when `redact_recall` is on. Empty when the block rows would not give the text up. |
 
-  `reason` is null, or one string, the first that applies: why the scope or the query gave nothing, such as a query with no searchable words; that the limit was lowered to 50; that only the first 32 tokens of the query were used; or that only the first 25 paths were filtered on.
+  `reason` is null, or one string, the first that applies: why the scope or the query gave nothing, such as a query with no searchable words; that the limit was lowered to 50; or that only the first 32 tokens of the query were used.
 
   Every key of a hit has the same name and meaning as in the hits `terminus search --json` prints, in [json-shapes.md](../json-shapes.md#search). The terminal's hits also carry `matched_on`, and its document carries `query` and `truncated`; the tool returns none of the three, and says what `truncated` would have said in `reason`.
 - **Refusals:** as in `tools/call`. The empty document is `{"hits":[],"reason":"..."}`.
@@ -326,4 +326,4 @@ The split between `isError` true and false is the one a client acts on. True mea
 | [`[privacy] redact_recall`](../configuration.md#privacy) | Off by default. When on, every excerpt, context text and `recall_get` body the server returns goes through the egress filter. No argument and no variable turns it off for the server, because the server's answers always go to the model. |
 | [`exclude`](../configuration.md#exclude) | Projects no tool returns, under every scope, `"*"` included. An id in an excluded project is answered as not archived. |
 
-The tool limits, `MAX_HITS`, `DEFAULT_HITS`, `MAX_PATHS`, `MAX_CONTEXT_SIDE`, `DEFAULT_CONTEXT_SIDE` and `MAX_IDS`, and the list of protocol revisions are constants, and no key changes them. The server finds the data directory and `terminus.toml` from the environment Claude Code starts it in, as in [the data directory](../configuration.md#the-data-directory) and [environment variables](../configuration.md#environment-variables).
+The tool limits, `MAX_HITS`, `DEFAULT_HITS`, `MAX_CONTEXT_SIDE`, `DEFAULT_CONTEXT_SIDE` and `MAX_IDS`, and the list of protocol revisions are constants, and no key changes them. The server finds the data directory and `terminus.toml` from the environment Claude Code starts it in, as in [the data directory](../configuration.md#the-data-directory) and [environment variables](../configuration.md#environment-variables).

@@ -1,5 +1,5 @@
 //! The lifecycle commands at the process boundary: `compact`, `usage`,
-//! `export` (RET-04, RET-05, PRIV-04).
+//! `export`.
 //!
 //! One bench for all three because they are three questions about one store -
 //! how big it is, where the bytes went, and what comes out of it - and the
@@ -127,7 +127,7 @@ impl Bench {
             .expect("status reports size_bytes")
     }
 
-    /// Evict these sessions through the product's own eviction (RET-02): the
+    /// Evict these sessions through the product's own eviction: the
     /// row and every derived row stay, the archived bytes go.
     fn evict(&self, keys: &[&Path]) {
         let mut store = Store::open(&self.data_dir).unwrap();
@@ -139,11 +139,19 @@ impl Bench {
         assert_eq!(applied.evicted.len(), keys.len(), "{applied:?}");
     }
 
-    /// Delete these sessions through the product's own delete (RET-02), not
+    /// Delete these sessions through the product's own delete, not
     /// through hand-written SQL: what `compact` reclaims is exactly the pages
     /// `retention::apply` freed, and a test that deleted differently would be
     /// compacting a store no user can produce.
+    ///
+    /// Each transcript is removed first, because `retention::apply` keeps a
+    /// session whose transcript is still on disk (#43). The tests after this
+    /// only run `compact`, `sessions`, `status` and `usage`, never another
+    /// ingest, so nothing finds the files gone.
     fn delete(&self, keys: &[&Path]) {
+        for key in keys {
+            std::fs::remove_file(key).unwrap();
+        }
         let mut store = Store::open(&self.data_dir).unwrap();
         let selection = Selection {
             delete: keys.iter().map(|k| key_of(k)).collect(),
@@ -188,17 +196,17 @@ fn document(output: &Output) -> serde_json::Value {
 }
 
 // ---------------------------------------------------------------------------
-// `compact` (RET-04, AC4)
+// `compact`
 // ---------------------------------------------------------------------------
 
-/// AC4's first half: after a delete pass, the number the product itself reports
+/// After a delete pass, the number the product itself reports
 /// for the store's size is strictly smaller once `compact` has run.
 ///
 /// Read through `terminus status --json` on both sides rather than off the
-/// filesystem, because `size_bytes` is what AC4 names and it sums three files -
-/// a bare `VACUUM` halves `terminus.db` while moving the freed pages into the
-/// WAL, and this assertion is what fails if the truncating checkpoint is
-/// dropped (D-08).
+/// filesystem, because `size_bytes` is the size the product reports and it sums
+/// three files - a bare `VACUUM` halves `terminus.db` while moving the freed
+/// pages into the WAL, and this assertion is what fails if the truncating
+/// checkpoint is dropped.
 ///
 /// The archive digest on both sides is the other half: `compact` rewrites the
 /// database file and must not change one archived byte. It reclaims space
@@ -240,7 +248,7 @@ fn compact_shrinks_the_footprint_status_reports_and_moves_no_archived_byte() {
     assert_eq!(listed, (SESSIONS - SESSIONS / 2) as usize);
 }
 
-/// AC4, the mechanism: the write-ahead log is empty the moment `compact`
+/// How `compact` gets there: the write-ahead log is empty the moment `compact`
 /// returns.
 ///
 /// Measured 2026-08-22 on a synthetic store: a bare `VACUUM` left `terminus.db`
@@ -271,8 +279,8 @@ fn compact_json_reports_an_empty_write_ahead_log_and_the_bytes_it_reclaimed() {
     assert_eq!(value["data"]["reclaimed_bytes"], before - after, "{value}");
 }
 
-/// AC4 under contention: a compaction that did not happen is an operational
-/// failure that says so, not an empty answer.
+/// `compact` under contention: a compaction that did not happen is an
+/// operational failure that says so, not an empty answer.
 ///
 /// Exit 1 and not 0, unlike a contended `ingest`: this command was asked for
 /// explicitly, so silently not doing it would be the wrong answer. And nothing
@@ -329,8 +337,8 @@ fn compact_refuses_while_an_ingest_holds_the_lock_and_changes_nothing() {
 ///
 /// `lock::try_acquire` creates the directory it locks in, so the store's
 /// absence has to be answered before the lock is reached. A `compact` that left
-/// a data directory behind would be the read-path bug D-10 exists to prevent,
-/// arriving through a write command.
+/// a data directory behind would be the bug the read path refuses - a store
+/// created by asking about one - arriving through a write command.
 #[test]
 fn compact_against_no_store_is_an_answer_and_creates_nothing() {
     let bench = bench();
@@ -357,7 +365,7 @@ fn compact_against_no_store_is_an_answer_and_creates_nothing() {
 }
 
 // ---------------------------------------------------------------------------
-// `usage` (RET-05, AC4)
+// `usage`
 // ---------------------------------------------------------------------------
 
 /// Every session's archived bytes as SQLite reports them, over the whole store.
@@ -378,10 +386,10 @@ fn table_total(rows: &serde_json::Value) -> i64 {
         .sum()
 }
 
-/// AC4's second half: both archive tables reconcile to the sum of every block
+/// Both archive tables reconcile to the sum of every block
 /// row's length, the footprint reconciles to the database file,
 /// and the two nulls the live store actually has are inside those totals rather
-/// than dropped out of them (D-09, D-18).
+/// than dropped out of them.
 ///
 /// The null rows are what make this more than an arithmetic identity. A
 /// `GROUP BY` that silently discards them still produces two tables that look
@@ -502,7 +510,7 @@ fn both_archive_tables_and_the_footprint_each_reconcile_to_their_own_total() {
     );
 }
 
-/// AC4 and ING-08: a project excluded after its sessions were archived is in
+/// A project excluded after its sessions were archived is in
 /// neither archive total.
 ///
 /// Exclusion is retroactive and binds every read path alike, so a report of
@@ -573,7 +581,7 @@ fn usage_against_no_store_is_a_reason_and_creates_nothing() {
 }
 
 // ---------------------------------------------------------------------------
-// `export` (PRIV-04)
+// `export`
 // ---------------------------------------------------------------------------
 
 /// The manifest one export wrote.
@@ -594,13 +602,13 @@ fn exported_files(dir: &Path) -> Vec<String> {
     out
 }
 
-/// PRIV-04: the exported files ARE the archived streams, byte for byte, and the
+/// The exported files ARE the archived streams, byte for byte, and the
 /// manifest accounts for every one of them and says in words what they are.
 ///
 /// Two comparisons. Against the stream testkit reads out of the block rows,
 /// because that is what export claims to write. And, for a session captured
 /// under `full`, against the transcript it came from up to its watermark, the
-/// end of its last complete record (phase 7 AC5): that is the end-to-end claim
+/// end of its last complete record: that is the end-to-end claim
 /// the block rows have to keep.
 #[test]
 fn an_export_is_the_archived_streams_byte_for_byte_with_a_manifest_over_them() {
@@ -720,7 +728,7 @@ fn an_evicted_session_is_exported_as_an_empty_file_the_manifest_explains() {
     assert_eq!(std::fs::read(&path).unwrap(), Vec::<u8>::new());
 }
 
-/// ING-08: a project excluded after its sessions were archived is in neither
+/// A project excluded after its sessions were archived is in neither
 /// the manifest nor the directory.
 ///
 /// Export is the read path where this matters most: the output is a directory a

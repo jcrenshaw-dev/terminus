@@ -1,8 +1,8 @@
-//! What a decision turned out to be worth (FEED-02).
+//! What a decision turned out to be worth.
 //!
 //! Four labels, and every one of them is a SQL join over rows the store already
 //! holds - `decisions`, `entities`, `turns`, `session_meta`. **No blob is
-//! decompressed and no transcript is re-read** (D-07). That is a budget rather
+//! decompressed and no transcript is re-read.** That is a budget rather
 //! than a preference: real sessions are p90 1.03 MB and reach 10.1 MB
 //! compressed, this runs inside the ingest lock, and a steady-state pass is 92
 //! ms - so a labelling step that decompressed a session per decision would turn
@@ -12,9 +12,9 @@
 //! in the same session names one of the same things that turn named, the model
 //! used what it was given. Measured 2026-08-20 over 150 transcripts: 41.1% of a
 //! prompt's path mentions recur later in the same session, so the proxy
-//! separates the two populations. `DESIGN-BRIEF.md:298` calls it a weak proxy
-//! and it is one - which is exactly why the auto-tuner is gated behind evidence
-//! from these labels rather than shipped on top of them.
+//! separates the two populations. It is still a weak proxy, which is exactly
+//! why the auto-tuner is gated behind evidence from these labels rather than
+//! shipped on top of them.
 //!
 //! **Incremental by construction.** Every statement carries its own "and there
 //! is no such row yet" clause, so a second pass over the same store writes
@@ -43,8 +43,9 @@ pub const LABELS: [&str; 4] = [HIT, FALSE_POSITIVE, MISS, WASTED_BUDGET];
 /// `tool` is deliberately absent. A `tool` entity is `Read` or `Bash` - a value
 /// that recurs in very nearly every session - so counting it would make a later
 /// match structurally certain and every decision in a busy session a `hit`,
-/// which is precisely the failure D-04 warns about. The four that remain name
-/// something specific: a file, an identifier, a failure, a program.
+/// which is precisely the failure that would make the label mean nothing. The
+/// four that remain name something specific: a file, an identifier, a failure,
+/// a program.
 const REFERENCE_KINDS: &str = "('path', 'symbol', 'error', 'command')";
 
 /// The decisions this step may consider at all.
@@ -55,7 +56,7 @@ const REFERENCE_KINDS: &str = "('path', 'symbol', 'error', 'command')";
 /// movement on every open session in the archive.
 ///
 /// A decision belongs to a session only through `session_id`, never a session
-/// key (D-04) - the injector cannot know which transcript file it is inside.
+/// key - the injector cannot know which transcript file it is inside.
 /// Joining that way also, deliberately, admits a sidecar's turns as downstream
 /// evidence: 812 sidecar files report their parent's `sessionId`, and work an
 /// agent did after an injection is still work that followed it.
@@ -187,9 +188,9 @@ pub fn referenced(conn: &Connection, decision_id: i64, turn_id: i64) -> Result<b
 /// Reached through `turns.tool_name` and the recall call's own entities, which
 /// is why [`crate::index::entity`] extracts a `recall_search` query at all -
 /// without those rows there is nothing in the store that says what was searched
-/// for, and D-07 bars opening the blob to find out. Zero such calls exist across
-/// the 3,217 transcripts measured on 2026-08-20 (D-13), so on real history today
-/// this reads zero and only a fixture moves it.
+/// for, and labelling never opens the blob to find out. Zero such calls exist
+/// across the 3,217 transcripts measured on 2026-08-20, so on real history
+/// today this reads zero and only a fixture moves it.
 ///
 /// The sought value is computed once, in the `SELECT`, and the outer query keeps
 /// the rows where there was one - so the condition and the `detail` it records
@@ -262,7 +263,7 @@ fn sought_sql(spellings: &str, injected: &str) -> String {
 /// The same subquery [`miss`] labels from, with the two list-shaped inputs bound
 /// rather than read off the row - see [`sought_sql`]. `Ok(None)` is "nothing was
 /// withheld that the model then went looking for", which is what real history
-/// reads today (D-13).
+/// reads today.
 pub fn sought(
     conn: &Connection,
     decision_id: i64,

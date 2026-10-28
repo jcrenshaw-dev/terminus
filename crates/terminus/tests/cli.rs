@@ -120,7 +120,8 @@ fn document(output: &Output) -> serde_json::Value {
         .unwrap_or_else(|e| panic!("stdout is not one JSON document ({e}): {text:?}"))
 }
 
-/// AC3, at the process boundary: exit 0 and an empty stdout on a clean store.
+/// `verify` at the process boundary: exit 0 and an empty stdout on a clean
+/// store.
 #[test]
 fn verify_exits_zero_and_says_nothing_on_a_clean_store() {
     let bench = bench();
@@ -132,10 +133,10 @@ fn verify_exits_zero_and_says_nothing_on_a_clean_store() {
     assert_eq!(stdout(&out), "", "a clean store names no session");
 }
 
-/// AC3. One session's rows damaged: exit non-zero, that session
-/// named on stdout, no other session named.
+/// One session's rows damaged: exit non-zero, that session named on stdout, no
+/// other session named.
 ///
-/// The two fixtures are D-01's colliding pair - the sidecar reports its
+/// The two fixtures are a colliding pair - the sidecar reports its
 /// parent's `sessionId` - so "and no other" is a clause that can fail.
 #[test]
 fn verify_names_the_corrupt_session_and_no_other() {
@@ -159,13 +160,14 @@ fn verify_names_the_corrupt_session_and_no_other() {
     );
     assert!(
         !text.contains("integrity_check"),
-        "D-16 keeps integrity_check in doctor: {text}"
+        "verify mentioned integrity_check, which belongs to doctor: {text}"
     );
 }
 
-/// AC5's CLI half. A store one archive format ahead of this binary is refused
-/// by a command that opens it: non-zero exit, a message naming both versions,
-/// and the store file, its WAL and the `runs` table unchanged.
+/// The archive format gate, through the CLI. A store one format ahead of this
+/// binary is refused by a command that opens it: non-zero exit, a message
+/// naming both versions, and the store file, its WAL and the `runs` table
+/// unchanged.
 ///
 /// The store under test carries a hot, non-empty WAL with no live connection -
 /// the state a store is in after a crash, and the only state in which a refused
@@ -215,8 +217,8 @@ fn a_store_one_archive_format_ahead_is_refused_with_both_versions_named() {
     let before_db = std::fs::read(&target_db).unwrap();
     let before_wal = std::fs::read(&target_wal).unwrap();
 
-    // Both commands that open a store, because AC5 is a property of the gate
-    // and not of one subcommand.
+    // Both commands that open a store, because refusing a newer store is a
+    // property of the gate and not of one subcommand.
     let fixture = testkit::fixture_path("session-basic.jsonl");
     let fixture = fixture.to_str().unwrap().to_owned();
     for args in [vec!["verify"], vec!["ingest", fixture.as_str()]] {
@@ -237,7 +239,7 @@ fn a_store_one_archive_format_ahead_is_refused_with_both_versions_named() {
             "message must name the binary's format: {message}"
         );
 
-        // Byte equality, not a digest of it: this is the whole of AC5.
+        // Byte equality, not a digest of it: a refused store is left as it was.
         assert!(
             std::fs::read(&target_db).unwrap() == before_db,
             "`{}` changed terminus.db",
@@ -279,8 +281,8 @@ fn a_store_one_archive_format_ahead_is_refused_with_both_versions_named() {
     );
 }
 
-/// STOR-10, at every command that opens the store. A format-1 store is refused
-/// with the clean-install steps, and its database file and WAL are left
+/// The format gate, at every command that opens the store. A format-1 store is
+/// refused with the clean-install steps, and its database file and WAL are left
 /// byte-for-byte as they were.
 ///
 /// The store is built by hand rather than from `CREATE_SQL`, because this
@@ -289,9 +291,8 @@ fn a_store_one_archive_format_ahead_is_refused_with_both_versions_named() {
 /// carries a hot WAL for the same reason the newer-format test does.
 ///
 /// Four commands are left out. `hook` exits 0 whatever happens, and the ingest
-/// it spawns is the `ingest` case here (INJ-06, ING-10). `mcp` answers with a
-/// reason instead of exiting (RCL-10). `uninstall` and `data move` never open
-/// the store.
+/// it spawns is the `ingest` case here. `mcp` answers with a reason instead of
+/// exiting. `uninstall` and `data move` never open the store.
 #[test]
 fn every_command_refuses_a_format_one_store_and_leaves_it_untouched() {
     let bench = bench();
@@ -445,9 +446,9 @@ fn every_command_refuses_a_format_one_store_and_leaves_it_untouched() {
     assert_eq!(format, "1", "a refused open restamped the archive format");
 }
 
-/// AC4, end to end through the command. Drop `turns`, `turns_fts`, `entities`
-/// and `paths`, run `terminus reindex`, and the fixed query set's JSON is
-/// byte-identical to what it was before the drop.
+/// `reindex`, end to end through the command. Drop `turns`, `turns_fts`,
+/// `entities` and `paths`, run `terminus reindex`, and the fixed query set's
+/// JSON is byte-identical to what it was before the drop.
 #[test]
 fn reindex_rebuilds_the_derived_tables_to_byte_identical_query_output() {
     let bench = bench();
@@ -471,7 +472,7 @@ fn reindex_rebuilds_the_derived_tables_to_byte_identical_query_output() {
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert_eq!(stdout(&out), "", "reindex produces no data on stdout");
 
-    assert_eq!(testkit::query_set_json(&bench.conn()), before, "AC4");
+    assert_eq!(testkit::query_set_json(&bench.conn()), before, "reindex changed the query set");
     assert_eq!(
         testkit::archive_digest(&bench.conn()),
         archive_before,
@@ -479,17 +480,16 @@ fn reindex_rebuilds_the_derived_tables_to_byte_identical_query_output() {
     );
 }
 
-/// The exit-code split phase 1 commits to: 2 is misuse, and it is not the same
+/// The exit-code split the CLI commits to: 2 is misuse, and it is not the same
 /// as an operational failure.
 ///
-/// `ingest` with no path is deliberately absent from this list. It exited 2 in
-/// phase 1 and is the tree pass now, which is an intended change to a shipped
-/// contract; `bare_ingest_walks_only_the_configured_temporary_root` is the
-/// assertion that replaced it.
+/// `ingest` with no path is deliberately absent from this list. It is the tree
+/// pass, and `bare_ingest_walks_only_the_configured_temporary_root` is the
+/// assertion that covers it.
 ///
-/// `verify --json` left it in phase 3 the same way and for the same reason:
-/// D-24 makes it supported, so the case that stands for "a subcommand rejects
-/// what it was not written for" is now a flag no command accepts.
+/// `verify --json` is absent for the same reason: it is supported, so the case
+/// that stands for "a subcommand rejects what it was not written for" is a flag
+/// no command accepts.
 #[test]
 fn misuse_exits_two_with_an_empty_stdout() {
     let bench = bench();
@@ -498,6 +498,12 @@ fn misuse_exits_two_with_an_empty_stdout() {
         vec!["reindex", "extra"],
         vec!["status", "-x"],
         vec!["no-such-command"],
+        // Misuse writes no document under `--json` either: it is raised in a
+        // `parse` fn, before the command's output mode is known (#107).
+        vec!["search", "--json"],
+        vec!["replay", "--json", "--ranked", "x"],
+        vec!["observations", "--json", "regenerate"],
+        vec!["status", "--json", "-x"],
     ] {
         let out = bench.run(&args);
         assert_eq!(
@@ -512,13 +518,13 @@ fn misuse_exits_two_with_an_empty_stdout() {
 }
 
 /// `reindex` drops and recreates all four derived tables, which is the most
-/// destructive thing phase 1 does, and it was running without the ingest lock.
-/// That made false the invariant `ingest` rests on - that the LOCK guard makes
-/// it the only writer, so nothing changes the store between its read and its
-/// write. The race runs both ways: a reindex could drop the tables under a
+/// destructive thing a store write does, and without the ingest lock it would
+/// make false the invariant `ingest` rests on - that the LOCK guard makes it the
+/// only writer, so nothing changes the store between its read and its write.
+/// The race runs both ways: a reindex could drop the tables under a
 /// hook-spawned ingest, or lose the SQLite write lock to one and die on the
-/// busy timeout with a raw "database is locked", which is the wait D-15 exists
-/// to avoid.
+/// busy timeout with a raw "database is locked", which is the failure the lock
+/// exists to prevent.
 #[test]
 fn reindex_refuses_while_another_process_holds_the_ingest_lock() {
     let bench = bench();
@@ -642,20 +648,19 @@ fn bare_ingest_walks_only_the_configured_temporary_root() {
     assert_eq!(after, 2);
 }
 
-/// D-24, on the three commands phase 1 and 2 shipped: `--json` writes one
-/// document to stdout, and the run without it writes exactly what it wrote
-/// before the flag existed.
+/// On `verify`, `reindex` and `status`: `--json` writes one document to stdout,
+/// and the run without it writes exactly what it wrote before the flag existed.
 ///
 /// The second half is the half that can regress silently. Adding a mode to a
 /// command is how its default output picks up a stray line, and `reindex`
-/// producing nothing on stdout is a contract phase 1 already shipped.
+/// producing nothing on stdout is a contract of its own.
 #[test]
 fn the_three_shipped_commands_take_json_without_changing_their_plain_output() {
     let bench = bench();
     bench.ingest("session-basic.jsonl");
     bench.ingest("subagents/agent-alpha.jsonl");
 
-    // Plain: byte-for-byte what phase 1 and 2 print.
+    // Plain: byte-for-byte what each prints without the flag.
     assert_eq!(stdout(&bench.run(&["verify"])), "");
     assert_eq!(stdout(&bench.run(&["reindex"])), "");
 
@@ -734,9 +739,9 @@ fn verify_json_names_the_corrupt_session_and_still_exits_one() {
     );
 }
 
-/// AC3 at the process boundary: a changed byte in a middle block is pinned to
-/// that block in the text line and in `--json`'s `block` field, and a checksum
-/// that no longer matches names the session with `block` null.
+/// Block damage at the process boundary: a changed byte in a middle block is
+/// pinned to that block in the text line and in `--json`'s `block` field, and a
+/// checksum that no longer matches names the session with `block` null.
 #[test]
 fn verify_names_the_damaged_block_in_text_and_json() {
     let bench = bench();
@@ -814,6 +819,42 @@ fn reindex_json_reports_a_held_lock_as_a_document() {
     drop(guard);
 }
 
+/// `observations regenerate --json` under a held lock answers the same way: one
+/// document, `ok: false`, a reason naming the lock, and the rebuild's own keys
+/// (#107).
+#[test]
+fn observations_regenerate_json_reports_a_held_lock_as_a_document() {
+    let bench = bench();
+    bench.ingest("session-basic.jsonl");
+
+    let guard = match terminus_core::ingest::lock::try_acquire(&bench.data_dir).unwrap() {
+        terminus_core::ingest::Attempt::Acquired(guard) => guard,
+        other => panic!("the lock should have been free: {other:?}"),
+    };
+
+    let out = bench.run(&["observations", "regenerate", "--json"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(stderr(&out), "");
+    let document = document(&out);
+    assert_eq!(document["ok"], false);
+    assert!(
+        document["reason"]
+            .as_str()
+            .is_some_and(|r| r.contains("LOCK")),
+        "the refusal must name the lock: {document}"
+    );
+    let mut keys: Vec<&str> = document["data"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["notes", "regenerated", "selected", "since"]);
+
+    drop(guard);
+}
+
 /// `preserved` reaches the output: an evicted session's index is carried
 /// across rather than rebuilt, and the count of those is reported apart from
 /// `sessions`. With nothing evicted, plain `reindex` prints only the line it
@@ -854,8 +895,8 @@ fn reindex_reports_the_evicted_sessions_it_carried_across() {
     );
 }
 
-/// AC5: `terminus stats` reports the numbers a reader can add up by hand, in
-/// both modes, off a placed outcome mix (FEED-04).
+/// `terminus stats` reports the numbers a reader can add up by hand, in both
+/// modes, off a placed outcome mix.
 ///
 /// The mix is written straight into `decisions` and `labels` rather than
 /// produced by an ingest pass: what is under test is the aggregation and the
@@ -1045,10 +1086,8 @@ fn verify_against_a_database_with_no_tables_is_no_store() {
     assert_eq!(tables, 0, "verify created a table");
 }
 
-/// #77: on a format-2 store an older build wrote - `derived_schema` one behind,
-/// `decisions` without the two columns that arrived after it - `verify` says
-/// so in both modes and leaves the schema as it found it. A writable open would
-/// have added the columns back.
+/// #77: on a store one `derived_schema` behind this build's, `verify` says so
+/// in both modes and leaves the schema as it found it.
 #[test]
 fn verify_on_an_older_store_says_so_and_changes_nothing() {
     let bench = bench();
@@ -1096,7 +1135,7 @@ fn verify_checks_a_clean_store_past_a_config_that_does_not_parse() {
 }
 
 // ---------------------------------------------------------------------------
-// RCL-06: the shapes and the exit codes, swept across every data command
+// The shapes and the exit codes, swept across every data command
 //
 // One test per property rather than one test per command. A seventh data
 // command added in a later phase joins `DATA_COMMANDS` on one line and is held
@@ -1162,17 +1201,18 @@ const DATA_COMMANDS: &[(&str, &[&str], &[&str])] = &[
         &[],
         &["thresholds", "decisions", "labels", "changed"],
     ),
-    // OBS-01 and OBS-07. Both verbs join on the same terms, which is the point
-    // of D-18 naming the sweep: the workspace's first two-word subcommand is
-    // held to the same five properties as every one-word one, rather than
-    // exempted from them for being shaped differently.
+    // `observations` and `observations regenerate`. Both verbs join on the same
+    // terms, which is the point of naming them in the sweep: the workspace's
+    // first two-word subcommand is held to the same five properties as every
+    // one-word one, rather than exempted from them for being shaped
+    // differently.
     ("observations", &["--project", "*"], &["observations"]),
     (
         "observations regenerate",
         &[],
         &["since", "selected", "regenerated", "notes"],
     ),
-    // RET-03 and D-17, on exactly the terms this table's own comment states: a
+    // `retention`, on exactly the terms this table's own comment states: a
     // report of what the NEXT ingest pass would evict and delete is a data
     // command, so it joins on one line and the five swept properties hold it -
     // the envelope, the stream split, the exit codes, the empty-result rule and
@@ -1184,7 +1224,7 @@ const DATA_COMMANDS: &[(&str, &[&str], &[&str])] = &[
         &["--dry-run"],
         &["cutoff", "evict", "delete", "over", "excluded"],
     ),
-    // RET-04, RET-05 and PRIV-04 join on the same one line each (D-17). All
+    // `compact`, `usage` and `export` join on the same one line each. All
     // three write as well as report - `compact` rewrites the database file,
     // `export` writes a directory - and that changes nothing about the contract
     // they keep: the envelope, the stream split, the exit codes, the
@@ -1243,7 +1283,7 @@ fn swept() -> (Bench, String) {
 /// The command line for one swept command, with `show`'s id and `export`'s
 /// destination appended.
 ///
-/// A command NAME may be two words (`observations regenerate`, D-18). The name
+/// A command NAME may be two words (`observations regenerate`). The name
 /// is one string because that is what `value["command"]` reports and what
 /// `docs/json-shapes.md` heads its section with; the split into command-line
 /// words lives here, so a second column no one-word command would use never has
@@ -1391,8 +1431,8 @@ fn json_mode_keeps_stdout_pure_and_warnings_on_stderr() {
 
 /// Property 3a: exit 0 on success, including an empty result set.
 ///
-/// The empty case is the one RCL-06 exists for. Searching for a path is the
-/// headline command in the product and a raw `MATCH` would exit 1 on it, so
+/// The empty case is the one this property exists for. Searching for a path is
+/// the headline command in the product and a raw `MATCH` would exit 1 on it, so
 /// "found nothing" and "could not ask" must never share a code.
 #[test]
 fn success_and_an_empty_result_both_exit_zero() {
@@ -1495,6 +1535,117 @@ fn an_operational_failure_exits_one_with_ok_false() {
     let value = document(&out);
     assert_eq!(value["ok"], false, "{value}");
     assert!(value["reason"].is_string(), "{value}");
+}
+
+/// Property 6: a `--json` command that fails operationally answers with its own
+/// empty document, `ok: false` and the reason, and puts nothing on stderr (#107).
+///
+/// The store is a `terminus.db` of bytes that are not a database, which every
+/// one of these commands opens and cannot read. The same run without `--json`
+/// prints `terminus: <reason>` on stderr and nothing on stdout, as it always has.
+#[test]
+fn a_json_command_that_fails_operationally_answers_with_a_document() {
+    let bench = bench();
+    std::fs::create_dir_all(&bench.data_dir).unwrap();
+    std::fs::write(bench.data_dir.join(DB_FILE_NAME), b"not a database at all").unwrap();
+    let dest = sweep_dest(&bench);
+
+    for (command, args, fields) in DATA_COMMANDS {
+        let mut argv = sweep_args(command, args, "1", &dest);
+        // The fields an empty document takes from the arguments it was given.
+        match *command {
+            "replay" => argv.extend(["--ranked", "7"]),
+            "observations regenerate" => argv.extend(["--since", "2026-01-01"]),
+            _ => {}
+        }
+        let plain = bench.run(&argv);
+        assert_eq!(plain.status.code(), Some(1), "`{}`", argv.join(" "));
+        assert_eq!(stdout(&plain), "", "`{}`", argv.join(" "));
+        assert!(
+            stderr(&plain).starts_with("terminus: "),
+            "`{}`: {}",
+            argv.join(" "),
+            stderr(&plain)
+        );
+
+        argv.push("--json");
+        let out = bench.run(&argv);
+        assert_eq!(out.status.code(), Some(1), "`{}`", argv.join(" "));
+        assert_eq!(stderr(&out), "", "`{}`", argv.join(" "));
+        let value = document(&out);
+        assert_eq!(value["command"], *command);
+        assert_eq!(value["ok"], false, "{value}");
+        assert!(
+            value["reason"].as_str().is_some_and(|r| !r.is_empty()),
+            "`{}` gave no reason: {value}",
+            argv.join(" ")
+        );
+        let mut present: Vec<&str> = value["data"]
+            .as_object()
+            .expect("data is an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        present.sort_unstable();
+        let mut documented: Vec<&str> = fields.to_vec();
+        documented.sort_unstable();
+        assert_eq!(present, documented, "`{}`", argv.join(" "));
+
+        match *command {
+            "replay" => assert_eq!(value["data"]["thresholds"]["ranked"], 7, "{value}"),
+            "observations regenerate" => assert!(
+                value["data"]["since"]
+                    .as_str()
+                    .is_some_and(|since| since.starts_with("2026-01-01")),
+                "{value}"
+            ),
+            "export" => {
+                assert_eq!(value["data"]["destination"], dest.as_str(), "{value}");
+                assert!(!std::path::Path::new(&dest).exists(), "{dest} was created");
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A data directory this process cannot read holds a store it cannot read, and
+/// `compact` says so the way every other data command does, rather than calling
+/// it no store and exiting 0.
+#[test]
+fn compact_on_an_unreadable_data_directory_fails() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let bench = bench();
+    bench.ingest("session-recall.jsonl");
+    let mode = |bits| {
+        std::fs::set_permissions(&bench.data_dir, std::fs::Permissions::from_mode(bits)).unwrap()
+    };
+    mode(0o000);
+    // Root reads through the mode bits, which leaves nothing to test.
+    if std::fs::read_dir(&bench.data_dir).is_ok() {
+        mode(0o700);
+        return;
+    }
+    let plain = bench.run(&["compact"]);
+    let json = bench.run(&["compact", "--json"]);
+    mode(0o700);
+
+    assert_eq!(plain.status.code(), Some(1), "{}", stderr(&plain));
+    assert!(
+        stderr(&plain).starts_with("terminus: cannot read the terminus store"),
+        "{}",
+        stderr(&plain)
+    );
+    assert_eq!(json.status.code(), Some(1));
+    assert_eq!(stderr(&json), "");
+    let value = document(&json);
+    assert_eq!(value["ok"], false, "{value}");
+    assert!(
+        value["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.starts_with("cannot read the terminus store")),
+        "{value}"
+    );
 }
 
 /// A reader that closes the pipe changes no exit code and prints no panic.

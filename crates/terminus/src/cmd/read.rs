@@ -4,15 +4,16 @@
 //! tools.
 //!
 //! Each of them opening a store its own way is that many chances to drift on
-//! the two behaviours D-10 and D-18 fix, and neither of them is visible in a
-//! test that only checks the command answered.
+//! the two behaviours below - a read never creates a store, and never repairs
+//! one - and neither of them is visible in a test that only checks the command
+//! answered.
 //!
-//! **Read-only, always (D-10).** [`terminus_core::Store::open_read_only`] and
+//! **Read-only, always.** [`terminus_core::Store::open_read_only`] and
 //! never `Store::open`: opening a store is a read, and `Store::open` would
 //! `create_dir_all`, initialize a fresh database, run the additive column
 //! bring-forward and set two pragmas. `terminus search` against a machine that
 //! has never ingested must not leave a store behind as the side effect of a
-//! question, and PLAN-4's server advertises `readOnlyHint` over this same path.
+//! question, and the MCP server advertises `readOnlyHint` over this same path.
 //!
 //! **A missing store is an answer, not a failure.** A machine that has installed
 //! terminus and not yet run an ingest is the ordinary starting state, so it gets
@@ -23,7 +24,7 @@
 //! that is operational (exit 1), because a script told "no results" about an
 //! unreadable database would carry on.
 //!
-//! **A store older than this build says so and is not repaired (D-18).**
+//! **A store older than this build says so and is not repaired.**
 //! `reindex::open_up_to_date` stays the only caller that rebuilds. A read that
 //! silently rewrote four tables would not be a read, and a user who upgraded the
 //! binary and searched before the next hook fired must not read a degraded
@@ -53,7 +54,7 @@ pub enum Opened {
 ///
 /// The two travel together because they are only meaningful together: the store
 /// holds the sessions and the config says which of them a read path may see
-/// (`config::visible`, ING-08), and a caller that had one without the other
+/// (`config::visible`), and a caller that had one without the other
 /// could ask a question exclusion never got to answer.
 pub struct Reader {
     store: Store,
@@ -73,19 +74,12 @@ impl Reader {
 /// What a read command prints when the store predates this build.
 ///
 /// One line, on stderr, and then the query runs anyway against the old-shape
-/// index. Saying it is the whole of D-18: the results really are degraded, and
-/// the difference between a user who knows that and a user who does not is the
-/// difference between waiting for the next ingest and filing a search bug.
+/// index. Saying so is all a read does about it: the results really are
+/// degraded, and the difference between a user who knows that and a user who
+/// does not is the difference between waiting for the next ingest and filing a
+/// search bug.
 const STALE: &str = "this store's derived tables predate this build, so results may be \
                      incomplete; the next `terminus ingest` rebuilds them";
-
-/// What `stats` and `replay` say on a store that has no decision log.
-///
-/// The same shape as a machine that has never ingested: a reason and exit 0.
-/// Nothing has been recorded, which is an answer to "how is injection doing"
-/// rather than a failure of the question.
-pub const NO_DECISION_LOG: &str = "this store predates the decision log, so nothing has been \
-                                   recorded yet; the next `terminus ingest` creates it";
 
 /// Open the store every read command reads.
 pub fn open() -> Result<Opened, Failure> {
@@ -109,7 +103,7 @@ pub fn open_in(data_dir: &Path, config: Config) -> Result<Opened, Failure> {
     };
 
     if store.predates_this_build() {
-        eprintln!("terminus: {STALE}");
+        errln!("terminus: {STALE}");
     }
 
     Ok(Opened::Ready(Box::new(Reader { store, config })))
@@ -123,38 +117,32 @@ fn no_store(path: &Path) -> String {
     )
 }
 
-/// What a store missing part of the decision log is: old, or damaged.
+/// Whether the decision log is whole.
 ///
-/// The distinction is the whole point of the type. `decisions` and `labels`
-/// arrived together in one `CREATE_SQL` (D-02), so a store that predates them
-/// is missing BOTH - and a store missing exactly one of them was written by a
-/// build that had both and has since lost one. Collapsing the two into "no
-/// decision log" would report a damaged store as a successful empty answer, and
-/// the number a caller then reads as "injection has recorded nothing" would in
-/// fact be "half the log is gone".
+/// Every store this build can open was created with both `decisions` and
+/// `labels`, so a store missing either of them, or both, was damaged from
+/// outside. Reading that as "no decision log" would report a damaged store as a
+/// successful empty answer, and the number a caller then reads as "injection
+/// has recorded nothing" would in fact be "the log is gone".
 pub enum DecisionLog {
     /// Both tables are there and can be queried.
     Present,
-    /// Neither table: a store written before the log existed.
-    Absent,
-    /// One and not the other. Names the one that is gone.
-    Damaged(&'static str),
+    /// One table or both are gone. Names every one that is missing.
+    Damaged(&'static [&'static str]),
 }
 
 /// What this store can be asked about the decision log.
 ///
-/// Asking here, at the open, is what keeps the ordinary case an answer: left to
-/// the query it surfaces as [`Failure::Operational`] carrying a raw
-/// `no such table: decisions`, which `main` prints on stderr and exits 1 on -
-/// without knowing whether `--json` was asked for, so the envelope the contract
-/// promises is never written at all.
+/// Asking here, at the open, is what names the damage: left to the query it
+/// surfaces as [`Failure::Operational`] carrying a raw `no such table:
+/// decisions`. `main` writes the failure as the command's own document under
+/// `--json` and as a line on stderr otherwise (#107).
 ///
-/// Nothing is repaired either way, because a read never migrates (D-18). For
-/// [`DecisionLog::Absent`] the next write-mode `terminus ingest` creates both
-/// tables through `bring_forward`'s missing-table arm (D-02); for
-/// [`DecisionLog::Damaged`] it would create the missing one and leave the
-/// surviving one's now-orphaned rows, which is why that case is reported as a
-/// failure a person has to look at rather than repaired by being read.
+/// Nothing is repaired, because a read never migrates. The next
+/// write-mode `terminus ingest` would create a missing table through
+/// `bring_forward`'s missing-table arm and leave any surviving rows orphaned,
+/// which is why a damaged log is a failure a person has to look at rather than
+/// something repaired by being read.
 ///
 /// This is a snapshot taken at open and not re-checked before the query, so a
 /// writer that drops a table in between still reaches the raw sqlite path. That
@@ -165,25 +153,39 @@ pub fn decision_log(reader: &Reader) -> DecisionLog {
     let missing = reader.store().missing_tables();
     match (missing.contains(&"decisions"), missing.contains(&"labels")) {
         (false, false) => DecisionLog::Present,
-        (true, true) => DecisionLog::Absent,
-        (true, false) => DecisionLog::Damaged("decisions"),
-        (false, true) => DecisionLog::Damaged("labels"),
+        (true, true) => DecisionLog::Damaged(&["decisions", "labels"]),
+        (true, false) => DecisionLog::Damaged(&["decisions"]),
+        (false, true) => DecisionLog::Damaged(&["labels"]),
     }
 }
 
-/// The reason a damaged store reports, naming the table that is gone.
-pub fn damaged(table: &str) -> String {
-    format!(
-        "this store is missing the `{table}` table but not the rest of the decision log, so \
-         something removed it; `terminus doctor` reports on the store, and the rows that are \
-         left cannot be read as a complete record"
-    )
+/// The reason a damaged store reports, naming every table that is gone.
+///
+/// One table gone leaves the other's rows behind, and the reason says they are
+/// not a complete record. Both gone leaves nothing, and the reason claims no
+/// survivor.
+pub fn damaged(tables: &[&str]) -> String {
+    match tables {
+        [table] => format!(
+            "this store is missing the `{table}` table of the decision log, so something \
+             removed it; `terminus doctor` reports on the store, and the rows that are left \
+             cannot be read as a complete record"
+        ),
+        _ => {
+            let names: Vec<String> = tables.iter().map(|table| format!("`{table}`")).collect();
+            format!(
+                "this store is missing the {} tables of the decision log, so something \
+                 removed them; `terminus doctor` reports on the store",
+                names.join(" and ")
+            )
+        }
+    }
 }
 
 /// The project a read command works in: the one named, or the one the process
 /// is standing in.
 ///
-/// D-12: the default is a longest-prefix match of the working directory against
+/// The default is a longest-prefix match of the working directory against
 /// the project keys `session_meta` already holds, resolved inside
 /// [`terminus_core::recall::scope`]. The literal `*` means every project, and
 /// exclusion stays in force under it.
@@ -196,34 +198,17 @@ pub fn scope(named: Option<&str>) -> Result<Scope, Failure> {
 
 /// Say why a result is empty, on the stream the mode wants, and exit 0.
 ///
-/// An empty result is a successful answer to a question with no matches
-/// (RCL-06), so this never fails. The reason goes into the document in JSON mode
-/// and onto stderr otherwise - never onto stdout, which stays either a document
-/// or the hits themselves.
+/// An empty result is a successful answer to a question with no matches, so
+/// this never fails. The reason goes into the document in JSON mode and onto
+/// stderr otherwise - never onto stdout, which stays either a document or the
+/// hits themselves.
 pub fn empty(document: Document, reason: &str, json: bool) -> Result<(), Failure> {
     if json {
         document.because(reason).emit();
     } else {
-        eprintln!("terminus: {reason}");
+        errln!("terminus: {reason}");
     }
     Ok(())
-}
-
-/// Say why this store cannot answer the question, and exit 1.
-///
-/// The counterpart of [`empty`] for a store that is *wrong* rather than empty.
-/// The `--json` arm writes the envelope with `ok: false` and then returns
-/// [`Failure::Silent`], because `main` would otherwise print a second account of
-/// the same thing on stderr after the document already carried it - the shape
-/// `verify` established. Exit 1 either way, so a caller reading the code and a
-/// caller parsing the document agree.
-pub fn unusable(document: Document, reason: String, json: bool) -> Failure {
-    if json {
-        document.failed().because(&reason).emit();
-        Failure::Silent
-    } else {
-        Failure::Operational(reason)
-    }
 }
 
 #[cfg(test)]

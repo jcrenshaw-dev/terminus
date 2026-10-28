@@ -9,7 +9,7 @@
 //! scoping, the same exclusion - because two definitions of what a read may see
 //! is exactly the drift this module exists to prevent.
 //!
-//! # The contract every data command keeps (RCL-06)
+//! # The contract every data command keeps
 //!
 //! **Exit codes.** 0 on success **including an empty result set** - a query that
 //! matched nothing is a successful answer to a question with no matches - 1 on
@@ -23,7 +23,7 @@
 //!
 //! **`--json`.** Every data command accepts it and writes exactly one document
 //! on stdout and nothing else: `{command, ok, reason, data}`, built and
-//! serialized by `serde_json` and never assembled with `format!` (D-25). `ok` is
+//! serialized by `serde_json` and never assembled with `format!`. `ok` is
 //! the exit code's answer, and a caller that parses the document and a caller
 //! that checks the code never disagree - `verify --json` on a damaged store
 //! writes its failures AND exits 1.
@@ -77,6 +77,21 @@ pub enum Failure {
     Misuse(String),
 }
 
+impl Failure {
+    /// The failure's own words, for a line that reports it rather than
+    /// returns it (#107).
+    ///
+    /// `Silent` has no message because the command already wrote its account;
+    /// no caller that reports a failure this way is fed one, so the wording is
+    /// the fallback a future caller would print.
+    pub fn text(self) -> String {
+        match self {
+            Failure::Operational(message) | Failure::Misuse(message) => message,
+            Failure::Silent => "no reason was recorded".to_owned(),
+        }
+    }
+}
+
 impl From<terminus_core::Error> for Failure {
     fn from(error: terminus_core::Error) -> Self {
         Failure::Operational(error.to_string())
@@ -86,7 +101,7 @@ impl From<terminus_core::Error> for Failure {
 /// The data directory every command works against.
 ///
 /// Resolved once, here, and passed down explicitly afterwards rather than
-/// re-derived at each use (`DESIGN-BRIEF.md:404`).
+/// re-derived at each use.
 pub fn data_dir() -> Result<PathBuf, Failure> {
     Ok(terminus_core::data_dir()?)
 }
@@ -96,10 +111,9 @@ pub fn data_dir() -> Result<PathBuf, Failure> {
 /// Three files and not one. SQLite in WAL mode holds recently written pages in
 /// `-wal` until something checkpoints them, so the database file alone can be
 /// half the truth - and a bare `VACUUM` on a WAL store moves the pages it frees
-/// INTO the WAL, which makes `terminus.db` shrink while the store on disk grows
-/// (D-08). `cmd::status` reports this same sum as `size_bytes`, so this is the
-/// number the product itself calls the store's size and the one `compact` has to
-/// move.
+/// INTO the WAL, which makes `terminus.db` shrink while the store on disk grows.
+/// `cmd::status` reports this same sum as `size_bytes`, so this is the number
+/// the product itself calls the store's size and the one `compact` has to move.
 ///
 /// A file that is not there counts zero rather than failing: `-wal` and `-shm`
 /// exist only for the life of a connection, so their absence is the ordinary
@@ -133,7 +147,7 @@ impl Footprint {
 
 /// Measure that footprint now.
 ///
-/// `cmd::status` and `cmd::uninstall` each keep their own copy of this rule.
+/// `cmd::status` keeps its own copy of this rule.
 pub fn footprint(data_dir: &Path) -> Footprint {
     let of = |name: String| {
         std::fs::metadata(data_dir.join(name))
@@ -146,6 +160,42 @@ pub fn footprint(data_dir: &Path) -> Footprint {
         wal: of(format!("{db}-wal")),
         shm: of(format!("{db}-shm")),
     }
+}
+
+/// Whether `data_dir` holds a store.
+///
+/// A store this process cannot look at is a failure, not a missing store:
+/// `Path::exists` says false for both, and a command would then answer an
+/// archive it cannot read with "there is no store". The rule
+/// `Store::open_read_only` follows.
+pub fn has_store(data_dir: &Path) -> Result<bool, Failure> {
+    let path = data_dir.join(terminus_core::store::DB_FILE_NAME);
+    path.try_exists().map_err(|e| {
+        let detail = e.to_string();
+        Failure::Operational(terminus_core::Error::StoreUnreadable { path, detail }.to_string())
+    })
+}
+
+/// What a directory holds, in bytes: every file under it, recursively.
+///
+/// Every file rather than the three [`footprint`] sums. `data move` carries
+/// the injection-state directory (`decision::DIR_NAME`) and the snapshots too,
+/// and `uninstall --purge` deletes them, so a size that named only the database
+/// would understate a directory holding three rolling copies of it by a factor
+/// of four (#95).
+pub fn directory_bytes(dir: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut total = 0;
+    for entry in entries.flatten() {
+        match entry.file_type() {
+            Ok(kind) if kind.is_dir() => total += directory_bytes(&entry.path()),
+            Ok(_) => total += entry.metadata().map(|m| m.len()).unwrap_or(0),
+            Err(_) => {}
+        }
+    }
+    total
 }
 
 /// A byte count as a person reads it, for the non-`--json` output.
@@ -167,6 +217,23 @@ pub fn human(bytes: u64) -> String {
     }
 }
 
+/// Whole seconds as a person reads a duration: `Ns` under a minute, `Nm Ns`
+/// under an hour, `Nh Nm` from there on.
+///
+/// A signed count because `observations` reads one from a stored column, and a
+/// damaged row can make it negative; that prints as the seconds it is. The
+/// words for "none" and "under a second" stay with the callers that have them
+/// (#107).
+pub fn duration(seconds: i64) -> String {
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else if seconds < 3600 {
+        format!("{}m {}s", seconds / 60, seconds % 60)
+    } else {
+        format!("{}h {}m", seconds / 3600, (seconds % 3600) / 60)
+    }
+}
+
 /// The `--json` flag as spelled on every command line.
 pub const JSON_FLAG: &str = "json";
 
@@ -181,55 +248,17 @@ pub fn value(parser: &mut lexopt::Parser, flag: &str) -> Result<String, Failure>
         .map(|v| v.to_string_lossy().into_owned())
 }
 
-/// One end of a time window, as a string that compares against a stored
-/// timestamp directly.
+/// The value of `--since` or `--until`, through terminus-core's date check,
+/// [`terminus_core::recall::checked_bound`], as a misuse when it fails.
 ///
-/// D-23: all 22,412 turns of a 180-file sample carry exactly
-/// `NNNN-NN-NNTNN:NN:NN.NNNZ` - one format, UTC only - so the comparison is
-/// lexicographic and there is no date parsing on the stored side. A bare
-/// `YYYY-MM-DD` extends to the first instant of that day for `since` and the
-/// last for `until`, which is what makes a one-day window include its own day;
-/// extending both to midnight would make `--since D --until D` return only the
-/// turn at exactly 00:00:00.000 and look like an empty day.
-///
-/// Anything else is misuse rather than an empty result. Every string orders
-/// against every other, so a malformed bound would compare cleanly and return a
-/// plausible wrong answer that nothing reports.
-///
-/// This runs in the CLI, ahead of the query layer, on purpose:
-/// `recall::search::run` resolves the scope before it validates its filters, so
-/// a bad bound typed in a directory no archived project covers would otherwise
-/// be answered with the scope's reason and exit 0. `recall::search` keeps its
-/// own copy of the rule for library callers.
-pub fn time_bound(flag: &str, raw: &str) -> Result<String, Failure> {
-    const FULL: &str = "NNNN-NN-NNTNN:NN:NN.NNNZ";
-    const DATE: &str = "NNNN-NN-NN";
-
-    let shaped = |shape: &str| {
-        raw.len() == shape.len()
-            && raw
-                .bytes()
-                .zip(shape.bytes())
-                .all(|(byte, expected)| match expected {
-                    b'N' => byte.is_ascii_digit(),
-                    other => byte == other,
-                })
-    };
-
-    if shaped(FULL) {
-        return Ok(raw.to_owned());
-    }
-    if shaped(DATE) {
-        let tail = if flag == "until" {
-            "T23:59:59.999Z"
-        } else {
-            "T00:00:00.000Z"
-        };
-        return Ok(format!("{raw}{tail}"));
-    }
-    Err(Failure::Misuse(format!(
-        "--{flag} {raw:?} is not a time; expected YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS.mmmZ"
-    )))
+/// The check is the library's and not the CLI's, so every command and the MCP
+/// server refuse the same values and extend a bare date the same way. The core
+/// message starts with the field, so the flag's dashes in front of it name the
+/// flag as it was typed, beside the value.
+pub fn date_value(parser: &mut lexopt::Parser, flag: &'static str) -> Result<String, Failure> {
+    let raw = value(parser, flag)?;
+    terminus_core::recall::checked_bound(flag, &raw)
+        .map_err(|error| Failure::Misuse(format!("--{error}")))
 }
 
 /// Parse the rest of the command line for a subcommand whose only argument is
@@ -249,4 +278,31 @@ pub fn json_flag(parser: &mut lexopt::Parser) -> Result<bool, Failure> {
         }
     }
     Ok(json)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One formatter for every size a command prints, so the install estimate
+    /// and `status` agree on a byte count (#107).
+    #[test]
+    fn a_byte_count_reads_in_powers_of_two() {
+        assert_eq!(human(0), "0 B");
+        assert_eq!(human(1023), "1023 B");
+        assert_eq!(human(1024), "1.0 KiB");
+        assert_eq!(human(1_400_000_000), "1.3 GiB");
+    }
+
+    #[test]
+    fn a_duration_reads_as_seconds_minutes_or_hours() {
+        assert_eq!(duration(0), "0s");
+        assert_eq!(duration(2), "2s");
+        assert_eq!(duration(59), "59s");
+        assert_eq!(duration(100), "1m 40s");
+        assert_eq!(duration(201), "3m 21s");
+        assert_eq!(duration(3599), "59m 59s");
+        assert_eq!(duration(7_400), "2h 3m");
+        assert_eq!(duration(-5), "-5s");
+    }
 }

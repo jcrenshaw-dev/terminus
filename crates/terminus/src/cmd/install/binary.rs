@@ -1,6 +1,6 @@
 //! The build that hook entries and the MCP registration point at.
 //!
-//! # One path, forever (D-08, INST-02)
+//! # One path, forever
 //!
 //! `~/.local/bin/terminus`. Nothing here touches `PATH`: a settings entry names
 //! the absolute path, so the binary does not need to be reachable by name, and
@@ -8,7 +8,7 @@
 //! business making.
 //!
 //! The path never moving is what lets [`super::targets`] write the four hook
-//! entries once and never rewrite them (INST-05). The settings files never
+//! entries once and never rewrite them. The settings files never
 //! learn which version is behind it, because there is nothing there to learn.
 //!
 //! # A link to a stored version
@@ -28,7 +28,7 @@
 //! and it sits outside the data directory, because `uninstall --purge` deletes
 //! that and the data directory can move.
 //!
-//! # The marker, and why version cannot do its job (D-07)
+//! # The marker, and why version cannot do its job
 //!
 //! As of 2026-08-13 `/home/john/.local/bin/verbatim`, the stable path before
 //! the rename to terminus, was a 12,076,464-byte *different program* - "capture
@@ -268,8 +268,6 @@ fn store(source: &Path, dest: &Path) -> Result<(), Failure> {
         return Ok(());
     }
 
-    // Exclusively, and not with `File::create`: a stale `.terminus-install-<pid>`
-    // symlink would otherwise be followed and whatever it points at truncated.
     let (temporary, file) = super::create_temporary(dir, TEMPORARY)?;
     let outcome = copy_into(source, file, &temporary).and_then(|()| {
         std::fs::rename(&temporary, dest).map_err(|e| {
@@ -292,9 +290,7 @@ fn store(source: &Path, dest: &Path) -> Result<(), Failure> {
 fn link(stable: &Path, target: &Path) -> Result<(), Failure> {
     let dir = parent(stable)?;
     create_dir(dir)?;
-    let (temporary, ()) = super::temporary(dir, TEMPORARY, |path| {
-        std::os::unix::fs::symlink(target, path)
-    })?;
+    let temporary = super::create_temporary_symlink(dir, TEMPORARY, target)?;
     let outcome = match occupant(stable) {
         Ok(Occupant::Foreign) => Err(super::occupied(stable)),
         Ok(Occupant::Vacant | Occupant::Ours) => std::fs::rename(&temporary, stable).map_err(|e| {

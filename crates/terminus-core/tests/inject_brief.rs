@@ -1,7 +1,7 @@
 //! The resume brief, against stores built by the ordinary ingest path.
 //!
 //! Every session here is a transcript this file wrote and `ingest::run`
-//! archived, never rows a helper inserted: what INJ-01 is about is which
+//! archived, never rows a helper inserted: what the brief is about is which
 //! `session_meta` row a real pass produced, and a test that wrote the row
 //! itself would be asserting against its own opinion of the schema.
 //!
@@ -85,7 +85,7 @@ impl Bench {
     /// Archive one session whose records are spelled out rather than being the
     /// prompt-and-reply pair [`Bench::archive`] writes.
     ///
-    /// INJ-07 is about `user` records the person did not write - a
+    /// The brief must not quote a `user` record the person did not write - a
     /// `tool_result` block, an `isMeta` caveat, a `<task-notification>`
     /// envelope - and none of the three is a `text` block with a `prompt` in
     /// it. Each entry carries only what is particular to its record; this fills
@@ -139,8 +139,8 @@ impl Bench {
         }
     }
 
-    /// A config with PRIV-03's knob written either way, through the file the
-    /// binary loads one from.
+    /// A config with `[privacy] redact_recall` written either way, through the
+    /// file the binary loads one from.
     ///
     /// There is no in-memory setter for it, deliberately, so a `terminus.toml`
     /// is the only thing that can turn it on. `on = false` spells the key out
@@ -247,7 +247,7 @@ impl Bench {
     }
 }
 
-/// A session for the AC2 tests, in `project-blocks`.
+/// A session for the block-read tests, in `project-blocks`.
 const BLOCKS: Session<'static> = Session {
     file: "blocks.jsonl",
     id: "55555555-5555-4555-8555-555555555555",
@@ -258,8 +258,9 @@ const BLOCKS: Session<'static> = Session {
     reply: "the last reply",
 };
 
-/// AC2 for the brief: when the two quoted turns sit in one block of a session
-/// of three or more, the brief fetches that one row and decompresses it once.
+/// The brief's block reads: when the two quoted turns sit in one block of a
+/// session of three or more, the brief fetches that one row and decompresses
+/// it once.
 #[test]
 fn the_brief_reads_only_the_row_its_two_quotes_sit_in() {
     let bench = bench();
@@ -289,8 +290,9 @@ fn the_brief_reads_only_the_row_its_two_quotes_sit_in() {
     assert_eq!(reads.blocks_decompressed, 1, "{reads:?}");
 }
 
-/// AC2 for the brief: a quoted reply spanning k blocks costs the union of the
-/// rows the two quotes cover, each fetched and decompressed once.
+/// The brief's block reads across blocks: a quoted reply spanning k blocks
+/// costs the union of the rows the two quotes cover, each fetched and
+/// decompressed once.
 #[test]
 fn the_brief_reads_the_union_of_the_rows_its_quotes_cover() {
     let bench = bench();
@@ -339,8 +341,9 @@ const LATE: Session<'static> = Session {
     reply: "the late reply, about sprockets",
 };
 
-/// D-17: the session with the greatest `last_turn_at`, at day resolution, with
-/// the branch it ended on and the last thing said in each direction.
+/// The brief names the session with the greatest `last_turn_at`, at day
+/// resolution, with the branch it ended on and the last thing said in each
+/// direction.
 #[test]
 fn the_brief_names_the_last_session_of_the_project_and_nothing_of_the_earlier_one() {
     let bench = bench();
@@ -377,9 +380,9 @@ fn the_brief_names_the_last_session_of_the_project_and_nothing_of_the_earlier_on
     );
 }
 
-/// A subagent sidecar is not a session the brief may name, however recent it is
-/// (`DESIGN-BRIEF.md:239`). Its `parent_session_key` is what excludes it, and
-/// that column comes from the sidecar's path (D-03).
+/// A subagent sidecar is not a session the brief may name, however recent it
+/// is. Its `parent_session_key` is what excludes it, and that column comes from
+/// the sidecar's path.
 #[test]
 fn a_later_subagent_sidecar_does_not_become_the_named_session() {
     let bench = bench();
@@ -457,7 +460,7 @@ fn a_session_with_no_branch_still_renders_the_rest() {
 }
 
 // ---------------------------------------------------------------------------
-// INJ-07: the quoted prompt is a turn the person typed
+// The quoted prompt is a turn the person typed
 
 /// The prompt every case below has to end up quoting, and the reply beside it.
 const TYPED: &str = "the prompt somebody actually typed, about sprockets";
@@ -561,7 +564,7 @@ fn a_session_ending_in_a_tool_result_quotes_the_last_typed_prompt() {
     }
 }
 
-/// D-02's other two shapes: a `<task-notification>` envelope and an
+/// The other two untyped shapes: a `<task-notification>` envelope and an
 /// `isMeta: true` caveat are `user` records nobody typed either, and 12.3% of
 /// measured sessions end on one of them.
 ///
@@ -618,7 +621,7 @@ fn a_session_ending_in_a_harness_record_quotes_the_prompt_before_it() {
 /// every other block still rendered.
 ///
 /// Fixture-only, and deliberately so: 0 of 700 sampled real transcripts have
-/// zero person-authored `user` records (D-13). `session-errors-a.jsonl` is
+/// zero person-authored `user` records. `session-errors-a.jsonl` is
 /// three `Bash` calls and their three `tool_result` records and nothing else,
 /// which is exactly that session.
 #[test]
@@ -646,14 +649,15 @@ fn a_session_with_no_typed_prompt_renders_no_asked_line() {
     }
 }
 
-/// D-10 and D-18, asserted against the source rather than against behaviour.
+/// The injection path spawns no process and reads no `observations`, asserted
+/// against the source rather than against behaviour.
 ///
 /// Neither is observable from the outside: a `git` subprocess that costs 10-30
-/// ms still returns the right answer, and a query against `observations` would
-/// only fail once phase 7 exists to make the table appear on some machines and
-/// not others. The comments are stripped first because this module's own doc
-/// explains at length why neither appears - a raw grep would match the
-/// explanation and never the thing.
+/// ms still returns the right answer, and a query against `observations`
+/// succeeds on every store, because every store has the table. The comments
+/// are stripped first because this module's own doc explains at length why
+/// neither appears - a raw grep would match the explanation and never the
+/// thing.
 #[test]
 fn nothing_in_the_injection_path_spawns_a_process_or_reads_observations() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/inject");
@@ -678,7 +682,7 @@ fn nothing_in_the_injection_path_spawns_a_process_or_reads_observations() {
 }
 
 // ---------------------------------------------------------------------------
-// The budget (INJ-01, D-16)
+// The budget
 
 /// A turn long enough that the brief cannot carry both of them whole.
 fn long_turn(subject: &str) -> String {
@@ -686,7 +690,7 @@ fn long_turn(subject: &str) -> String {
 }
 
 /// The header line, the opening tag on the next line, and the closing tag once,
-/// as the last characters (D-02).
+/// as the last characters.
 fn assert_framed(brief: &str) {
     let mut lines = brief.lines();
     let header = lines.next().unwrap_or_default();
@@ -825,7 +829,7 @@ fn no_brief_exceeds_the_ceiling_whatever_the_config_says() {
     assert_framed(&brief);
 }
 
-/// D-06: at every budget from nothing to the whole brief, the arm either
+/// At every budget from nothing to the whole brief, the arm either
 /// renders nothing and remembers nothing, or renders a brief that fits and
 /// ends with the closing tag.
 ///
@@ -944,8 +948,9 @@ fn a_budget_that_leaves_a_quoted_turn_no_room_marks_it_and_does_not_record_it() 
     }
 }
 
-/// AC3 for the brief: a closing tag planted in any archived string it carries
-/// comes out neutralized, and the real one is there exactly once, at the end.
+/// The brief's frame holds: a closing tag planted in any archived string it
+/// carries comes out neutralized, and the real one is there exactly once, at
+/// the end.
 ///
 /// Planted in the typed prompt and the reply (the two quotations), in
 /// `gitBranch`, in the `cwd` (the project key degrades to that string, and the
@@ -999,7 +1004,7 @@ fn a_closing_tag_planted_in_any_archived_string_is_neutralized() {
 }
 
 // ---------------------------------------------------------------------------
-// PRIV-03: the brief's quotations, filtered before the budget is spent
+// The brief's quotations, filtered before the budget is spent
 // ---------------------------------------------------------------------------
 
 /// The `Cookie:` value planted on the last typed turn of
@@ -1052,13 +1057,13 @@ fn an_unfiltered_brief_quotes_the_planted_credential_whole() {
     );
 }
 
-/// PRIV-03 over the `SessionStart` brief: hook stdout is the model's first
-/// context of a session, so the knob filters what it quotes.
+/// `redact_recall` over the `SessionStart` brief: hook stdout is the model's
+/// first context of a session, so the knob filters what it quotes.
 ///
-/// The filter runs before the budget is measured (phase 4 D-06), never after
-/// `clip`: a marker cut in half by the budget would leave a nameless partial
-/// value no shape rule can catch, and the brief would be the one output where a
-/// long turn still leaks.
+/// The filter runs before the budget is measured, never after `clip`: a marker
+/// cut in half by the budget would leave a nameless partial value no shape rule
+/// can catch, and the brief would be the one output where a long turn still
+/// leaks.
 #[test]
 fn the_knob_takes_the_planted_credential_out_of_the_briefs_quotation() {
     let bench = bench();
@@ -1097,7 +1102,7 @@ fn the_knob_takes_the_planted_credential_out_of_the_briefs_quotation() {
     }
 }
 
-/// INJ-02's byte identity, restated with the knob on: two renders against an
+/// The brief's byte identity, restated with the knob on: two renders against an
 /// unchanged store are the same brief.
 ///
 /// The filter is a pure function of the projection, so it cannot be what makes

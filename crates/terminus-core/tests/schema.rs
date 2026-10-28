@@ -60,8 +60,8 @@ fn a_fresh_store_carries_exactly_the_phase_two_tables() {
     }
 }
 
-/// D-10: `turns_fts` must be contentless *and* deletable, or a rebuild cannot
-/// be idempotent.
+/// `turns_fts` must be contentless *and* deletable, or a rebuild cannot be
+/// idempotent.
 #[test]
 fn turns_fts_is_contentless_and_deletable() {
     let (_dir, store) = fresh();
@@ -77,20 +77,20 @@ fn turns_fts_is_contentless_and_deletable() {
     assert!(sql.contains("contentless_delete=1"), "{sql}");
 }
 
-/// D-11 keeps two lineage signals apart, and each lives on its own table.
+/// Two lineage signals are kept apart, and each lives on its own table.
 #[test]
 fn the_two_lineage_columns_exist_on_their_own_tables() {
     let (_dir, store) = fresh();
     assert!(columns(store.conn(), "turns").contains("parent_uuid"));
     assert!(columns(store.conn(), "session_meta").contains("continues_from"));
 
-    // The point of D-11 is that neither replaces the other.
+    // The point of keeping them apart is that neither replaces the other.
     assert!(!columns(store.conn(), "turns").contains("continues_from"));
     assert!(!columns(store.conn(), "session_meta").contains("parent_uuid"));
 }
 
-/// D-04: turn coordinates address the uncompressed stream, so no column here
-/// may name a compressed position.
+/// Turn coordinates address the uncompressed stream, so no column here may
+/// name a compressed position.
 #[test]
 fn turn_coordinates_are_uncompressed_stream_coordinates() {
     let (_dir, store) = fresh();
@@ -144,8 +144,8 @@ fn a_turn_seq_past_the_reserved_space_panics_rather_than_folding() {
     turn_id(1, MAX_TURNS_PER_SESSION);
 }
 
-/// The FTS5 round trip D-10 depends on, against the real table rather than a
-/// scratch one: insert at an explicit rowid, match, delete, match again.
+/// The FTS5 round trip a rebuild depends on, against the real table rather
+/// than a scratch one: insert at an explicit rowid, match, delete, match again.
 #[test]
 fn an_fts_row_at_an_explicit_rowid_matches_then_deletes() {
     let (_dir, store) = fresh();
@@ -166,8 +166,8 @@ fn an_fts_row_at_an_explicit_rowid_matches_then_deletes() {
     assert!(matching(conn, "brillig").is_empty());
 }
 
-/// Derived tables start empty; phase 1 owns the tables and the rebuild path,
-/// not what fills them.
+/// Derived tables start empty: opening a store creates them, and only ingest
+/// or a rebuild fills them.
 #[test]
 fn derived_tables_start_empty() {
     let (_dir, store) = fresh();
@@ -180,9 +180,8 @@ fn derived_tables_start_empty() {
     }
 }
 
-/// A store carrying phase 1's shape: one fixture archived, then every column
-/// phase 2 added dropped back off and `derived_schema` put back where a phase 1
-/// binary left it. What a user's store looks like the moment they upgrade.
+/// A store one `derived_schema` behind: one fixture archived, then
+/// `derived_schema` put back below this build's.
 #[cfg(feature = "testkit")]
 struct Aged {
     _dir: tempfile::TempDir,
@@ -216,26 +215,11 @@ fn aged_store() -> Aged {
         .query_row("SELECT checksum FROM session_meta", [], |r| r.get(0))
         .unwrap();
 
-    for (table, added) in schema::BRING_FORWARD_COLUMNS {
-        for (name, _) in *added {
-            conn.execute_batch(&format!("ALTER TABLE {table} DROP COLUMN {name}"))
-                .unwrap_or_else(|e| panic!("drop {table}.{name}: {e}"));
-        }
-    }
     conn.execute(
         "UPDATE meta SET value = '1' WHERE key = ?1",
         [META_DERIVED_SCHEMA],
     )
     .unwrap();
-
-    // The premise. Without this the two tests below pass on a store that was
-    // never aged at all.
-    for (table, added) in schema::BRING_FORWARD_COLUMNS {
-        let present = columns(&conn, table);
-        for (name, _) in *added {
-            assert!(!present.contains(*name), "{table}.{name} survived the drop");
-        }
-    }
     drop(conn);
 
     Aged {
@@ -249,16 +233,8 @@ fn aged_store() -> Aged {
 
 #[cfg(feature = "testkit")]
 impl Aged {
-    /// Every column phase 2 added is back, and the archive is byte-identical to
-    /// what it held before the columns were dropped.
-    fn assert_brought_forward(&self, conn: &Connection) {
-        for (table, added) in schema::BRING_FORWARD_COLUMNS {
-            let present = columns(conn, table);
-            for (name, _) in *added {
-                assert!(present.contains(*name), "{table}.{name} did not come back");
-            }
-        }
-
+    /// The archive is byte-identical to what it held before the store was aged.
+    fn assert_archive_untouched(&self, conn: &Connection) {
         let key: String = conn
             .query_row("SELECT session_key FROM sessions", [], |r| r.get(0))
             .unwrap();
@@ -267,26 +243,23 @@ impl Aged {
             .query_row("SELECT checksum FROM session_meta", [], |r| r.get(0))
             .unwrap();
         assert_eq!(key, self.session_key, "the archive lost its session key");
-        assert!(blob == self.blob, "the bring-forward rewrote the blob");
-        assert_eq!(
-            checksum, self.checksum,
-            "the bring-forward moved the checksum"
-        );
+        assert!(blob == self.blob, "the open rewrote the blob");
+        assert_eq!(checksum, self.checksum, "the open moved the checksum");
     }
 }
 
-/// The ingest path's opener brings the columns back and rebuilds the derived
-/// tables, and the archive comes through untouched.
+/// The ingest path's opener rebuilds the derived tables of an older store and
+/// stamps it forward, and the archive comes through untouched.
 #[cfg(feature = "testkit")]
 #[test]
-fn a_reindex_open_brings_every_phase_two_column_back() {
+fn a_reindex_open_stamps_an_older_store_forward_and_keeps_its_archive() {
     use terminus_core::store::{DERIVED_SCHEMA, META_DERIVED_SCHEMA};
 
     let aged = aged_store();
     let store = terminus_core::reindex::open_up_to_date(&aged.data_dir)
         .expect("an aged store still opens for work");
 
-    aged.assert_brought_forward(store.conn());
+    aged.assert_archive_untouched(store.conn());
     assert_eq!(
         store.meta_int(META_DERIVED_SCHEMA).unwrap(),
         Some(DERIVED_SCHEMA),
@@ -294,21 +267,19 @@ fn a_reindex_open_brings_every_phase_two_column_back() {
     );
 }
 
-/// The one that matters for the writable openers that never rebuild -
-/// `compact`, `observations regenerate` and the snapshot taken after a pass: a
-/// plain `Store::open` with no `reindex` still finds every phase 2 column, and
-/// fires no derived rebuild while doing it. Gating the bring-forward on
-/// `rebuild_required` would leave them hitting `no such column` on a healthy
-/// store an older build wrote.
+/// The writable openers that never rebuild - `compact`, `observations
+/// regenerate` and the snapshot taken after a pass - open through `Store::open`
+/// alone. On an older store that open rebuilds nothing and still reports the
+/// rebuild as required, which is left to `reindex::up_to_date`.
 #[cfg(feature = "testkit")]
 #[test]
-fn a_plain_open_brings_the_columns_back_and_fires_no_rebuild() {
+fn a_plain_open_of_an_older_store_fires_no_rebuild() {
     use terminus_core::store::META_DERIVED_SCHEMA;
 
     let aged = aged_store();
-    let store = Store::open(&aged.data_dir).expect("an aged store opens read-side too");
+    let store = Store::open(&aged.data_dir).expect("an aged store opens");
 
-    aged.assert_brought_forward(store.conn());
+    aged.assert_archive_untouched(store.conn());
     assert_eq!(
         store.meta_int(META_DERIVED_SCHEMA).unwrap(),
         Some(1),
@@ -318,26 +289,6 @@ fn a_plain_open_brings_the_columns_back_and_fires_no_rebuild() {
         store.rebuild_required().is_some(),
         "the aged store must still be reported as needing a rebuild"
     );
-
-    // The failure this exists to catch, in the shape it actually takes: a
-    // SELECT naming every phase 2 column.
-    store
-        .conn()
-        .query_row(
-            "SELECT agent_meta, transcript_diverged, project_pre_worktree
-             FROM session_meta LIMIT 1",
-            [],
-            |_| Ok(()),
-        )
-        .expect("session_meta is missing a phase 2 column");
-    store
-        .conn()
-        .query_row(
-            "SELECT files_committed, files_failed FROM runs LIMIT 1",
-            [],
-            |_| Ok(()),
-        )
-        .expect("runs is missing a phase 2 column");
 }
 
 fn columns(conn: &Connection, table: &str) -> BTreeSet<String> {
@@ -370,7 +321,7 @@ fn index_count(conn: &Connection, name: &str) -> i64 {
     .unwrap()
 }
 
-/// D-19: an index added in a later phase reaches an existing store because
+/// An index added in a later build reaches an existing store because
 /// `reindex` runs the whole `CREATE_SQL` batch, and not because `Store::open`
 /// creates it.
 ///
@@ -395,7 +346,7 @@ fn the_project_index_reaches_a_store_that_predates_it() {
     assert_eq!(index_count(store.conn(), "idx_session_meta_project"), 1);
 }
 
-/// D-01: `observations` reaches a store written before it existed through
+/// `observations` reaches a store written before it existed through
 /// `bring_forward`'s missing-table arm, and costs no rebuild to get there.
 ///
 /// The alternative was a `DERIVED_SCHEMA` bump, which forces a full blob replay
@@ -427,7 +378,7 @@ fn the_observations_table_reaches_a_store_that_predates_it() {
     );
 }
 
-/// D-02: the table is archival. A `DERIVED_TABLES` entry would make `reindex`
+/// `observations` is archival. A `DERIVED_TABLES` entry would make `reindex`
 /// drop it, and an evicted session's row cannot be recomputed from its emptied
 /// blob.
 #[test]
@@ -439,7 +390,7 @@ fn observations_is_not_a_derived_table() {
     assert!(schema::TABLES.contains(&"observations"));
 }
 
-/// D-03: no column of `observations` may reference `turns`, which `reindex`
+/// No column of `observations` may reference `turns`, which `reindex`
 /// drops - the bundled SQLite enforces foreign keys, so the first `reindex`
 /// after the first observation would fail outright.
 #[test]
@@ -460,137 +411,7 @@ fn observations_declares_no_reference_to_turns() {
     assert!(sql.contains("REFERENCES sessions"), "{sql}");
 }
 
-// --- Phase 8: session_meta.capture_mode (ING-07, D-13, D-19) -----------------
-
-/// Every column of a table, in declaration order, as `(cid, name, type)`.
-///
-/// The ORDER is the assertion. `ALTER TABLE ADD COLUMN` appends, so a column
-/// declared mid-table in `CREATE_SQL` gives a fresh store one order and an
-/// upgraded store another, and any positional `r.get(n)` then reads a different
-/// column depending on how old the store is.
-#[cfg(feature = "testkit")]
-fn column_layout(conn: &Connection, table: &str) -> Vec<(i64, String, String)> {
-    let mut stmt = conn
-        .prepare(&format!("PRAGMA table_info({table})"))
-        .unwrap();
-    stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-        .unwrap()
-        .map(Result::unwrap)
-        .collect()
-}
-
-/// D-19's whole point, stated as an assertion over both stores at once: a store
-/// written by an earlier binary and brought forward carries `session_meta` in
-/// the same column order a fresh one does.
-#[cfg(feature = "testkit")]
-#[test]
-fn a_brought_forward_session_meta_has_the_same_column_order_as_a_fresh_one() {
-    let aged = aged_store();
-    let brought = Store::open(&aged.data_dir).expect("an aged store opens");
-    let (_dir, fresh_store) = fresh();
-
-    let brought_layout = column_layout(brought.conn(), "session_meta");
-    let fresh_layout = column_layout(fresh_store.conn(), "session_meta");
-    assert_eq!(
-        brought_layout, fresh_layout,
-        "a brought-forward session_meta must be laid out exactly like a fresh one"
-    );
-
-    // The premise: the column this phase added is really there, and really last.
-    let last = brought_layout.last().expect("session_meta has columns");
-    assert_eq!(
-        last.1, "capture_mode",
-        "capture_mode must be the last column"
-    );
-    assert_eq!(last.2, "TEXT");
-
-    // And the same for `runs`, which is the other table with a bring-forward
-    // list - a regression here would be silent everywhere else.
-    assert_eq!(
-        column_layout(brought.conn(), "runs"),
-        column_layout(fresh_store.conn(), "runs")
-    );
-
-    // And for `turns`, the third: the only DERIVED table with a bring-forward
-    // list, where the layout claim matters twice over -
-    // the preserving rebuild path never recreates the table, so a brought-forward
-    // `turns` is the only `turns` such a store will ever have.
-    let brought_turns = column_layout(brought.conn(), "turns");
-    assert_eq!(
-        brought_turns,
-        column_layout(fresh_store.conn(), "turns"),
-        "a brought-forward turns must be laid out exactly like a fresh one"
-    );
-    let last = brought_turns.last().expect("turns has columns");
-    assert_eq!(last.1, "is_typed", "is_typed must be the last column");
-    assert_eq!(last.2, "INTEGER");
-}
-
-/// The upgrade a phase 8 binary actually performs on a phase 7 store: ONE
-/// column missing, `derived_schema` already current. It is added, the store is
-/// not rebuilt, and nothing asks for a rebuild.
-///
-/// `aged_store` cannot answer this - it lowers `derived_schema` to 1, so a
-/// rebuild is required there for a reason that has nothing to do with the
-/// column. D-19's claim is that an added column costs no `DERIVED_SCHEMA` bump,
-/// and this is the only shape that can falsify it.
-#[cfg(feature = "testkit")]
-#[test]
-fn the_capture_mode_column_reaches_an_older_store_without_a_rebuild() {
-    use terminus_core::store::{DB_FILE_NAME, DERIVED_SCHEMA, META_DERIVED_SCHEMA};
-
-    let dir = tempfile::tempdir().unwrap();
-    let data_dir = dir.path().join("data");
-    let work = dir.path().join("work");
-    std::fs::create_dir_all(&work).unwrap();
-    let path = terminus_core::testkit::copy_fixture_into("session-basic.jsonl", &work);
-    match terminus_core::ingest::run(&data_dir, &path).unwrap() {
-        terminus_core::ingest::Outcome::Committed(_) => {}
-        other => panic!("the fixture must archive: {other:?}"),
-    }
-
-    let conn = Connection::open(data_dir.join(DB_FILE_NAME)).unwrap();
-    let turns_before: i64 = conn
-        .query_row("SELECT count(*) FROM turns", [], |r| r.get(0))
-        .unwrap();
-    let key: String = conn
-        .query_row("SELECT session_key FROM sessions", [], |r| r.get(0))
-        .unwrap();
-    let blob_before = terminus_core::testkit::stored(&conn, &key);
-    conn.execute_batch("ALTER TABLE session_meta DROP COLUMN capture_mode")
-        .unwrap();
-    assert!(
-        !columns(&conn, "session_meta").contains("capture_mode"),
-        "the premise: the column is gone"
-    );
-    drop(conn);
-
-    let store = Store::open(&data_dir).expect("a store one column behind still opens");
-    assert!(
-        columns(store.conn(), "session_meta").contains("capture_mode"),
-        "the column did not come back"
-    );
-    assert_eq!(
-        store.meta_int(META_DERIVED_SCHEMA).unwrap(),
-        Some(DERIVED_SCHEMA),
-        "an added column must not move derived_schema"
-    );
-    assert!(
-        store.rebuild_required().is_none(),
-        "an added column must not force a rebuild of the derived tables"
-    );
-
-    let turns_after: i64 = store
-        .conn()
-        .query_row("SELECT count(*) FROM turns", [], |r| r.get(0))
-        .unwrap();
-    let blob_after = terminus_core::testkit::stored(store.conn(), &key);
-    assert_eq!(turns_after, turns_before, "the derived tables were rebuilt");
-    assert!(
-        blob_after == blob_before,
-        "the bring-forward touched the blob"
-    );
-}
+// --- session_meta.capture_mode -----------------------------------------------
 
 /// A config directory holding one `terminus.toml` naming a capture mode.
 #[cfg(feature = "testkit")]
@@ -606,7 +427,8 @@ fn mode_config(mode: &str) -> (tempfile::TempDir, terminus_core::Config) {
     (dir, config)
 }
 
-/// D-13's rule, both directions: `full` only while every append was full.
+/// The capture-mode rule, both directions: `full` only while every append was
+/// full.
 ///
 /// The asymmetry is the point. A `full` pass over a session already captured
 /// lean must NOT move the column back, because `blob::append` copies completed
@@ -670,150 +492,4 @@ fn capture_mode_records_the_reduced_mode_whichever_pass_came_first() {
         Some("minimal"),
         "the same, for the mode that elides unconditionally"
     );
-}
-
-// --- The session-summary columns, dropped once -------------------------------
-
-/// `observations` as it was declared while Terminus called a model: all
-/// fourteen columns, spelled out here so the test does not depend on any list
-/// the code under test also reads.
-#[cfg(feature = "testkit")]
-const SUMMARY_ERA_OBSERVATIONS: &str = "
-    DROP TABLE observations;
-    CREATE TABLE observations (
-        session_key    TEXT PRIMARY KEY REFERENCES sessions(session_key),
-        session_id     TEXT,
-        generated_at   TEXT,
-        mechanical     TEXT,
-        status         TEXT,
-        model          TEXT,
-        prompt_version TEXT,
-        topic          TEXT,
-        outcome        TEXT,
-        decisions      TEXT,
-        learned        TEXT,
-        unresolved     TEXT,
-        raw            TEXT,
-        tokens         INTEGER
-    );
-";
-
-/// Every row's `mechanical`, as the bytes stored, keyed by session.
-#[cfg(feature = "testkit")]
-fn mechanical_bytes(conn: &Connection) -> Vec<(String, Option<Vec<u8>>)> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT session_key, CAST(mechanical AS BLOB) FROM observations
-             ORDER BY session_key",
-        )
-        .unwrap();
-    stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
-        .unwrap()
-        .map(Result::unwrap)
-        .collect()
-}
-
-/// A store that still carries the ten summary columns opens without them, its
-/// mechanical facts byte-identical, the token budget key gone, `verify` clean,
-/// and the same column layout a fresh store has. A second open changes nothing.
-#[cfg(feature = "testkit")]
-#[test]
-fn a_store_with_the_summary_columns_opens_without_them() {
-    use terminus_core::store::DB_FILE_NAME;
-
-    let dir = tempfile::tempdir().unwrap();
-    let data_dir = dir.path().join("data");
-    let work = dir.path().join("work");
-    std::fs::create_dir_all(&work).unwrap();
-    for fixture in ["session-basic.jsonl", "session-edits.jsonl"] {
-        let path = terminus_core::testkit::copy_fixture_into(fixture, &work);
-        match terminus_core::ingest::run(&data_dir, &path).unwrap() {
-            terminus_core::ingest::Outcome::Committed(_) => {}
-            other => panic!("{fixture} must archive: {other:?}"),
-        }
-    }
-
-    let conn = Connection::open(data_dir.join(DB_FILE_NAME)).unwrap();
-    conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
-    let keys: Vec<String> = {
-        let mut stmt = conn
-            .prepare("SELECT session_key FROM sessions ORDER BY session_no")
-            .unwrap();
-        stmt.query_map([], |r| r.get(0))
-            .unwrap()
-            .map(Result::unwrap)
-            .collect()
-    };
-    assert_eq!(keys.len(), 2, "both fixtures are archived");
-
-    conn.execute_batch(SUMMARY_ERA_OBSERVATIONS).unwrap();
-    conn.execute(
-        "INSERT INTO observations VALUES (
-            ?1, 'sid-ok', '2026-09-12T10:00:00.000Z', '{\"turns\":3,\"files_read\":[\"a.rs\"]}',
-            'ok', 'gpt-5.4-mini', 'obs-judgment-1', 'a topic', 'completed',
-            '[{\"turn_id\":1,\"text\":\"a decision\"}]', '[]', '[]', NULL, 394)",
-        [&keys[0]],
-    )
-    .unwrap();
-    conn.execute(
-        "INSERT INTO observations (session_key, session_id, generated_at, mechanical, status)
-         VALUES (?1, 'sid-judging', '2026-09-12T11:00:00.000Z', '{\"turns\":7}',
-                 'judging 2026-09-12T11:00:01.000Z')",
-        [&keys[1]],
-    )
-    .unwrap();
-    conn.execute(
-        "INSERT INTO meta (key, value) VALUES ('observe.daily_tokens', '2026-09-12 31100000')",
-        [],
-    )
-    .unwrap();
-    let before = mechanical_bytes(&conn);
-    assert_eq!(before.len(), 2);
-    drop(conn);
-
-    let store = Store::open(&data_dir).expect("a store with the summary columns opens");
-    let present = columns(store.conn(), "observations");
-    for column in [
-        "status",
-        "model",
-        "prompt_version",
-        "topic",
-        "outcome",
-        "decisions",
-        "learned",
-        "unresolved",
-        "raw",
-        "tokens",
-    ] {
-        assert!(!present.contains(column), "{column} survived the open");
-    }
-    assert_eq!(
-        mechanical_bytes(store.conn()),
-        before,
-        "the drop changed a mechanical document"
-    );
-    let budget: i64 = store
-        .conn()
-        .query_row(
-            "SELECT count(*) FROM meta WHERE key = 'observe.daily_tokens'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(budget, 0, "the token budget key survived the open");
-    let report = terminus_core::verify::verify(&store).unwrap();
-    assert!(report.is_ok(), "{}", report.render());
-
-    let (_fresh_dir, fresh_store) = fresh();
-    let upgraded_layout = column_layout(store.conn(), "observations");
-    assert_eq!(
-        upgraded_layout,
-        column_layout(fresh_store.conn(), "observations"),
-        "an upgraded observations table must be laid out exactly like a fresh one"
-    );
-    drop(store);
-
-    let again = Store::open(&data_dir).expect("a second open succeeds");
-    assert_eq!(column_layout(again.conn(), "observations"), upgraded_layout);
-    assert_eq!(mechanical_bytes(again.conn()), before);
 }

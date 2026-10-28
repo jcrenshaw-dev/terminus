@@ -1,5 +1,4 @@
-//! Redaction of recall projections on their way into the model's context
-//! (PRIV-03).
+//! Redaction of recall projections on their way into the model's context.
 //!
 //! # One entry point
 //!
@@ -106,12 +105,12 @@
 //! exactly that until 2026-08-30: it deferred every header name preceded by a
 //! double quote to rule 4, and rule 4 fires only once the quoted run CLOSES
 //! before the colon, so the ordinary curl spelling `-H "Authorization: Bearer
-//! <v>"` was caught by neither and went out whole. Measured on the same corpus
-//! D-03 used, 347 of 1333 `Authorization:` occurrences sat immediately behind a
-//! double quote. A hand-off is only a hand-off when the receiving rule's own
-//! predicate is known to hold; anything else is an under-match wearing a
-//! comment. The same defect in the quoted-VALUE direction is why the value span
-//! is taken with [`flag_value_span`].
+//! <v>"` was caught by neither and went out whole. Measured over real
+//! transcripts, 347 of 1333 `Authorization:` occurrences sat immediately
+//! behind a double quote. A hand-off is only a hand-off when the receiving
+//! rule's own predicate is known to hold; anything else is an under-match
+//! wearing a comment. The same defect in the quoted-VALUE direction is why
+//! the value span is taken with [`flag_value_span`].
 //!
 //! # Egress only, never ingest
 //!
@@ -208,7 +207,7 @@ const MIN_JWT_CHARS: usize = 12;
 /// floor of 6 would redact `sk-notification`.
 const MIN_SK_KEY_BODY: usize = 20;
 
-/// Filter a derived projection on its way into the model's context (PRIV-03).
+/// Filter a derived projection on its way into the model's context.
 ///
 /// Unconditional here and gated by the caller: whether a projection is filtered
 /// at all is [`crate::config::Config::redact_recall`], read at the entry points
@@ -229,7 +228,8 @@ pub fn for_model_context(text: &str) -> String {
 /// sites and stays reviewable at them.
 ///
 /// Five call sites resolve one today and every one of them passes
-/// [`Redaction::of`]: the four projections PRIV-03 names, and
+/// [`Redaction::of`]: the four recall projections - a search excerpt, a
+/// context window's turn, a `recall_get` body and a brief's quotation - and
 /// `inject::prompt`'s per-prompt injection, whose excerpts go onto hook stdout
 /// as the model's next context exactly like the other four.
 ///

@@ -1,20 +1,21 @@
-//! RCL-02 and RCL-03: the exact-match entities a structured tool record leaves
-//! behind.
+//! The exact-match entities a structured tool record leaves behind, with each
+//! error normalized so a recurrence matches the earlier one.
 //!
-//! **Where they come from (D-02).** One record's own bytes and nothing else:
+//! **Where they come from.** One record's own bytes and nothing else:
 //! the `tool_use` and `tool_result` blocks of `message.content`, and the
 //! top-level `toolUseResult` object. There is no join between a call and its
 //! result - that would need a `tool_use_id` index and a second pass, and would
 //! break the one-record-in / one-row-out shape that gives ingest and rebuild a
 //! single seam. Nothing is read from prose, and nothing from `attachment`, even
-//! though the text projection reads that one: D-02 names three subtrees.
+//! though the text projection reads that one: entities come from those three
+//! subtrees only.
 //!
 //! **What that buys.** An assistant sentence mentioning `src/main.rs` is a
 //! guess about what happened; a `Read` whose `file_path` is `src/main.rs` is a
 //! record of it. Exact-match recall over the second is worth something and over
 //! the first is a keyword search that already exists in `turns_fts`.
 //!
-//! Nothing here rejects a value for being common (RCL-04). "Too common" changes
+//! Nothing here rejects a value for being common. "Too common" changes
 //! as the corpus grows and an index-time rejection is irreversible; commonness
 //! is a query-time weighting problem.
 
@@ -27,7 +28,7 @@ use super::text::floor_char_boundary;
 pub const PATH: &str = "path";
 /// The program a `Bash` call ran.
 pub const COMMAND: &str = "command";
-/// A failure's normalized text (D-03, D-04).
+/// A failure's normalized text.
 pub const ERROR: &str = "error";
 /// An identifier-shaped token out of a search pattern or an edit.
 pub const SYMBOL: &str = "symbol";
@@ -66,7 +67,7 @@ pub fn is_recall_search(name: &str) -> bool {
     }
 }
 
-/// How many entities one turn may emit, across every kind (RCL-04, D-15).
+/// How many entities one turn may emit, across every kind.
 ///
 /// Measured over a 300-file sample of the real corpus: of the turns emitting any
 /// entity at all, p50 emits 3, p90 emits 10, p99 emits 38 and the largest emits
@@ -74,7 +75,7 @@ pub fn is_recall_search(name: &str) -> bool {
 /// untouched - which is the point of capping at all, since the alternative is
 /// one `git status --porcelain` result writing a row per changed file.
 ///
-/// This is a bound on rows and **not** a stop-list. RCL-04 forbids rejecting an
+/// This is a bound on rows and **not** a stop-list. Nothing may reject an
 /// entity at index time for being common - "too common" changes as the corpus
 /// grows and the rejection is irreversible - and a value dropped by position
 /// because its turn carried 150 of them is not a value rejected for what it is.
@@ -88,7 +89,7 @@ pub const MAX_ENTITIES_PER_TURN: usize = 48;
 /// on the record's bytes and on nothing about the store, so re-deriving the same
 /// record twice writes the same list twice. The cap is applied in that same
 /// order and never by frequency, recency or anything else the store knows -
-/// a data-dependent cut would make the rebuild AC3 asserts depend on what else
+/// a data-dependent cut would make what a rebuild writes depend on what else
 /// was in the store at the time.
 pub fn extract(record: &Value) -> Vec<Entity> {
     let mut out = Collector::default();
@@ -143,7 +144,7 @@ impl Collector {
             return;
         };
         // The same value `parse::record::tool_name` lifts into `turns.tool_name`
-        // (D-16 measured at most one `tool_use` block per record), so a
+        // (at most one `tool_use` block per record was measured), so a
         // `kind = 'tool'` filter and the column cannot disagree.
         self.push(TOOL, name);
 
@@ -183,13 +184,13 @@ impl Collector {
         }
     }
 
-    /// What a `recall_search` call went looking FOR (FEED-02, D-13).
+    /// What a `recall_search` call went looking FOR.
     ///
     /// This is the one tool whose inputs are evidence about the injector rather
     /// than about the project: a model that asked recall for something is a
     /// model that did not already have it, which is the whole of how a decision
     /// gets labelled `miss`. The label join is SQL over `entities` and may not
-    /// read the blob (D-07), so if the query never becomes rows there is nothing
+    /// read the blob, so if the query never becomes rows there is nothing
     /// downstream that can say what was searched for.
     ///
     /// The `query` is treated exactly as a `Grep` `pattern` is - it is the same
@@ -219,7 +220,7 @@ impl Collector {
     /// The identifier-shaped tokens of a string field, and nothing else.
     ///
     /// `old_string` and a `Grep` `pattern` can both hold prose, so the shape
-    /// test is what keeps RCL-02's "not from prose" true for a field that is not
+    /// test is what keeps "never from prose" true for a field that is not
     /// structurally guaranteed to hold a symbol. An internal case or underscore
     /// boundary admits `SearchManager` and `search_manager` and refuses every
     /// ordinary English word.
@@ -234,7 +235,7 @@ impl Collector {
         }
     }
 
-    /// One `tool_result` block: half of D-03's error signal.
+    /// One `tool_result` block: half of the error signal.
     ///
     /// `is_error: true` and nothing else - not the `interrupted` flag, which
     /// says a `Bash` call was cut short rather than that it failed, and not an
@@ -249,13 +250,13 @@ impl Collector {
     }
 
     /// The top-level `toolUseResult`. Two path keys, not one, and a non-empty
-    /// `stderr` as the other half of D-03's error signal.
+    /// `stderr` as the other half of the error signal.
     ///
-    /// D-02's measurement counted `filePath` at the top level only (679 of that
-    /// sample) and the code that followed it read only there. `Read` - the tool
-    /// that names a file more often than any other - nests its path one level
-    /// down at `file.filePath` instead, so the result-side turn of every `Read`
-    /// emitted no path at all. Remeasured over a 400-file sample: 8,719
+    /// The first measurement counted `filePath` at the top level only (679 of
+    /// that sample) and the code that followed it read only there. `Read` - the
+    /// tool that names a file more often than any other - nests its path one
+    /// level down at `file.filePath` instead, so the result-side turn of every
+    /// `Read` emitted no path at all. Remeasured over a 400-file sample: 8,719
     /// `toolUseResult` objects carrying `file.filePath` 1,238 times against the
     /// top-level key's 1,171, so reading one of the two dropped slightly more
     /// than half of the result-side paths in the archive.
@@ -315,7 +316,7 @@ pub const ADDRESS: &str = "<addr>";
 pub const LINE_COL: &str = ":<line>";
 
 /// One error's text reduced to the value two occurrences of the same failure
-/// share (D-04).
+/// share.
 ///
 /// Four substitutions and no more: UUIDs, ISO-8601 timestamps, `0x` addresses
 /// and `:line:col` suffixes. **Bare integers are deliberately kept.** Stripping
@@ -523,7 +524,7 @@ fn digits_run(bytes: &[u8], at: usize) -> Option<usize> {
 /// `:line:col`.
 ///
 /// Never canonicalized against the filesystem. 52% of the real corpus's `cwd`
-/// directories no longer exist (phase 2 D-05), so a path that resolved today
+/// directories no longer exist, so a path that resolved today
 /// would normalize differently tomorrow and the same file would key two ways
 /// across one archive.
 pub fn normalize_path(raw: &str) -> Option<String> {
@@ -574,7 +575,7 @@ pub fn program_of(command: &str) -> Option<String> {
 /// A surviving word is still dropped when it carries an expansion, a glob or a
 /// URL scheme. `${ROOT}/x`, `src/*.rs` and `https://example.com/x` each name
 /// something other than one file on disk, and none of the three is a key an
-/// exact-match lookup will ever be handed. This is not RCL-04's forbidden
+/// exact-match lookup will ever be handed. This is not the forbidden
 /// rejection-for-being-common: a glob or an unexpanded variable is not a path
 /// that happens to be popular, it is not a path.
 pub fn path_words(command: &str) -> Vec<String> {

@@ -205,9 +205,9 @@ pub fn append(
 /// Reads ranges of one session's stream out of its block rows, counting the
 /// blocks it decompresses.
 ///
-/// The counter is the instrument STOR-01 is stated in: "reading a turn
-/// decompresses only the blocks it occupies" is a claim about a number, so it
-/// stays in the normal build.
+/// The counter is the instrument the block layout's promise is stated in:
+/// "reading a turn decompresses only the blocks it occupies" is a claim about a
+/// number, so it stays in the normal build.
 pub struct BlockReader {
     block_size: u64,
     uncompressed_len: u64,

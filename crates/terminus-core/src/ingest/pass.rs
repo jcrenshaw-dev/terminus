@@ -1,15 +1,16 @@
 //! One ingest pass over a whole transcript tree.
 //!
-//! The lock is taken once and the store is opened once, for the whole walk. The
-//! **transactions** are still per-file, and that is D-11 rather than an
+//! The driver (`ingest::driver`) takes the lock once and opens the store once,
+//! for the whole walk, and writes the pass's one `runs` row after it. The
+//! **transactions** are still per-file, and on purpose rather than as an
 //! optimization: a write transaction held across the walk stops MCP readers,
-//! which is the reason redb was rejected (`DESIGN-BRIEF.md:83`), and per-file
-//! commits are the granularity phase 1's crash harness already proved atomic.
-//! They also bound what a kill can lose to one file, and real files are p50
-//! 290 KB, p90 1.03 MB, p99 3.1 MB.
+//! which is the reason redb was rejected, and per-file commits are the
+//! granularity the crash harness (`crates/terminus/tests/crash.rs`) proves
+//! atomic. They also bound what a kill can lose to one file, and real files are
+//! p50 290 KB, p90 1.03 MB, p99 3.1 MB.
 //!
 //! A per-file failure is recorded against that file's path and skipped, never
-//! propagated (D-12). Both of phase 1's hard-error paths reach this loop -
+//! propagated. Two hard-error paths in ingest reach this loop -
 //! `Existing::read` refusing a session archived with no `session_meta` row, and
 //! `read_tail` refusing a file shorter than its watermark - and either one
 //! stopping the pass would let a single damaged session wedge every future
@@ -18,23 +19,25 @@
 //! two thousand files.
 //!
 //! One of those two is also the only per-file failure that writes anything: a
-//! transcript shorter than its watermark leaves D-13's flag on that session, so
-//! the divergence reaches `terminus verify` rather than living only in a `runs`
-//! row nobody diffs. The archive itself is still untouched.
+//! transcript shorter than its watermark leaves the divergence flag on that
+//! session, so the divergence reaches `terminus verify` rather than living only
+//! in a `runs` row nobody diffs. The archive itself is still untouched.
 //!
-//! `ingest::run`'s single-file behaviour and its refusals are unchanged. The
-//! skip lives here, in the pass, and not in `ingest_locked` - a caller that
-//! named one file deserves the error it asked about.
+//! The walk records a file's failure and goes on. A named file's failure, from
+//! `ingest::run`, comes back to its caller once its row is written: the skip
+//! lives here, in the walk, and not in `ingest_locked` - a caller that named
+//! one file deserves the error it asked about.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::config::Config;
 use crate::discover;
 use crate::error::Result;
-use crate::ingest::lock::{self, Attempt};
-use crate::ingest::{Claim, Outcome, RunRow};
+use crate::ingest::driver::{self, Walk};
+use crate::ingest::Claim;
 use crate::project::Resolver;
+use crate::store::Store;
 
 /// What one pass over the tree did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -46,26 +49,29 @@ pub struct Summary {
     pub files_committed: usize,
     pub bytes_read: u64,
     pub turns_added: usize,
-    /// Per-file failures: the path and why it was skipped (D-12).
+    /// Per-file failures: the path and why it was skipped.
     pub failures: Vec<(PathBuf, String)>,
     /// Directories that could not be listed.
     pub unreadable: Vec<(PathBuf, String)>,
     /// Project directories the config excluded, never listed and never opened.
     pub excluded: Vec<PathBuf>,
-    /// What recovery repaired before the walk began (ING-03, D-24).
+    /// What recovery repaired before the walk began.
     pub recovery: crate::recover::Recovered,
-    /// What the decision log drained into the store before the walk (FEED-01).
+    /// The line saying the continuation-link sweep could not finish, when it
+    /// could not. It reaches `runs.error`; a healthy sweep leaves it `None`
+    /// and says nothing.
+    pub continuations: Option<String>,
+    /// What the decision log drained into the store before the walk.
     pub feedback: crate::feedback::Drained,
-    /// What the walk's own turns then made of those decisions (FEED-02).
+    /// What the walk's own turns then made of those decisions.
     pub outcomes: crate::feedback::Labeled,
-    /// What the sessions this pass closed had to say for themselves (OBS-01).
+    /// What the sessions this pass closed had to say for themselves.
     pub observations: crate::observe::Observed,
-    /// What retention evicted, deleted and left for the next pass (RET-01,
-    /// RET-03, D-10). Empty and free while retention is off, which is the
-    /// default and the state every user starts in.
+    /// What retention evicted, deleted and left for the next pass. Empty and
+    /// free while retention is off, which is the default and the state every
+    /// user starts in.
     pub retention: crate::retention::Applied,
-    /// What the rolling snapshot step did, after the lock dropped (STOR-06,
-    /// D-15).
+    /// What the rolling snapshot step did, after the lock dropped.
     ///
     /// Its notes do NOT reach `runs.error`: the row has already committed by
     /// the time this runs, so the caller prints them on stderr instead.
@@ -73,8 +79,8 @@ pub struct Summary {
     pub duration: Duration,
 }
 
-/// `meta` key holding when the last rolling snapshot was taken, as unix seconds
-/// (D-15).
+/// `meta` key holding when the last rolling snapshot was taken, as unix
+/// seconds.
 ///
 /// A row in `meta` rather than the newest file's name, because the gate has to
 /// be answerable without listing a directory - and because a user who copies
@@ -82,7 +88,7 @@ pub struct Summary {
 /// prompt.
 pub const META_LAST_SNAPSHOT: &str = "last_snapshot_at";
 
-/// What one pass's snapshot step did (STOR-06, D-15).
+/// What one pass's snapshot step did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Snapshotted {
     /// Where the copy landed, when the interval had elapsed and it worked.
@@ -112,8 +118,7 @@ impl Summary {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PassOutcome {
     /// Another process is mid-pass. Nothing was written, and this is a success:
-    /// the hook spawn is the scheduler and a second invocation is expected
-    /// (ING-02).
+    /// the hook spawn is the scheduler and a second invocation is expected.
     LockHeld,
     /// The pass walked the tree.
     Ran(Summary),
@@ -129,20 +134,26 @@ pub fn run(data_dir: &Path) -> Result<PassOutcome> {
 ///
 /// The seam tests use, so a test never has to resolve a real transcript root.
 ///
-/// Two halves. [`locked`] is everything that touches the archive, under the
+/// Two halves. The driver runs everything that touches the archive, under the
 /// ingest lock, ending with the `runs` row and with whether a snapshot is due,
 /// asked of the pass's own store. The snapshot itself comes after it returns,
 /// once the guard and the store are dropped and that row has committed, so a
 /// snapshot that failed is a note and never a failed pass. When none is due,
 /// nothing here opens the store a second time.
 pub fn run_with(data_dir: &Path, config: &Config) -> Result<PassOutcome> {
-    let (outcome, gate) = locked(data_dir, config)?;
-    let mut summary = match outcome {
+    let mut tree = Tree {
+        data_dir,
+        config,
+        transcripts: Vec::new(),
+        gate: Ok(None),
+    };
+    let mut summary = match driver::drive(data_dir, &mut tree)? {
         PassOutcome::LockHeld => return Ok(PassOutcome::LockHeld),
         PassOutcome::Ran(summary) => summary,
     };
+    let gate = tree.gate;
 
-    // STOR-06 and D-15: the guard and the store handle are gone, the `runs`
+    // The rolling snapshot: the guard and the store handle are gone, the `runs`
     // row has committed, and nothing below can fail the pass. A snapshot is a
     // copy of what is already safely archived, so one that could not be
     // written is a note - failing the pass over it would stop archiving the
@@ -158,20 +169,20 @@ pub fn run_with(data_dir: &Path, config: &Config) -> Result<PassOutcome> {
     Ok(PassOutcome::Ran(summary))
 }
 
-/// Is a rolling snapshot due (STOR-06, D-15)? Asked of the pass's own store,
-/// inside the lock, after the `runs` row has committed.
+/// Is a rolling snapshot due? Asked of the pass's own store, inside the lock,
+/// after the `runs` row has committed.
 ///
 /// `Some(now)` when one is due, as of `now` on SQLite's clock, the reading the
 /// stamp records. `None` when snapshots are off or the interval has not
 /// elapsed.
 ///
 /// **The gate is answered before any expensive work.** The hook spawn is the
-/// scheduler and fires on every prompt; a snapshot of the real store is 1.087 GB
-/// and 0.56 s, so an ungated step writes a gigabyte per prompt and the first
-/// user to notice is one whose disk fills. The interval is what makes STOR-06's
-/// "on by default" affordable, and this is where it is enforced. Asking it here
-/// rather than after the lock drops is what keeps a pass with nothing due to
-/// one writable open of the store.
+/// scheduler and fires on every prompt; a snapshot of the real store is
+/// 1.087 GB and 0.56 s, so an ungated step writes a gigabyte per prompt and the
+/// first user to notice is one whose disk fills. The interval is what makes
+/// snapshots on by default affordable, and this is where it is enforced. Asking
+/// it here rather than after the lock drops is what keeps a pass with nothing
+/// due to one writable open of the store.
 ///
 /// **One clock.** `now` comes from SQLite, the same source every stored
 /// timestamp and every snapshot file name comes from, so the comparison is
@@ -211,7 +222,7 @@ fn due(store: &crate::store::Store, config: &Config) -> std::result::Result<Opti
     }
 }
 
-/// Take the rolling snapshot [`due`] found due, as of `now` (STOR-06, D-15).
+/// Take the rolling snapshot [`due`] found due, as of `now`.
 ///
 /// Runs after the lock is released, on a handle of its own, because the pass's
 /// is gone with the lock. Holding the lock through a `VACUUM INTO` of a 3 GB
@@ -260,128 +271,115 @@ fn roll(data_dir: &Path, config: &Config, now: i64) -> Snapshotted {
     out
 }
 
-/// Everything the ingest lock covers, from taking it to the `runs` row and
-/// the snapshot gate.
-fn locked(
-    data_dir: &Path,
-    config: &Config,
-) -> Result<(PassOutcome, std::result::Result<Option<i64>, String>)> {
-    let started = Instant::now();
+/// The tree pass, as the driver walks it.
+struct Tree<'a> {
+    data_dir: &'a Path,
+    config: &'a Config,
+    /// What discovery found, filled in the step before the rows are read.
+    transcripts: Vec<PathBuf>,
+    /// Whether a snapshot is due, asked after the row; see [`due`].
+    gate: std::result::Result<Option<i64>, String>,
+}
 
-    // Once, for the whole walk. A per-file lock would be two thousand syscalls
-    // and would let another process interleave between files, which is exactly
-    // the invariant `ingest_locked` rests on: the guard makes this the only
-    // writer, so nothing changes the store between its read and its write.
-    let _guard = match lock::try_acquire(data_dir)? {
-        Attempt::Held => return Ok((PassOutcome::LockHeld, Ok(None))),
-        Attempt::Acquired(guard) => guard,
-    };
+impl Walk for Tree<'_> {
+    fn before(&mut self, store: &mut Store, summary: &mut Summary) {
+        // The decision log drain, after recovery and BEFORE the walk. The
+        // prompt path cannot write SQLite, so this is where its decision files
+        // become rows - and the position is what makes the watermark this
+        // stamps the archive as it stood when the pass began rather than as
+        // this pass leaves it.
+        //
+        // A drain that fails is a note and not a failed pass: the archive is
+        // the work, and a decision log that could not be moved is worth saying
+        // and not worth losing a tree walk over.
+        summary.feedback = match crate::feedback::drain(store.conn_mut(), self.data_dir) {
+            Ok(drained) => drained,
+            Err(e) => crate::feedback::Drained {
+                decisions: 0,
+                discarded: vec![(
+                    self.data_dir.join(crate::inject::decision::DIR_NAME),
+                    format!("the decision log could not be drained: {e}"),
+                )],
+            },
+        };
 
-    // Recovery before discovery, and before anything is read (ING-03, D-24).
-    // It also brings a store older than this build forward (STOR-05), so a walk
-    // never appends turn rows in one shape beside rows written in another.
-    let (mut store, recovery) = crate::recover::recover(data_dir)?;
+        let found = discover::discover(self.config);
+        summary.unreadable = found.unreadable;
+        summary.excluded = found.excluded;
+        self.transcripts = found.transcripts;
+    }
 
-    // FEED-01, after recovery and BEFORE the walk. The prompt path cannot write
-    // SQLite (D-01), so this is where its decision files become rows - and the
-    // position is what makes the watermark this stamps the archive as it stood
-    // when the pass began rather than as this pass leaves it (D-10).
-    //
-    // A drain that fails is a note and not a failed pass: the archive is the
-    // work, and a decision log that could not be moved is worth saying and not
-    // worth losing a tree walk over.
-    let feedback = match crate::feedback::drain(store.conn_mut(), data_dir) {
-        Ok(drained) => drained,
-        Err(e) => crate::feedback::Drained {
-            decisions: 0,
-            discarded: vec![(
-                data_dir.join(crate::inject::decision::DIR_NAME),
-                format!("the decision log could not be drained: {e}"),
-            )],
-        },
-    };
-
-    let found = discover::discover(config);
-    let mut summary = Summary {
-        unreadable: found.unreadable,
-        excluded: found.excluded,
-        recovery,
-        feedback,
-        ..Summary::default()
-    };
-
-    // One resolver for the whole walk (D-05, ING-05). 1,253 real transcripts
-    // carry 63 distinct `cwd` values, so the memo is what keeps the git spawns
-    // proportional to the projects rather than to the files.
-    let mut projects = Resolver::new();
-    // Every file's row in one query, after recovery and the drain and before
-    // the walk (#85). Recovery's re-key and twin repair rewrite these rows, so
-    // reading them any earlier would walk a store that no longer exists. A
-    // read that fails is the walk failing, and still leaves its `runs` row.
-    let walked = crate::ingest::read_rows(store.conn(), None).and_then(|rows| {
+    fn walk(
+        &mut self,
+        store: &mut Store,
+        rows: &crate::ingest::Rows,
+        summary: &mut Summary,
+    ) -> Result<()> {
+        // One resolver for the whole walk. 1,253 real transcripts carry 63
+        // distinct `cwd` values, so the memo is what keeps the git spawns
+        // proportional to the projects rather than to the files.
+        let mut projects = Resolver::new();
         walk(
-            &mut store,
-            &rows,
-            data_dir,
-            &found.transcripts,
-            &mut summary,
+            store,
+            rows,
+            self.data_dir,
+            &self.transcripts,
+            summary,
             &mut projects,
-            config.capture_mode(),
+            self.config.capture_mode(),
         )
-    });
+    }
 
-    // FEED-02, AFTER the walk and before the `runs` row. The turns this pass
-    // just committed are what a session's idleness is measured from and what a
-    // decision's outcome is read off, so running this first would judge every
-    // decision against the archive as it stood before the transcripts that
-    // answer it arrived.
-    summary.outcomes = crate::feedback::outcomes(store.conn_mut());
+    fn after_walk(&mut self, store: &mut Store, summary: &mut Summary) {
+        // Continuation links, first after the walk and on every tree pass
+        // whatever the walk committed (#11). A session archived before its
+        // predecessor has a NULL link its own file will never change, and the
+        // predecessor may have come from `terminus backfill` or a named file,
+        // neither of which runs this, so the tree pass is where it is noticed.
+        // It reads only what the walk and earlier passes archived, so it sits
+        // directly after the walk, ahead of the steps that judge sessions.
+        //
+        // Nothing here fails the pass: a sweep that could not finish is one
+        // line in `runs.error`, and the next tree pass tries again.
+        summary.continuations = crate::ingest::fill_continuations(store.conn())
+            .err()
+            .map(|e| format!("continuation links could not be filled: {e}"));
 
-    // OBS-01, and it has to be here: `feedback::outcomes` is what sets
-    // `session_meta.is_final`, so a session that went quiet before this pass
-    // becomes final and gets its observation on the same pass rather than on
-    // the next one. Before `record_pass`, so whatever it could not do lands in
-    // this pass's `runs.error` rather than the following pass's.
-    //
-    // No model is called here and no network connection is opened.
-    summary.observations = crate::observe::observe_new(store.conn(), config);
+        // Decision outcomes, AFTER the walk and before the `runs` row. The
+        // turns this pass just committed are what a session's idleness is
+        // measured from and what a decision's outcome is read off, so running
+        // this first would judge every decision against the archive as it
+        // stood before the transcripts that answer it arrived.
+        summary.outcomes = crate::feedback::outcomes(store.conn_mut());
 
-    // RET-03 and D-10, and both halves of the position matter. AFTER
-    // `observe_new`, because that step reads one blob per newly finalized
-    // session and an eviction that ran first would destroy the bytes it was
-    // about to read. BEFORE `record_pass`, because `runs.error` and
-    // `runs.notes` are the only textual channel this product has - there is no
-    // log file, by design - and a step placed after that row is written has
-    // nowhere to report.
-    //
-    // Nothing here fails the pass. The archive is the work; a retention step
-    // that could not run is a note, and a `?` propagated out of it is exactly
-    // what would let one damaged row stop every future ingest of every other
-    // transcript in the tree. `retention::retain` is shaped to make that the
-    // only possibility: it returns notes and never an error.
-    summary.retention = crate::retention::retain(&mut store, config);
+        // Observations, and they have to be here: `feedback::outcomes` is what
+        // sets `session_meta.is_final`, so a session that went quiet before
+        // this pass becomes final and gets its observation on the same pass
+        // rather than on the next one. Before the driver writes the row, so
+        // whatever it could not do lands in this pass's `runs` row rather than
+        // the following pass's.
+        //
+        // No model is called here and no network connection is opened.
+        summary.observations = crate::observe::observe_new(store.conn(), self.config);
 
-    summary.duration = started.elapsed();
+        // Retention, and both halves of the position matter. AFTER
+        // `observe_new`, because that step reads one blob per newly finalized
+        // session and an eviction that ran first would destroy the bytes it
+        // was about to read. BEFORE the driver writes the row, because
+        // `runs.error` and `runs.notes` are the only textual channel this
+        // product has - there is no log file, by design - and a step placed
+        // after that row is written has nowhere to report.
+        //
+        // Nothing here fails the pass. The archive is the work; a retention
+        // step that could not run is a note, and a `?` propagated out of it is
+        // exactly what would let one damaged row stop every future ingest of
+        // every other transcript in the tree. `retention::retain` is shaped to
+        // make that the only possibility: it returns notes and never an error.
+        summary.retention = crate::retention::retain(store, self.config);
+    }
 
-    // One row, whatever happened (D-10, D-14). A pass that died writes it in a
-    // transaction of its own, after the per-file transaction it was inside has
-    // rolled back - with no log file by design, this row is the only place the
-    // failure can be seen. A pass that walked a tree and found nothing new
-    // writes one too, because "the last ingest run" has to move.
-    let recorded = record_pass(store.conn(), &summary, walked.as_ref().err());
-
-    match walked {
-        Ok(()) => {
-            recorded?;
-            // After the row committed and before the guard drops, on this
-            // pass's own store (D-15).
-            let gate = due(&store, config);
-            Ok((PassOutcome::Ran(summary), gate))
-        }
-        // The walk's error is the one worth returning. If the row could not be
-        // written either, the store is unwritable and that is the same fact
-        // said twice.
-        Err(e) => Err(e),
+    fn after_row(&mut self, store: &Store) {
+        self.gate = due(store, self.config);
     }
 }
 
@@ -394,14 +392,14 @@ fn walk(
     transcripts: &[PathBuf],
     summary: &mut Summary,
     projects: &mut Resolver,
-    // Resolved once for the whole walk, not per file (ING-07): it is one config
-    // read either way, and a mode that could change between two files of one
-    // pass would be a store whose blobs disagree about what a pass captured.
+    // Resolved once for the whole walk, not per file: it is one config read
+    // either way, and a mode that could change between two files of one pass
+    // would be a store whose blobs disagree about what a pass captured.
     mode: crate::config::CaptureMode,
 ) -> Result<()> {
     // Which file took each key this walk, so a second path with the same key is
-    // never ingested twice (D-03) and a second file is never appended onto the
-    // first one's session.
+    // never ingested twice and a second file is never appended onto the first
+    // one's session.
     let mut taken = std::collections::HashMap::new();
     for path in transcripts {
         if let Some(after) = crate::ingest::fault::pass_fails_after(data_dir) {
@@ -418,65 +416,13 @@ fn walk(
             Ok(Claim::Ingest { file, session_key }) => (file, session_key),
             Ok(Claim::Same) => continue,
             Ok(Claim::Held(e)) | Err(e) => {
-                summary.failures.push((path.clone(), e.to_string()));
+                driver::tally(store, summary, path, Err(e));
                 continue;
             }
         };
-        let path = &path;
-        // A fresh `Instant` per file: the elapsed time the pass reports is the
-        // walk's, measured by the caller, not this file's.
-        match crate::ingest::ingest_locked(
-            store,
-            rows,
-            path,
-            session_key,
-            Instant::now(),
-            RunRow::PassOwns,
-            projects,
-            mode,
-        ) {
-            Ok(Outcome::Committed(pass)) => {
-                summary.files_committed += 1;
-                summary.bytes_read += pass.bytes_read;
-                summary.turns_added += pass.turns_added;
-                // The pass-level fault point: a kill aimed here lands between
-                // two files, with the walk half done and the store consistent.
-                // Timed kills reach this region only by luck, and on a tree of
-                // small transcripts nearly never.
-                crate::ingest::fault::stall_after_files(summary.files_committed);
-            }
-            // Nothing new past the watermark, or - both unreachable here - a
-            // lock this process already owns, and an exclusion only the
-            // single-file entry point tests, on files this walk never yielded.
-            Ok(Outcome::UpToDate | Outcome::LockHeld | Outcome::Excluded(_)) => {}
-            Err(e) => {
-                // Recorded and skipped. The tree is the unit of work; one
-                // damaged transcript is not a reason to archive none of it.
-                let mut reason = e.to_string();
-
-                // D-13, and the only per-file failure that leaves a mark on the
-                // store. Matched on the variant and never on the message: a
-                // transcript at a non-UTF-8 path fails with the same io kind
-                // and must flag nothing. The flag goes in a transaction of its
-                // own - the bare statement autocommits - because the file's own
-                // transaction has already rolled back, and it is what lets
-                // `terminus verify` name the divergence instead of it living
-                // only in a `runs` row nobody diffs.
-                if matches!(
-                    e,
-                    crate::error::Error::TranscriptDiverged { .. }
-                        | crate::error::Error::TranscriptRewritten { .. }
-                ) {
-                    if let Err(flag) = crate::ingest::flag_divergence(store.conn(), path) {
-                        // Same note rather than a second failure: `files_failed`
-                        // counts files, and one file must not become two.
-                        reason.push_str(&format!(" (the flag could not be set: {flag})"));
-                    }
-                }
-
-                summary.failures.push((path.clone(), reason));
-            }
-        }
+        let ingested =
+            crate::ingest::ingest_locked(store, rows, &path, session_key, projects, mode);
+        driver::tally(store, summary, &path, ingested);
     }
     Ok(())
 }
@@ -493,63 +439,4 @@ pub fn note(path: &Path, reason: &str) -> String {
     } else {
         format!("{path}: {reason}")
     }
-}
-
-/// The one `runs` row a pass leaves behind (D-10).
-///
-/// `runs.error` and `runs.notes` are the only textual channel this product has -
-/// there is no log file, by design, and `terminus status` surfaces this table -
-/// so everything worth a human's attention goes in one of them. `error` holds
-/// what went wrong: the path and reason of every file that was skipped, every
-/// directory that could not be listed, every watermark recovery had to repair,
-/// every step that could not run, and the failure that ended the pass if one
-/// did. `notes` holds what a healthy pass did worth saying - labels written,
-/// sessions retention evicted or deleted - so `doctor` can flag `error` alone.
-/// Each stays null when there is genuinely nothing to say.
-fn record_pass(
-    conn: &rusqlite::Connection,
-    summary: &Summary,
-    fatal: Option<&crate::error::Error>,
-) -> Result<()> {
-    let mut errors: Vec<String> = Vec::new();
-    for (path, reason) in summary.failures.iter().chain(&summary.unreadable) {
-        errors.push(note(path, reason));
-    }
-    errors.extend(summary.recovery.lines());
-    errors.extend(summary.feedback.lines());
-    errors.extend(summary.outcomes.errors());
-    errors.extend(summary.observations.lines());
-    errors.extend(summary.retention.errors());
-    if let Some(e) = fatal {
-        errors.push(format!("pass failed: {e}"));
-    }
-    let mut notes = summary.outcomes.notes();
-    notes.extend(summary.retention.notes());
-    let joined = |lines: Vec<String>| (!lines.is_empty()).then(|| lines.join("\n"));
-    let error = joined(errors);
-    let notes = joined(notes);
-
-    let elapsed = summary.duration;
-    conn.execute(
-        "INSERT INTO runs (
-            started_at, finished_at, duration_ms, files_seen, bytes_read,
-            turns_added, error, files_committed, files_failed, notes
-         ) VALUES (
-            strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?1),
-            strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-            ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9
-         )",
-        rusqlite::params![
-            format!("-{} seconds", elapsed.as_secs_f64()),
-            elapsed.as_millis() as i64,
-            summary.files_walked as i64,
-            summary.bytes_read as i64,
-            summary.turns_added as i64,
-            error,
-            summary.files_committed as i64,
-            summary.failures.len() as i64,
-            notes,
-        ],
-    )?;
-    Ok(())
 }

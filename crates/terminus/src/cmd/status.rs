@@ -1,4 +1,4 @@
-//! `terminus status`: what the store holds and what the last run did (ING-09).
+//! `terminus status`: what the store holds and what the last run did.
 //!
 //! Every number comes out of the store. There is no log file, by design, so
 //! `runs` is where a pass's failures live and this is what surfaces them.
@@ -14,9 +14,9 @@
 //!
 //! The session, turn and watermark numbers come from `config::visible`, not
 //! from `count(*)`: an excluded project must be invisible on read as well as
-//! never read on ingest (ING-08, D-23), including for sessions archived before
-//! the exclusion was configured. This is the phase's only read command, so it
-//! is also the proof that the boundary phase 3's search will reuse is real.
+//! never read on ingest, including for sessions archived before the exclusion
+//! was configured. `search`, `show` and `sessions` read through the same
+//! boundary.
 
 use std::fmt::Display;
 use std::path::Path;
@@ -24,6 +24,7 @@ use std::path::Path;
 use serde_json::json;
 use serde_json::Value;
 use terminus_core::config::visible;
+use terminus_core::ingest::runs::{self, Run};
 use terminus_core::store::DB_FILE_NAME;
 
 use super::json::Document;
@@ -41,8 +42,7 @@ pub fn run(json: bool) -> Result<(), Failure> {
     let reader = match super::read::open()? {
         Opened::Ready(reader) => reader,
         Opened::Nothing(reason) => {
-            let document = document(None, 0, visible::Counts::default(), None, None);
-            return super::read::empty(document, &reason, json);
+            return super::read::empty(empty(), &reason, json);
         }
     };
     let (store, config) = (reader.store(), reader.config());
@@ -50,32 +50,10 @@ pub fn run(json: bool) -> Result<(), Failure> {
     let conn = store.conn();
 
     let counts = read(visible::counts(conn, config))?;
-    // Counted first rather than reached for with an optional row, so that "no
-    // run yet" and "the query failed" stay two different answers.
-    let runs: i64 = read(conn.query_row("SELECT count(*) FROM runs", [], |r| r.get(0)))?;
-    let last: Option<Run> = if runs == 0 {
-        None
-    } else {
-        Some(read(conn.query_row(
-            "SELECT started_at, coalesce(duration_ms, 0), files_seen, files_committed,
-                    files_failed, bytes_read, turns_added, error, notes
-             FROM runs ORDER BY id DESC LIMIT 1",
-            [],
-            |r| {
-                Ok(Run {
-                    started_at: r.get(0)?,
-                    duration_ms: r.get(1)?,
-                    files_seen: r.get(2)?,
-                    files_committed: r.get(3)?,
-                    files_failed: r.get(4)?,
-                    bytes_read: r.get(5)?,
-                    turns_added: r.get(6)?,
-                    error: r.get(7)?,
-                    notes: r.get(8)?,
-                })
-            },
-        ))?)
-    };
+    // An optional row from the one core reader: an empty table is `None` and a
+    // failed read is an error, so "no run yet" and "the query failed" stay two
+    // different answers.
+    let last: Option<Run> = read(runs::last(conn))?;
 
     if json {
         // The same numbers the human output prints, and no others: two accounts
@@ -147,9 +125,14 @@ pub fn run(json: bool) -> Result<(), Failure> {
     Ok(())
 }
 
-/// The `--json` document. With no store it is called with no path, no
-/// exclusion list and no run, so every field the shape carries is there at zero
-/// or null.
+/// The document with no path, no exclusion list and no run, so every field the
+/// shape carries is there at zero or null. The no-store answer, and what `main`
+/// writes when the command fails.
+pub(crate) fn empty() -> Document {
+    document(None, 0, visible::Counts::default(), None, None)
+}
+
+/// The `--json` document.
 fn document(
     store: Option<String>,
     bytes: u64,
@@ -184,23 +167,11 @@ fn document(
         )
 }
 
-struct Run {
-    started_at: String,
-    duration_ms: i64,
-    files_seen: i64,
-    files_committed: i64,
-    files_failed: i64,
-    bytes_read: i64,
-    turns_added: i64,
-    error: Option<String>,
-    notes: Option<String>,
-}
-
 /// The store's footprint: the database and its WAL sidecars together, because
 /// a hot WAL can hold a large share of what has been written.
 fn size(data_dir: &Path) -> String {
     let total = size_bytes(data_dir);
-    format!("{total} byte(s) ({})", human(total))
+    format!("{total} byte(s) ({})", super::human(total))
 }
 
 /// The same footprint as a number, which is what `--json` carries: a consumer
@@ -218,19 +189,4 @@ fn size_bytes(data_dir: &Path) -> u64 {
         }
     }
     total
-}
-
-fn human(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit + 1 < UNITS.len() {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{bytes} {}", UNITS[0])
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
-    }
 }

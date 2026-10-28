@@ -1,25 +1,24 @@
-//! AC4: a compaction boundary appearing under an already-archived session.
+//! A compaction boundary appearing under an already-archived session.
 //!
 //! The shape of a real compaction is what makes this worth a test file of its
 //! own. Compaction is **append-only**: Claude Code writes the boundary into the
-//! same transcript, at the end, under the same session id
-//! (`DESIGN-BRIEF.md:114`). So the case is not "ingest a file with a boundary in
-//! it" - it is "a session that has already been archived, whose block rows and turn
-//! rows are already committed, grows one more record", and the archive must
-//! come out of that with the boundary recorded and *nothing that was already
-//! there* disturbed.
+//! same transcript, at the end, under the same session id. So the case is not
+//! "ingest a file with a boundary in it" - it is "a session that has already
+//! been archived, whose block rows and turn rows are already committed, grows
+//! one more record", and the archive must come out of that with the boundary
+//! recorded and *nothing that was already there* disturbed.
 //!
 //! Byte-identity is asserted per block row rather than on the session as a
 //! whole, because those are different claims. An append rewrites the partial
 //! tail row and adds rows after it, so the session's rows are *expected* to
 //! differ there. What must not differ is a completed block: those are
-//! immutable once committed (D-07) and never written again.
+//! immutable once committed and never written again.
 //!
-//! The second half of the file is D-13, which is the same premise inverted: the
-//! file underneath an archived session got *shorter*. Both belong here because
-//! both are the live tree changing a session the archive already holds, and the
-//! two answers are opposite by design - the archive follows a file that grew
-//! and refuses a file that shrank.
+//! The second half of the file is the same premise inverted: the file
+//! underneath an archived session got *shorter*. Both belong here because both
+//! are the live tree changing a session the archive already holds, and the two
+//! answers are opposite by design - the archive follows a file that grew and
+//! refuses a file that shrank.
 
 #![cfg(feature = "testkit")]
 
@@ -116,7 +115,7 @@ fn layout(conn: &Connection, session_key: &str) -> (u64, u64) {
 /// The compressed bytes of every **completed** block of a session.
 ///
 /// The trailing partial block is excluded on purpose: it is the one block an
-/// append is allowed to rewrite (D-07), and including it would make the
+/// append is allowed to rewrite, and including it would make the
 /// assertion demand something the format explicitly does not promise.
 fn completed_blocks(conn: &Connection, session_key: &str) -> Vec<Vec<u8>> {
     let (len, block_size) = layout(conn, session_key);
@@ -191,7 +190,7 @@ fn drop_derived(conn: &Connection) {
     }
 }
 
-/// AC4 in full.
+/// A compaction under an archived session, end to end.
 ///
 /// Ingest a transcript, remember every turn row and the exact bytes of every
 /// completed block row, append a real boundary record, re-run ingest: one
@@ -238,7 +237,7 @@ fn appending_a_boundary_records_it_and_disturbs_nothing_already_archived() {
     );
 
     // It sits at the offset of the turn that IS the boundary: reading that
-    // turn out of the archive returns the record that was appended (D-20, D-21).
+    // turn out of the archive returns the record that was appended.
     let (bytes, _) = testkit::read_turn(&conn, turn_at(&conn, *offset));
     assert_eq!(bytes, line, "the boundary row names the wrong turn");
 
@@ -456,8 +455,8 @@ fn the_completed_block_helper_excludes_only_the_partial_tail() {
     assert_eq!(Path::new(&bench.session_key), bench.transcript);
 }
 
-/// AC1: an append writes its new rows and rewrites at most the old last row,
-/// and the pass fetches the bytes of at most that one row.
+/// An append writes its new rows and rewrites at most the old last row, and
+/// the pass fetches the bytes of at most that one row.
 ///
 /// The row comparison alone cannot catch an append that rewrote every row:
 /// zstd is deterministic, so rewritten rows come out identical. The read count
@@ -513,10 +512,10 @@ fn an_append_rewrites_at_most_the_tail_row_and_reads_no_other() {
 }
 
 // ---------------------------------------------------------------------------
-// D-13: the other thing a live tree does to an already-archived session - the
-// file underneath it gets *shorter*.
+// The other thing a live tree does to an already-archived session - the file
+// underneath it gets *shorter*.
 //
-// The same premise as AC4 above, inverted. A compaction appends, so an archived
+// The same premise as above, inverted. A compaction appends, so an archived
 // session's file growing is normal and the archive follows it. A file that
 // shrank is not that session's file any more, and there is no way to tell which
 // of its bytes are still the ones the archive holds. So the pass refuses, and the
@@ -531,7 +530,7 @@ fn an_append_rewrites_at_most_the_tail_row_and_reads_no_other() {
 
 /// A tree the *pass* walks, rather than the single-file entry point.
 ///
-/// D-13's flag is the pass's to set: `ingest::run` names one file and returns
+/// The flag is the pass's to set: `ingest::run` names one file and returns
 /// that file's error to the caller who asked about it. Two transcripts, so
 /// "names that session and no other" has something to be false about.
 struct Tree {
@@ -690,8 +689,8 @@ impl Tree {
     }
 }
 
-/// D-13 end to end. A shortened transcript is skipped, the archive is left
-/// exactly as it was, and the session is flagged so `verify` says so.
+/// The refusal end to end. A shortened transcript is skipped, the archive is
+/// left exactly as it was, and the session is flagged so `verify` says so.
 #[test]
 fn a_transcript_shorter_than_its_watermark_is_skipped_and_flagged() {
     let tree = tree();
@@ -928,7 +927,7 @@ fn a_flagged_session_rewritten_under_its_watermark_opens_it_once() {
 }
 
 /// Half of the discrimination the dedicated error variant exists for: the
-/// failure D-13's refusal used to be indistinguishable from.
+/// failure the refusal of a shortened file used to be indistinguishable from.
 ///
 /// `path_key` refuses a non-UTF-8 transcript path with the same `InvalidData`
 /// io kind `read_tail` used to carry, so a pass that told the two apart by kind
@@ -983,7 +982,7 @@ fn a_failure_that_is_not_a_divergence_flags_no_session() {
 /// The other half, and the one that bites: a per-file failure at a perfectly
 /// good path, against a session that has a `session_meta` row to flag.
 ///
-/// A pass that raised D-13's flag on any error rather than on the one variant
+/// A pass that raised the flag on any error rather than on the one variant
 /// would set it here, and the archive would be reported as diverged from a
 /// transcript that is sitting on disk at its full length.
 #[test]
@@ -1020,7 +1019,7 @@ fn another_per_file_failure_flags_no_session() {
 }
 
 // ---------------------------------------------------------------------------
-// #17's second case (D-19, D-20): a boundary with no `uuid` or no `timestamp`
+// #17's second case: a boundary with no `uuid` or no `timestamp`
 // is not a turn, and still gets a row at its own byte offset.
 // ---------------------------------------------------------------------------
 

@@ -1,4 +1,4 @@
-//! `terminus show`: print what a turn actually said (RCL-09, RCL-08).
+//! `terminus show`: print what a turn actually said.
 //!
 //! This is the terminal's `recall_get` plus `recall_context`. A search hands
 //! back an excerpt - a projection, windowed around the match - and this hands
@@ -12,42 +12,41 @@
 //! conversion here would make this - the one command whose whole job is
 //! fidelity - the one place a byte could change. The `--json` mode has no such
 //! option, since a JSON string is text by definition, and it says so where it
-//! converts. With PRIV-03's knob set, what those bytes carry is the archived
+//! converts. With `redact_recall` set, what those bytes carry is the archived
 //! line with each credential replaced by its marker: the store is untouched and
 //! the filter is a projection on the way out, so `--raw` is the way back to the
-//! record's own bytes for one invocation (D-07). A flag and never an
+//! record's own bytes for one invocation. A flag and never an
 //! environment variable - the hook and the MCP server load their own `Config`
 //! in-process and would inherit a variable, which is exactly the unfiltering
 //! the knob exists to prevent.
 //!
 //! **The header and the window are escaped, the body is not.** The header's
 //! time, file name and project and every window line are archived text, and
-//! they go through [`crate::escape`] so a control in them cannot drive the
-//! terminal, with or without `--raw`. The body stays the archived line: JSON
-//! already spells every C0 control as `\u00XX`, and escaping the DEL and C1 it
-//! can still carry would end this as the way back to the record's own bytes.
+//! they go out through the default escape in `out.rs` (#72) so a control in
+//! them cannot drive the terminal, with or without `--raw`. The body goes out
+//! through the raw byte write and stays the archived line: JSON already spells
+//! every C0 control as `\u00XX`, and escaping the DEL and C1 it can still carry
+//! would end this as the way back to the record's own bytes.
 //!
-//! **The window stops at the session (D-06)** and says which end it stopped at,
+//! **The window stops at the session** and says which end it stopped at,
 //! rather than just returning a shorter list. A caller that cannot tell "there
 //! is nothing earlier" from "you asked for five and got two" cannot decide
 //! whether to look in the session this one continues from - which is returned,
 //! unfollowed, for exactly that decision.
-
-use std::io::Write;
 
 use terminus_core::recall::{context, get, ContextTurn, Window};
 
 use super::json::Document;
 use super::read::{self, Opened};
 use super::Failure;
-use crate::escape;
+use crate::out;
 
 const COMMAND: &str = "show";
 
 pub fn run(args: Args) -> Result<(), Failure> {
     let reader = match read::open()? {
         Opened::Ready(reader) => reader,
-        Opened::Nothing(reason) => return read::empty(document(&[], &[]), &reason, args.json),
+        Opened::Nothing(reason) => return read::empty(empty(), &reason, args.json),
     };
     let conn = reader.store().conn();
     // `--raw` changes which config the query layer reads and nothing else about
@@ -95,84 +94,80 @@ pub fn run(args: Args) -> Result<(), Failure> {
     }
 
     for absent in &fetched.absent {
-        eprintln!("terminus: {}", absent.reason);
+        errln!("terminus: {}", absent.reason);
     }
     Ok(())
 }
 
 /// The human rendering: a header a reader can scan, then the bytes themselves.
+///
+/// Every line but the body is written through the escaping path, and each write
+/// returns its failure, so `run` decides what a closed stdout means.
 fn render(fetched: &get::Fetched, windows: &[Option<Window>]) -> std::io::Result<()> {
-    let mut out = std::io::stdout().lock();
     for (index, record) in fetched.records.iter().enumerate() {
-        let header = format!(
-            "{}  {}  {}  {}{}",
+        out::try_write(format_args!(
+            "{}  {}  {}  {}{}\n",
             record.turn_id,
-            escape::controls(record.ts.as_deref().unwrap_or("(no time)")),
-            escape::controls(file_name(&record.session_key)),
-            escape::controls(record.project.as_deref().unwrap_or("(no project)")),
+            record.ts.as_deref().unwrap_or("(no time)"),
+            file_name(&record.session_key),
+            record.project.as_deref().unwrap_or("(no project)"),
             if record.body_evicted {
                 "  (body evicted)"
             } else {
                 ""
             },
-        );
-        writeln!(out, "{header}")?;
+        ))?;
 
         match &record.body {
             // Written as bytes: this is the command that answers "what exactly
             // was said", and a lossy conversion would answer something else.
             Some(bytes) => {
-                out.write_all(bytes)?;
-                writeln!(out)?;
+                out::try_write_raw(bytes)?;
+                out::try_write_raw(b"\n")?;
             }
             // Evicted is said in the header; a body that would not read at all
             // is archive damage, which `terminus verify` is the command for.
             None if !record.body_evicted => {
-                writeln!(
-                    out,
-                    "(the archive would not give this record up; run `terminus verify`)"
-                )?;
+                out::try_write(format_args!(
+                    "(the archive would not give this record up; run `terminus verify`)\n"
+                ))?;
             }
             None => {}
         }
 
         if let Some(window) = windows.get(index).and_then(Option::as_ref) {
-            render_window(&mut out, window)?;
+            render_window(window)?;
         }
     }
     Ok(())
 }
 
 /// The conversation around one turn, in `turn_seq` order with its ends marked.
-fn render_window(out: &mut impl Write, window: &Window) -> std::io::Result<()> {
+fn render_window(window: &Window) -> std::io::Result<()> {
     if let Some(reason) = &window.reason {
-        writeln!(out, "  (no context: {reason})")?;
-        return Ok(());
+        return out::try_write(format_args!("  (no context: {reason})\n"));
     }
     if window.at_session_start {
-        writeln!(out, "  --- start of session ---")?;
+        out::try_write(format_args!("  --- start of session ---\n"))?;
     }
     for turn in &window.turns {
-        writeln!(
-            out,
-            "  {} {}  {}  {}",
+        out::try_write(format_args!(
+            "  {} {}  {}  {}\n",
             if turn.is_anchor { '>' } else { ' ' },
             turn.turn_seq,
-            escape::controls(&label(turn)),
-            escape::controls(&turn.text)
-        )?;
+            label(turn),
+            turn.text
+        ))?;
     }
     if window.at_session_end {
-        writeln!(out, "  --- end of session ---")?;
+        out::try_write(format_args!("  --- end of session ---\n"))?;
     }
-    // Returned and NOT followed (D-06). A caller that wants the turns before
+    // Returned and NOT followed. A caller that wants the turns before
     // this file's first one resolves this itself and runs a second `show`.
     if let Some(previous) = &window.continues_from {
-        writeln!(
-            out,
-            "  (this session continues from {})",
-            escape::controls(previous)
-        )?;
+        out::try_write(format_args!(
+            "  (this session continues from {previous})\n"
+        ))?;
     }
     Ok(())
 }
@@ -241,9 +236,9 @@ fn window_value(window: &Window) -> serde_json::Value {
             "text": turn.text,
             "is_anchor": turn.is_anchor,
         })).collect::<Vec<_>>(),
-        // Said out loud rather than left to be inferred from a short list
-        // (D-06): "there is nothing earlier" and "you asked for five and got
-        // two" are different answers.
+        // Said out loud rather than left to be inferred from a short list:
+        // "there is nothing earlier" and "you asked for five and got two" are
+        // different answers.
         "at_session_start": window.at_session_start,
         "at_session_end": window.at_session_end,
         "continues_from": window.continues_from,
@@ -265,6 +260,12 @@ fn file_name(session_key: &str) -> &str {
         .unwrap_or(session_key)
 }
 
+/// The document with no record and no absent id. The no-store answer, and what
+/// `main` writes when the command fails.
+pub(crate) fn empty() -> Document {
+    document(&[], &[])
+}
+
 /// The parsed command line for `show`.
 #[derive(Debug)]
 pub struct Args {
@@ -277,7 +278,7 @@ pub struct Args {
     ///
     /// Governs the body and the window in both renderings. `--raw --json` emits
     /// the same keys with unfiltered values, because the flag changes a value
-    /// and never a key (D-08).
+    /// and never a key.
     pub raw: bool,
 }
 
@@ -299,7 +300,7 @@ pub fn parse(parser: &mut lexopt::Parser) -> Result<Args, Failure> {
             Long(super::JSON_FLAG) => json = true,
             // This command's own arm, matching `search`'s: the flag reaches
             // exactly the two commands that print a projection, and no other
-            // command grows a way to be asked for one (D-07).
+            // command grows a way to be asked for one.
             Long("raw") => raw = true,
             Value(word) => {
                 let raw = word.to_string_lossy().into_owned();

@@ -1,12 +1,11 @@
-//! STOR-06: a consistent copy of the store, taken without stopping an ingest,
-//! and a prune that keeps only the newest few.
+//! A consistent copy of the store, taken without stopping an ingest, and a
+//! prune that keeps only the newest few.
 //!
 //! The comparison here is deliberately NOT built out of
-//! `crates/terminus/tests/crash.rs`'s `Snapshot` struct: phase 2's summary
-//! records that it excludes the boundary rows, now the `compactions` table, so
-//! a reused comparison is blind on exactly the table a boundary-carrying
-//! fixture exercises. These
-//! tests read the snapshot as a store instead - `verify::verify` over every
+//! `crates/terminus/tests/crash.rs`'s `Snapshot` struct: it leaves out the
+//! boundary rows of the `compactions` table, so a reused comparison is blind on
+//! exactly the table a boundary-carrying fixture exercises. These tests read
+//! the snapshot as a store instead - `verify::verify` over every
 //! blob, and the session keys themselves.
 
 #![cfg(feature = "testkit")]
@@ -97,7 +96,7 @@ fn session_keys(store: &Store) -> Vec<String> {
         .collect()
 }
 
-/// The whole of AC6 in one test, because the three claims are only worth
+/// Every snapshot claim in one test, because the three claims are only worth
 /// anything about the SAME file: a copy taken while a pass owns the store opens
 /// as a store, passes `verify` with no findings, and holds every session
 /// committed before the open transaction began and none of the uncommitted one.
@@ -241,16 +240,16 @@ fn snapshots_land_inside_the_data_directory() {
     );
 }
 
-/// PRIV-02, PRIV-04: the snapshots directory and the copy inside it are
-/// owner-only, and there was no wider moment in between.
+/// The snapshots directory and the copy inside it are owner-only, and there was
+/// no wider moment in between.
 ///
 /// A snapshot is the whole archive in one file - the largest single thing this
 /// build writes and the one a group-readable mode would leak wholesale. The
 /// mode is read off the RETURNED path, not the temporary: the temporary is
 /// created empty at 0600, `VACUUM INTO` writes into a file that already has its
 /// mode, and the rename carries that mode to the name that stays. Nothing here
-/// chmods anything, which is why the source file contains no `set_permissions`
-/// (AC2).
+/// chmods anything, which is why the source file contains no
+/// `set_permissions`.
 #[test]
 fn a_snapshot_and_its_directory_are_owner_only() {
     use std::os::unix::fs::PermissionsExt;
@@ -281,7 +280,6 @@ fn a_snapshot_and_its_directory_are_owner_only() {
 
 // ---------------------------------------------------------------------------
 // The schedule: on by default, at most once per interval, outside the lock
-// (STOR-06, D-15)
 
 /// A data directory plus a Claude tree for the pass to walk, so the snapshot
 /// step is reached the way a hook reaches it rather than by being called.

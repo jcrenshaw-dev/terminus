@@ -1,16 +1,16 @@
 //! Terminus archive core.
 //!
 //! The archived session, kept as block rows, is truth; everything else is
-//! derived and rebuildable from it (D-13). This crate
+//! derived and rebuildable from it. This crate
 //! owns the store, the zstd block rows the archive is kept in and the ingest
 //! path. It links no async runtime and no thread-pool crate: the hook path must
-//! not pay for a runtime it does not use (`DESIGN-BRIEF.md:39`).
+//! not pay for a runtime it does not use.
 //!
 //! It does start threads, in exactly one place, and the exception is worth
 //! naming precisely rather than leaving the sentence above to quietly become
 //! false. [`ingest::backfill`] runs a fixed set of [`std::thread`] workers for
 //! the parse and compression of a whole-history backfill, with one thread
-//! owning every SQLite write (D-11). Nothing else starts one: a hook fires
+//! owning every SQLite write. Nothing else starts one: a hook fires
 //! `ingest::pass`, which is single-threaded, and `backfill` is reached only by
 //! `terminus backfill`. There is still no pool, global or otherwise - no
 //! `rayon`, nothing that outlives the call that created it.

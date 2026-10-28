@@ -15,7 +15,7 @@ pub enum Error {
         source: std::io::Error,
     },
 
-    /// D-13: the transcript on disk is shorter than the bytes the archive
+    /// The transcript on disk is shorter than the bytes the archive
     /// already holds for it, so the pass skipped it and touched nothing.
     ///
     /// Its own variant rather than an [`Error::Io`] carrying a message, because
@@ -33,20 +33,22 @@ pub enum Error {
         watermark: u64,
     },
 
-    /// D-13's other half: the file is long enough but is not the file that was
-    /// archived. A separate variant from [`Error::TranscriptDiverged`] because
-    /// that one's message is about a length, and a transcript that was
-    /// truncated and then written back past its old watermark has the right
-    /// length and the wrong bytes - reporting it as a length mismatch would
-    /// name a number the user can check and find correct.
+    /// The other way a transcript diverges: the file is long enough but is not
+    /// the file that was archived. A separate variant from
+    /// [`Error::TranscriptDiverged`] because that one's message is about a
+    /// length, and a transcript that was truncated and then written back past
+    /// its old watermark has the right length and the wrong bytes - reporting
+    /// it as a length mismatch would name a number the user can check and find
+    /// correct.
     #[error(
         "{path} is long enough for its watermark at {watermark} but its first \
          {watermark} bytes are not the ones archived; the archive was left untouched"
     )]
     TranscriptRewritten { path: PathBuf, watermark: u64 },
 
-    /// STOR-05's refusal. Both integers are named because "unsupported store
-    /// format" without them tells the user nothing about which side to move.
+    /// The refusal of a store newer than this build. Both integers are named
+    /// because "unsupported store format" without them tells the user nothing
+    /// about which side to move.
     #[error(
         "store at {path} has archive format {store_format}, but this build of \
          terminus knows archive format {binary_format}; upgrade terminus to open it"
@@ -59,7 +61,7 @@ pub enum Error {
 
     /// The other side of [`Error::ArchiveFormatTooNew`]: the store was written
     /// in an archive format this build no longer reads, and there is no
-    /// conversion (STOR-10). Refused before any writable connection opens, so
+    /// conversion. Refused before any writable connection opens, so
     /// the store is left exactly as it was.
     #[error(
         "store at {path} has archive format {store_format}, but this build of \
@@ -84,11 +86,11 @@ pub enum Error {
     /// A read command was pointed at a data directory that holds no store.
     ///
     /// Its own variant rather than an [`Error::Io`] carrying a message, for the
-    /// same reason [`Error::TranscriptDiverged`] is one: D-10 requires `search`,
-    /// `show`, `sessions` and `mcp` to render this as an empty result with a
-    /// reason instead of a failure, and a caller that had to recognize it by
+    /// same reason [`Error::TranscriptDiverged`] is one: `search`, `show`,
+    /// `sessions` and `mcp` render this as an empty result with a reason
+    /// instead of a failure, and a caller that had to recognize it by
     /// matching on message text would break the first time the wording moved.
-    /// A read never creates the store it did not find (D-10), so this is the
+    /// A read never creates the store it did not find, so this is the
     /// ordinary state of a machine that has installed terminus and not yet run
     /// an ingest.
     #[error("no terminus store at {path}")]
@@ -105,16 +107,21 @@ pub enum Error {
     #[error("cannot read the terminus store at {path}: {detail}")]
     StoreUnreadable { path: PathBuf, detail: String },
 
-    /// A `since` or `until` filter that is neither a whole transcript timestamp
-    /// nor a bare date (D-23).
+    /// A `since` or `until` filter that is not a real date or time in one of
+    /// the two forms: a whole transcript timestamp or a bare date.
     ///
-    /// A caller error rather than an empty result, and that is the point: all
-    /// 22,412 sampled turns carry exactly one timestamp shape and the
-    /// comparison is lexicographic with no date parsing on the stored side, so
-    /// a value of any other shape would compare cleanly against every row and
-    /// return a plausible wrong answer instead of failing.
+    /// One variant for both failures, a value of neither form and a well-formed
+    /// one no calendar or clock has, such as `2026-02-30` or hour 25, because
+    /// to the caller they are one mistake: a bound that does not name an
+    /// instant. A caller error rather than an empty result, and that is the
+    /// point: the comparison is lexicographic with no date parsing on the
+    /// stored side, so such a value would compare cleanly against every row
+    /// and return a plausible wrong answer instead of failing.
+    ///
+    /// The message starts with the field, so a front end can put its own
+    /// spelling of the argument in front of it.
     #[error(
-        "{field} value {value:?} is not a time; \
+        "{field} {value:?} is not a real date or time; \
          expected YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS.mmmZ"
     )]
     InvalidTimeFilter { field: &'static str, value: String },

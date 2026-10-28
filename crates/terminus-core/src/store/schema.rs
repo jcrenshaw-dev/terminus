@@ -1,18 +1,18 @@
-//! Every table phase 1 needs, in one place, applied when a store is initialized.
+//! Every table a store carries, in one place, applied when one is initialized.
 //!
 //! Two groups, and the split is the whole architecture. `sessions`, `blocks`
 //! and `session_meta` are the archive: the block rows are truth and the archive
-//! tables never migrate (`DESIGN-BRIEF.md:94`). `turns`, `turns_fts`,
-//! `entities`, `paths` are derived and rebuildable from the block rows alone,
-//! which is what lets a derived-schema bump rebuild rather than migrate.
-//! `watermarks`, `runs` and `meta` are operational state.
+//! tables never migrate. `turns`, `turns_fts`, `entities`, `paths` are derived
+//! and rebuildable from the block rows alone, which is what lets a
+//! derived-schema bump rebuild rather than migrate. `watermarks`, `runs` and
+//! `meta` are operational state.
 //!
-//! `decisions` and `labels` join the archive group in phase 6 (D-03): a logged
-//! injection decision is prompt-time state the archive does not contain, so it
-//! is kept rather than rebuilt, and a `reindex` must never drop it.
-//! `observations` joins it in phase 7 (D-02): its facts come off the session's
-//! archived stream, and retention eviction deletes that stream's block rows, so
-//! an evicted session's observation cannot be recomputed.
+//! `decisions` and `labels` belong to the archive group: a logged injection
+//! decision is prompt-time state the archive does not contain, so it is kept
+//! rather than rebuilt, and a `reindex` must never drop it. `observations`
+//! belongs to it too: its facts come off the session's archived stream, and
+//! retention eviction deletes that stream's block rows, so an evicted
+//! session's observation cannot be recomputed.
 
 /// Bits of a turn id reserved for the per-session turn ordinal.
 ///
@@ -25,13 +25,13 @@ pub const TURN_SEQ_BITS: u32 = 24;
 /// One past the largest turn ordinal a session may hold.
 pub const MAX_TURNS_PER_SESSION: i64 = 1 << TURN_SEQ_BITS;
 
-/// The deterministic `turns.id` encoding (D-10).
+/// The deterministic `turns.id` encoding.
 ///
 /// `sessions.session_no` is a stable surrogate that survives a rebuild because
 /// `sessions` is never dropped, and `turn_seq` comes from byte order within the
-/// transcript (D-02). So dropping `turns` and rebuilding it reproduces exactly
-/// the same ids, which is what stops AC4's fixed query set from returning the
-/// same row count while pointing at different turns.
+/// transcript. So dropping `turns` and rebuilding it reproduces exactly the
+/// same ids, which is what stops a fixed query set run across a rebuild from
+/// returning the same row count while pointing at different turns.
 ///
 /// Panics on a `turn_seq` outside the reserved space rather than silently
 /// folding it into the next session's range.
@@ -57,23 +57,23 @@ pub fn split_turn_id(id: i64) -> (i64, i64) {
 /// Foreign keys are enforced: the bundled SQLite is built with
 /// `-DSQLITE_DEFAULT_FOREIGN_KEYS=1`, so a child row goes in after its parent
 /// and comes out before it, and `reindex` drops the derived children first.
-/// Ingest also writes parent and child inside one transaction (STOR-02).
+/// Ingest also writes parent and child inside one transaction.
 pub const CREATE_SQL: &str = "\
 -- ARCHIVE. Truth. Never migrated, only ever appended to.
 
 -- Keyed on the transcript FILE identity, never on the record's session id:
 -- 812 sidecar files report their parent's sessionId, so keying on that would
--- write a 3 KB agent transcript over a parent session's archive (D-01).
+-- write a 3 KB agent transcript over a parent session's archive.
 CREATE TABLE IF NOT EXISTS sessions (
     session_key TEXT    PRIMARY KEY,
     session_no  INTEGER NOT NULL UNIQUE
 );
 
 -- A session's stream, cut into `session_meta.block_size` uncompressed bytes per
--- block, one row per block, each compressed on its own (phase 7 D-03). `hash` is
--- BLAKE3 over the block's UNCOMPRESSED bytes (D-04), so a later zstd that
--- encodes a block differently fails no hash, and `session_meta.checksum` is
--- BLAKE3 over these hashes in `block_no` order.
+-- block, one row per block, each compressed on its own. `hash` is BLAKE3 over
+-- the block's UNCOMPRESSED bytes, so a later zstd that encodes a block
+-- differently fails no hash, and `session_meta.checksum` is BLAKE3 over these
+-- hashes in `block_no` order.
 --
 -- An append rewrites at most the last row and adds rows after it; every other
 -- row is never written again. A rowid table at SQLite's default page size,
@@ -96,10 +96,10 @@ CREATE TABLE IF NOT EXISTS session_meta (
     transcript_path   TEXT    NOT NULL,
     checksum          BLOB    NOT NULL,
     uncompressed_len  INTEGER NOT NULL,
-    -- Uncompressed bytes per block for this session (phase 7 D-05), written on
-    -- the session's first archive and never changed. Per session, so a later
-    -- block size applies to new sessions without rewriting old ones. Nullable
-    -- only so a hand-planted row needs no value; ingest always writes one.
+    -- Uncompressed bytes per block for this session, written on the session's
+    -- first archive and never changed. Per session, so a later block size
+    -- applies to new sessions without rewriting old ones. Nullable only so a
+    -- hand-planted row needs no value; ingest always writes one.
     block_size        INTEGER,
     continues_from    TEXT,
     first_turn_at     TEXT,
@@ -111,26 +111,28 @@ CREATE TABLE IF NOT EXISTS session_meta (
     is_evicted        INTEGER,
     parent_session_key TEXT,
     -- The bytes of a sidecar's `agent-*.meta.json`, stored opaquely and never
-    -- parsed into typed columns (D-04). The format is undocumented and may
-    -- drift, and 816 real meta files carry `agentType`, `description`,
-    -- `toolUseId`, `spawnDepth` and `model`; keeping the bytes lets phase 3
-    -- extract `description` without a reingest and bets no column on the shape.
+    -- parsed into typed columns. The format is undocumented and may drift, and
+    -- 816 real meta files carry `agentType`, `description`, `toolUseId`,
+    -- `spawnDepth` and `model`. Ingest stores the bytes and only checks whether
+    -- they are already stored; no code parses them. Keeping them means
+    -- `description` can be extracted later without a reingest, and bets no
+    -- column on the shape.
     agent_meta        BLOB,
     -- Set when the transcript on disk is shorter than this session's stored
-    -- watermark (D-13). The pass skips such a file rather than re-ingesting it
-    -- from offset 0 - the append-only property is an observation over one
-    -- 25-day corpus, not a guarantee - and `terminus verify` reports the
-    -- divergence off this column.
+    -- watermark. The pass skips such a file rather than re-ingesting it from
+    -- offset 0 - the append-only property is an observation over one 25-day
+    -- corpus, not a guarantee - and `terminus verify` reports the divergence
+    -- off this column.
     transcript_diverged INTEGER,
     -- The project key this session had BEFORE worktree mapping folded it into
-    -- its parent repo (D-06, ING-05). Both keys are stored so a later deletion
-    -- of the worktree directory cannot un-key an already-archived session, and
-    -- so the read-side exclusion test can match either path.
+    -- its parent repo. Both keys are stored so a later deletion of the
+    -- worktree directory cannot un-key an already-archived session, and so the
+    -- read-side exclusion test can match either path.
     project_pre_worktree TEXT,
-    -- Which `[capture]` mode this session's bytes were stored under (ING-07,
-    -- phase 8 D-13). Per session rather than a store-wide `meta` key, because
-    -- the byte-for-byte claim for `full` has to be assertable about a session in
-    -- an existing store and not only about a store built from scratch.
+    -- Which `[capture]` mode this session's bytes were stored under. Per
+    -- session rather than a store-wide `meta` key, because the byte-for-byte
+    -- claim for `full` has to be assertable about a session in an existing
+    -- store and not only about a store built from scratch.
     --
     -- Null is `full`: it is what every row written before this column existed
     -- means, and those rows were all written by a binary that had no other mode.
@@ -138,11 +140,6 @@ CREATE TABLE IF NOT EXISTS session_meta (
     -- full - an append never rewrites a completed block, so bytes written under
     -- an earlier mode are never revisited and a store whose mode changes
     -- mid-life holds a mix inside one session.
-    --
-    -- Declared last, and appended last in `BRING_FORWARD_COLUMNS`, which is that
-    -- constant's own rule: `ALTER TABLE ADD COLUMN` appends, so a column placed
-    -- mid-table would give a fresh store and an upgraded store different column
-    -- orders.
     capture_mode      TEXT
 );
 
@@ -152,30 +149,30 @@ CREATE INDEX IF NOT EXISTS idx_session_meta_continues_from
     ON session_meta(continues_from);
 CREATE INDEX IF NOT EXISTS idx_session_meta_path
     ON session_meta(transcript_path);
--- Project-scoped search filters on this column, and phase 5's injection will
--- read it on every prompt. D-19: it reaches a store that already exists only
--- because `reindex` runs this whole batch and phase 3's `DERIVED_SCHEMA` bump
--- forces that reindex - `Store::open` runs `CREATE_SQL` only when a whole table
--- is missing, and `BRING_FORWARD_COLUMNS` covers columns, not indexes. An index
+-- Project-scoped search filters on this column, the prompt-time recall's
+-- search included, and the resume brief counts the scoped project's sessions
+-- through this index. It reaches a store that already exists only because
+-- `reindex` runs this whole batch and a `DERIVED_SCHEMA` bump forces that
+-- reindex - `Store::open` runs `CREATE_SQL` only when a whole table is
+-- missing, and `BRING_FORWARD_COLUMNS` covers columns, not indexes. An index
 -- that existed on fresh stores and silently not on upgraded ones is two
 -- machines running one binary at different speeds with nothing reporting why.
 CREATE INDEX IF NOT EXISTS idx_session_meta_project
     ON session_meta(project);
 
--- One `UserPromptSubmit` decision, non-fires included (FEED-01). Archival, and
+-- One `UserPromptSubmit` decision, non-fires included. Archival, and
 -- deliberately NOT in `DERIVED_TABLES`: a decision records prompt-time state -
 -- what the prompt named, what the index answered, which thresholds were in
 -- force, what was suppressed - that no archive replay can reconstruct, so a
--- `reindex` that dropped it would silently delete the entire history FEED-03's
--- replay diff and FEED-04's precision are computed over (D-03, a recorded
--- divergence from `DESIGN-BRIEF.md:92`).
+-- `reindex` that dropped it would silently delete the entire history that
+-- `terminus replay` diffs and `terminus stats` computes precision over.
 --
 -- The row is drained out of a per-prompt file by a later ingest pass and never
--- written by the hook itself (D-01): a SQLite write on the prompt path sits
--- behind the ingest writer, measured holding the store for 49 s.
+-- written by the hook itself: a SQLite write on the prompt path sits behind
+-- the ingest writer, measured holding the store for 49 s.
 --
--- Anchored by `session_id` and wall clock, never by `turn_seq` (D-04): the
--- injector never reads the live transcript, so it cannot know a turn index, and
+-- Anchored by `session_id` and wall clock, never by `turn_seq`: the injector
+-- never reads the live transcript, so it cannot know a turn index, and
 -- labelling resolves the anchor to a turn afterwards.
 CREATE TABLE IF NOT EXISTS decisions (
     id           INTEGER PRIMARY KEY,
@@ -185,11 +182,11 @@ CREATE TABLE IF NOT EXISTS decisions (
     cwd          TEXT,
     prompt       TEXT,
     -- Max `sessions.session_no` when the decision was taken, which is what
-    -- bounds a replay to the index as it stood (D-10). Null only until the
-    -- drain stamps it: a prompt naming no candidate spelling never opens the
-    -- store and so has no watermark of its own.
+    -- bounds a replay to the index as it stood. Null only until the drain
+    -- stamps it: a prompt naming no candidate spelling never opens the store
+    -- and so has no watermark of its own.
     watermark_session_no INTEGER,
-    -- The character proxy, never tokens (D-12): 0 for every non-fire.
+    -- The character proxy, never tokens: 0 for every non-fire.
     chars_injected INTEGER,
     -- The list-shaped payload, each column one JSON document. JSON rather than
     -- five child tables because nothing joins on them - they are read back
@@ -197,36 +194,31 @@ CREATE TABLE IF NOT EXISTS decisions (
     -- The spellings the prompt was asked about, strongest first.
     spellings    TEXT,
     -- The scored candidates: turn id, relevance, entity score, entity count and
-    -- the matched `(kind, value)` pairs (D-05).
+    -- the matched `(kind, value)` pairs.
     candidates   TEXT,
     -- The turns injected, with the characters each one spent.
     injected     TEXT,
     -- The turns refused, with their reason.
     suppressed   TEXT,
     -- The threshold values in force, logged per decision because they are
-    -- compile-time constants a later build may change (D-08).
+    -- compile-time constants a later build may change.
     thresholds   TEXT,
-    -- 1 when the prompt ran under the compacted pool (INJ-05), 0 when it did
-    -- not. Null means the decision was drained before this column existed, so
-    -- its value is unknown. Nullable rather than `NOT NULL DEFAULT 0`, which
-    -- would record every earlier decision as ordinary for good.
+    -- 1 when the prompt ran under the compacted pool, 0 when it did not.
+    -- Null means the decision was drained before this column existed, so its
+    -- value is unknown. Nullable rather than `NOT NULL DEFAULT 0`, which would
+    -- record every earlier decision as ordinary for good.
     compacted    INTEGER,
     -- The turn ids the compaction dropped, one JSON document like the other
     -- list-shaped columns. Null for the same earlier decisions.
-    --
-    -- Both declared last, and appended last in `BRING_FORWARD_COLUMNS`, which
-    -- is that constant's own rule: `ALTER TABLE ADD COLUMN` appends, so a
-    -- column placed mid-table would give a fresh store and an upgraded store
-    -- different column orders.
     dropped      TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_decisions_session ON decisions(session_id);
 
--- What a decision turned out to be worth (FEED-02). Archival for the same
--- reason `decisions` is: recomputing labels under changed rules is what
--- `terminus replay` is for, and dropping them on reindex would leave
--- `terminus stats` reporting zero precision until the next pass relabels.
+-- What a decision turned out to be worth. Archival for the same reason
+-- `decisions` is: recomputing labels under changed rules is what `terminus
+-- replay` is for, and dropping them on reindex would leave `terminus stats`
+-- reporting zero precision until the next pass relabels.
 --
 -- `turn_id` carries NO foreign key on purpose, unlike every other reference in
 -- this schema. `turns` is a derived table `reindex` drops, foreign keys really
@@ -245,11 +237,12 @@ CREATE TABLE IF NOT EXISTS labels (
 
 CREATE INDEX IF NOT EXISTS idx_labels_decision ON labels(decision_id);
 
--- One session's account of itself (OBS-01..OBS-04). Archival, and deliberately
--- NOT in `DERIVED_TABLES` (phase 7 D-02). The facts come off the session's
--- archived stream, and retention eviction deletes its block rows, so an evicted
--- session's observation cannot be recomputed and a `reindex` that dropped this
--- table would lose it for good. `terminus observations regenerate` (OBS-07) is the only rebuild path.
+-- One session's account of itself. Archival, and deliberately NOT in
+-- `DERIVED_TABLES`. The facts come off the session's archived stream, and
+-- retention eviction deletes its block rows, so an evicted session's
+-- observation cannot be recomputed and a `reindex` that dropped this table
+-- would lose it for good. `terminus observations regenerate` is the only
+-- rebuild path.
 --
 -- `mechanical` is one JSON document rather than a column per fact, the way
 -- `decisions` carries its list-shaped fields: nothing joins on them and they
@@ -258,7 +251,7 @@ CREATE TABLE IF NOT EXISTS observations (
     session_key    TEXT PRIMARY KEY REFERENCES sessions(session_key),
     session_id     TEXT,
     generated_at   TEXT,
-    -- The OBS-01 facts: files, tools, commands with their arguments, errors,
+    -- The mechanical facts: files, tools, commands with their arguments, errors,
     -- branch, commits, turn count, duration, compactions.
     mechanical     TEXT
 );
@@ -267,9 +260,9 @@ CREATE TABLE IF NOT EXISTS observations (
 -- reindex.
 
 -- stream_offset and byte_len address the UNCOMPRESSED session stream, never
--- the compressed block rows (D-04). The session's block size turns an offset
--- into block numbers, so a later block-size change rewrites no turn row - which
--- is the point of an archive that never migrates.
+-- the compressed block rows. The session's block size turns an offset into
+-- block numbers, so a later block-size change rewrites no turn row - which is
+-- the point of an archive that never migrates.
 CREATE TABLE IF NOT EXISTS turns (
     id            INTEGER PRIMARY KEY,
     session_key   TEXT    NOT NULL REFERENCES sessions(session_key),
@@ -281,25 +274,20 @@ CREATE TABLE IF NOT EXISTS turns (
     ts            TEXT,
     stream_offset INTEGER NOT NULL,
     byte_len      INTEGER NOT NULL,
-    -- Whether the PERSON typed this turn or the harness wrote it (INJ-07,
-    -- phase 1 D-02): 1 typed, 0 harness-authored. The rule reads the record's
-    -- own `message.content` blocks and nothing else, so it survives `[capture]`
-    -- elision and needs no cross-record join (D-01, D-07).
+    -- Whether the PERSON typed this turn or the harness wrote it: 1 typed, 0
+    -- harness-authored. The rule reads the record's own `message.content`
+    -- blocks and nothing else, so it survives `[capture]` elision and needs no
+    -- cross-record join.
     --
     -- Null means nothing derived this, which is what a non-`user` row is - the
     -- classification is written for `record_type = 'user'` and for no other
     -- type - and what a preserved evicted session's rows are: `reindex` skips
     -- them, so they keep null whatever the declaration says. Nullable rather
-    -- than `NOT NULL DEFAULT` for exactly that reason (D-04): a default would
-    -- silently read every preserved row as one class, and the no-third-state
-    -- claim is asserted as a count query returning zero instead. The `capture_mode`
+    -- than `NOT NULL DEFAULT` for exactly that reason: a default would silently
+    -- read every preserved row as one class, and the no-third-state claim is
+    -- asserted as a count query returning zero instead. The `capture_mode`
     -- column above is the same shape - a nullable added column whose null has a
     -- documented meaning.
-    --
-    -- Declared last, and appended last in `BRING_FORWARD_COLUMNS`, which is that
-    -- constant's own rule: `ALTER TABLE ADD COLUMN` appends, so a column placed
-    -- mid-table would give a fresh store and an upgraded store different column
-    -- orders.
     is_typed      INTEGER,
     UNIQUE (session_key, turn_seq)
 );
@@ -309,15 +297,15 @@ CREATE INDEX IF NOT EXISTS idx_turns_ts ON turns(ts);
 
 -- One row per compaction boundary, keyed by where its record sits in the
 -- session stream rather than by a turn, so a boundary with no turn behind it -
--- one missing its `uuid` or `timestamp` - still has a place (D-19, D-20).
+-- one missing its `uuid` or `timestamp` - still has a place.
 -- `stream_offset` is the same uncompressed-stream coordinate as
 -- `turns.stream_offset`, so the two compare correctly under every capture mode,
 -- and the dropped set is the turns at a lower offset than the boundary.
--- `metadata` holds the record's `compactMetadata` object bytes verbatim (D-08).
+-- `metadata` holds the record's `compactMetadata` object bytes verbatim.
 -- No dropped-turn set is computed: exactly one real boundary exists in 300,556
 -- measured records and its own token counts contradict the design brief's
--- reading of `preservedMessages.uuids`, so the complement is derived at query
--- time in phase 5 (INJ-05) where a wrong reading costs no reingest.
+-- reading of `preservedMessages.uuids`, so injection derives the complement at
+-- query time (`inject::compaction`), where a wrong reading costs no reingest.
 CREATE TABLE IF NOT EXISTS compactions (
     session_key   TEXT    NOT NULL REFERENCES sessions(session_key),
     stream_offset INTEGER NOT NULL,
@@ -328,7 +316,7 @@ CREATE TABLE IF NOT EXISTS compactions (
 -- content='' because the text lives in the archive and storing it twice would
 -- double the store; contentless_delete=1 because re-deriving a turn deletes
 -- and reinserts at a known rowid, which is what makes a rebuild idempotent by
--- construction rather than by a uniqueness check (D-10). rowid IS turns.id.
+-- construction rather than by a uniqueness check. rowid IS turns.id.
 CREATE VIRTUAL TABLE IF NOT EXISTS turns_fts
     USING fts5(body, content='', contentless_delete=1);
 
@@ -351,26 +339,25 @@ CREATE INDEX IF NOT EXISTS idx_paths_turn ON paths(turn_id);
 
 -- OPERATIONAL.
 
--- The byte offset just past the last newline of a transcript, never its end
--- (D-14): a trailing partial line is a record still being written.
+-- The byte offset just past the last newline of a transcript, never its end:
+-- a trailing partial line is a record still being written.
 CREATE TABLE IF NOT EXISTS watermarks (
     transcript_path TEXT    PRIMARY KEY,
     byte_offset     INTEGER NOT NULL,
     updated_at      TEXT
 );
 
--- One ingest pass, whatever the file count (D-10). There is no log file;
--- `status` surfaces this table.
+-- One ingest pass, whatever the file count. There is no log file; `status`
+-- surfaces this table.
 --
 -- `files_seen` is what the pass WALKED. A pass over a tree walks thousands of
--- files, commits most of them and skips the damaged ones (D-12), and one
--- integer cannot carry those three numbers - so the other two get columns of
--- their own rather than being inferred from `error` being non-null.
+-- files, commits most of them and skips the damaged ones, and one integer
+-- cannot carry those three numbers - so the other two get columns of their own
+-- rather than being inferred from `error` being non-null.
 --
 -- `error` holds what went wrong and `notes` what a healthy pass did worth
 -- saying (labels written, sessions retention evicted), so a reader that flags
--- a non-null `error` flags only failures. `notes` is declared last, and
--- appended last in `BRING_FORWARD_COLUMNS`, for the column-order rule there.
+-- a non-null `error` flags only failures.
 CREATE TABLE IF NOT EXISTS runs (
     id           INTEGER PRIMARY KEY,
     started_at   TEXT    NOT NULL,
@@ -385,7 +372,7 @@ CREATE TABLE IF NOT EXISTS runs (
     notes           TEXT
 );
 
--- The two version integers the gate reads before any write (D-09).
+-- The two version integers the gate reads before any write.
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -395,16 +382,16 @@ CREATE TABLE IF NOT EXISTS meta (
 /// The tables a store carries, excluding FTS5's shadow tables.
 pub const TABLES: &[&str] = &[
     "sessions",
-    // Archive, never derived: `reindex` must never drop it (phase 7 D-03).
+    // Archive, never derived: `reindex` must never drop it.
     "blocks",
     "session_meta",
     // Both reach an already-initialized store through `bring_forward`'s
-    // missing-table arm on the next `Store::open`, which is what lets phase 6
-    // add two tables with no `DERIVED_SCHEMA` bump and no forced reindex (D-02).
+    // missing-table arm on the next `Store::open`, which is what lets them
+    // arrive with no `DERIVED_SCHEMA` bump and no forced reindex.
     "decisions",
     "labels",
-    // Phase 7 D-01, on the same terms: one more table declared here and absent
-    // from `DERIVED_TABLES`, reaching an already-initialized store through the
+    // On the same terms: one more table declared here and absent from
+    // `DERIVED_TABLES`, reaching an already-initialized store through the
     // same arm, with no `DERIVED_SCHEMA` bump and so no forced reindex.
     "observations",
     "turns",
@@ -417,13 +404,13 @@ pub const TABLES: &[&str] = &[
     "meta",
 ];
 
-/// The derived tables `reindex` drops and rebuilds from the block rows
-/// (STOR-04). `sessions`, `blocks` and `session_meta` are absent by design, and
-/// so are `decisions` and `labels`: nothing in the archive can reconstruct what
-/// an injector decided at prompt time (D-03). `observations` is absent too
-/// (phase 7 D-02): its facts come off the session's archived stream, and
-/// retention eviction deletes its block rows, so a `reindex` that dropped the
-/// table could not recompute an evicted session's row.
+/// The derived tables `reindex` drops and rebuilds from the block rows.
+/// `sessions`, `blocks` and `session_meta` are absent by design, and so are
+/// `decisions` and `labels`: nothing in the archive can reconstruct what an
+/// injector decided at prompt time. `observations` is absent too: its facts
+/// come off the session's archived stream, and retention eviction deletes its
+/// block rows, so a `reindex` that dropped the table could not recompute an
+/// evicted session's row.
 ///
 /// In creation order, because `reindex` drops in reverse: `entities` and
 /// `paths` reference `turns(id)`, so they sit **after** `turns` here and are
@@ -433,79 +420,24 @@ pub const TABLES: &[&str] = &[
 pub const DERIVED_TABLES: &[&str] = &["turns", "compactions", "turns_fts", "entities", "paths"];
 
 /// Columns added to an existing table after that table first shipped, with the
-/// type clause that adds each one back.
+/// type clause that adds each one.
 ///
 /// Every statement in [`CREATE_SQL`] is `IF NOT EXISTS`, so re-running it over
-/// a store that already has `session_meta` and `runs` creates a new *table* and
-/// adds no *column* to either. This list is the other half: `Store::open`
-/// compares it against `PRAGMA table_info` and issues
-/// `ALTER TABLE ... ADD COLUMN` for whatever is missing, which is why a writable
-/// command in a binary carrying a newer schema can run against a store written
-/// by an older one without hitting `no such column`. A read-only open, which
+/// a store that already has a table adds no *column* to it. This list is the
+/// other half: `Store::open` compares it against `PRAGMA table_info` and issues
+/// `ALTER TABLE ... ADD COLUMN` for whatever is missing. A read-only open, which
 /// `status` and every other read command use, adds nothing: it measures the
 /// same list and reports what is absent through `Store::missing_columns`.
 ///
-/// Order matters: `ALTER TABLE ADD COLUMN` appends, so these must be listed in
-/// the same order [`CREATE_SQL`] declares them and must be declared at the END
-/// of their table there. A fresh store and an upgraded store then carry
-/// identical column order. Adding a column in a later phase means appending it
-/// in both places, never inserting it.
+/// Empty until a column is added to a table a store already has.
+///
+/// Order matters: `ALTER TABLE ADD COLUMN` appends, so a column listed here
+/// must be declared at the END of its table in [`CREATE_SQL`], in the same
+/// order it is listed. A fresh store and an upgraded store then carry identical
+/// column order. Adding a column means appending it in both places, never
+/// inserting it.
 ///
 /// Only additive changes belong here. Adding a column is safe on any opener;
 /// dropping, renaming or rewriting one is not, and the archive tables
-/// (`sessions`, `session_meta`) never migrate beyond an added column
-/// (`DESIGN-BRIEF.md:94`).
-pub const BRING_FORWARD_COLUMNS: &[(&str, &[(&str, &str)])] = &[
-    (
-        "session_meta",
-        &[
-            ("agent_meta", "BLOB"),
-            ("transcript_diverged", "INTEGER"),
-            ("project_pre_worktree", "TEXT"),
-            ("capture_mode", "TEXT"),
-        ],
-    ),
-    (
-        "runs",
-        &[
-            ("files_committed", "INTEGER NOT NULL DEFAULT 0"),
-            ("files_failed", "INTEGER NOT NULL DEFAULT 0"),
-            ("notes", "TEXT"),
-        ],
-    ),
-    // `turns` is a DERIVED table, and it is here anyway (phase 1 D-08). The
-    // preserving rebuild path - a store holding an evicted session - skips the
-    // DROP loop and runs only `CREATE TABLE IF NOT EXISTS`, a no-op on a table
-    // that already exists, so nothing there would ever create the column;
-    // `derive::derive_turn` names it in an explicit INSERT list and would then
-    // fail with `no such column` on every future pass, permanently, because
-    // `reindex::open_up_to_date` runs at the top of each one.
-    ("turns", &[("is_typed", "INTEGER")]),
-    (
-        "decisions",
-        &[("compacted", "INTEGER"), ("dropped", "TEXT")],
-    ),
-];
-
-/// The session-summary columns `observations` carried while Terminus called a
-/// model, which `Store::open` drops from any store that still has them.
-///
-/// Kept apart from [`BRING_FORWARD_COLUMNS`] because that list is additive
-/// only. Whether any of these is still present is the whole record of whether
-/// the drop has run: there is no marker key and no format bump.
-pub const DROPPED_OBSERVATION_COLUMNS: &[&str] = &[
-    "status",
-    "model",
-    "prompt_version",
-    "topic",
-    "outcome",
-    "decisions",
-    "learned",
-    "unresolved",
-    "raw",
-    "tokens",
-];
-
-/// The meta key the daily token budget for those summaries was kept under,
-/// deleted in the same transaction as the columns.
-pub const DROPPED_META_KEY: &str = "observe.daily_tokens";
+/// (`sessions`, `session_meta`) never migrate beyond an added column.
+pub const BRING_FORWARD_COLUMNS: &[(&str, &[(&str, &str)])] = &[];

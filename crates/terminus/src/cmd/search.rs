@@ -1,19 +1,20 @@
-//! `terminus search`: find a past turn from the terminal (RCL-05).
+//! `terminus search`: find a past turn from the terminal.
 //!
 //! The command parses and validates; [`terminus_core::recall`] decides what
 //! relevance is. That split is the whole reason this file is short: `terminus
-//! search` and PLAN-4's `recall_search` are two front ends over one query layer,
+//! search` and `recall_search` are two front ends over one query layer,
 //! and a filter interpreted here rather than there would be a second definition
 //! of what a search means.
 //!
-//! **The user's string never reaches SQLite (D-09).** `Query::parse` splits it
+//! **The user's string never reaches SQLite.** `Query::parse` splits it
 //! on the separators the index tokenizes on and rebuilds a quoted, conjoined
 //! FTS5 expression. Measured on sqlite 3.53.4, `MATCH 'src/worker/S.ts'` fails
 //! with `fts5: syntax error near "/"` - so the most natural command in the
-//! product is exactly the one a raw `MATCH` would refuse, and RCL-06 forbids a
-//! non-zero exit for a query that simply found nothing.
+//! product is exactly the one a raw `MATCH` would refuse, and the contract every
+//! data command keeps forbids a non-zero exit for a query that simply found
+//! nothing.
 //!
-//! **`--raw` is the owner's way back to their own archive (PRIV-03, D-07).**
+//! **`--raw` is the owner's way back to their own archive.**
 //! With `[privacy] redact_recall` set, the excerpt this prints is filtered like
 //! every other projection that reaches a model; `--raw` spends
 //! [`terminus_core::Config::without_recall_redaction`] for this one invocation
@@ -23,12 +24,10 @@
 //! unfilter the model-facing paths the knob exists to cover.
 
 use terminus_core::recall::{search, Filters, Query, Request, MAX_RESULTS};
-use terminus_core::Error;
 
 use super::json::Document;
 use super::read::{self, Opened};
 use super::Failure;
-use crate::escape;
 
 /// The command name, which is also what the `--json` envelope reports.
 const COMMAND: &str = "search";
@@ -40,15 +39,6 @@ const COMMAND: &str = "search";
 /// two-line entries is a screenful and a half.
 const DEFAULT_LIMIT: usize = 10;
 
-/// The kind that searched stored session summaries. Those are gone, and a kind
-/// that is accepted and matches nothing reads as "no results", so both front
-/// ends refuse it by name instead.
-pub(crate) const RETIRED_KIND: &str = "observation";
-
-/// What a caller asking for [`RETIRED_KIND`] is told, on either front end.
-pub(crate) const RETIRED_KIND_MESSAGE: &str =
-    "kind \"observation\" is no longer offered: session summaries were removed from Terminus";
-
 pub fn run(args: Args) -> Result<(), Failure> {
     // Parsed before the store is opened, so both exits carry the same shape: a
     // document whose fields depend on whether a store was there would be a
@@ -59,7 +49,7 @@ pub fn run(args: Args) -> Result<(), Failure> {
     let reader = match read::open()? {
         Opened::Ready(reader) => reader,
         Opened::Nothing(reason) => {
-            return read::empty(document(&args.query, &[], truncated), &reason, args.json)
+            return read::empty(empty(&args), &reason, args.json)
         }
     };
 
@@ -67,7 +57,7 @@ pub fn run(args: Args) -> Result<(), Failure> {
         // On stderr, and the search still runs. The tokens are conjoined, so a
         // truncated query is BROADER than the one asked for rather than wrong in
         // a direction the user cannot see - but they are owed the fact.
-        eprintln!(
+        errln!(
             "terminus: only the first {} tokens of the query were used",
             query.tokens().len()
         );
@@ -86,15 +76,6 @@ pub fn run(args: Args) -> Result<(), Failure> {
 
     let response = match search::run(reader.store().conn(), config, &request) {
         Ok(response) => response,
-        // A malformed `--since` is a mistake in the command line, not an empty
-        // result: every string compares cleanly against every other, so the
-        // alternative is a plausible wrong answer that nothing reports (D-23).
-        Err(Error::InvalidTimeFilter { field, value }) => {
-            return Err(Failure::Misuse(format!(
-                "--{field} {value:?} is not a time; expected YYYY-MM-DD or \
-                 YYYY-MM-DDTHH:MM:SS.mmmZ"
-            )))
-        }
         Err(other) => return Err(Failure::Operational(other.to_string())),
     };
 
@@ -114,7 +95,7 @@ pub fn run(args: Args) -> Result<(), Failure> {
                     "entity_score": hit.entity_score,
                     // The pairs behind `entity_score`, so a caller can see WHICH
                     // stored values it came from rather than only how much they
-                    // weighed (D-05).
+                    // weighed.
                     "matched_on": hit
                         .matched_on
                         .iter()
@@ -138,25 +119,25 @@ pub fn run(args: Args) -> Result<(), Failure> {
         // takes, and following a hit into the conversation around it is what
         // the next command a reader runs does.
         //
-        // Everything archived on these two lines goes through `escape`, after
-        // the day cut and after core's excerpt cut, so an excerpt holding a
-        // control prints longer than `EXCERPT_CHARS`.
+        // Everything archived on these two lines goes out through the default
+        // escape in `out.rs`, after the day cut and after core's excerpt cut,
+        // so an excerpt holding a control prints longer than `EXCERPT_CHARS`.
         outln!(
             "{}  {}  {}  {}{}",
             hit.turn_id,
-            escape::controls(day(hit.ts.as_deref())),
-            escape::controls(session_of(&hit.session_key)),
-            escape::controls(hit.project.as_deref().unwrap_or("(no project)")),
+            day(hit.ts.as_deref()),
+            session_of(&hit.session_key),
+            hit.project.as_deref().unwrap_or("(no project)"),
             if hit.sidechain { "  (subagent)" } else { "" },
         );
-        outln!("    {}", escape::controls(&hit.excerpt));
+        outln!("    {}", hit.excerpt);
     }
 
     // Commentary on stderr, so stdout stays the hits and nothing else. It is
     // also what makes an empty result visibly empty rather than silent.
     match &response.reason {
-        Some(reason) => eprintln!("terminus: {reason}"),
-        None => eprintln!("{} hit(s)", response.hits.len()),
+        Some(reason) => errln!("terminus: {reason}"),
+        None => errln!("{} hit(s)", response.hits.len()),
     }
     Ok(())
 }
@@ -171,8 +152,8 @@ fn document(query: &str, hits: &[serde_json::Value], truncated: bool) -> Documen
 
 /// A transcript timestamp at day resolution.
 ///
-/// All 22,412 turns of a 180-file sample carry exactly `NNNN-NN-NNTNN:NN:NN.NNNZ`
-/// (D-23), so the day is the first ten characters and there is no date parsing
+/// All 22,412 turns of a 180-file sample carry exactly `NNNN-NN-NNTNN:NN:NN.NNNZ`,
+/// so the day is the first ten characters and there is no date parsing
 /// on the read path. A turn with no timestamp says so rather than showing a
 /// blank column that reads as an alignment bug.
 fn day(ts: Option<&str>) -> &str {
@@ -201,6 +182,12 @@ fn session_of(session_key: &str) -> &str {
         .unwrap_or(session_key)
 }
 
+/// The document with no hit, carrying the query as typed and whether it was cut.
+/// The no-store answer, and what `main` writes when the command fails.
+pub(crate) fn empty(args: &Args) -> Document {
+    document(&args.query, &[], Query::parse(&args.query).truncated())
+}
+
 /// The parsed command line for `search`.
 #[derive(Debug)]
 pub struct Args {
@@ -215,7 +202,7 @@ pub struct Args {
     ///
     /// Governs the projection in both renderings. `--raw --json` emits the same
     /// keys with unfiltered values, because the flag changes a value and never
-    /// a key (D-08).
+    /// a key.
     pub raw: bool,
 }
 
@@ -233,24 +220,15 @@ pub fn parse(parser: &mut lexopt::Parser) -> Result<Args, Failure> {
         match arg {
             Long("project") => project = Some(super::value(parser, "project")?),
             Long("tool") => filters.tool = Some(super::value(parser, "tool")?),
-            Long("kind") => {
-                let kind = super::value(parser, "kind")?;
-                if kind == RETIRED_KIND {
-                    return Err(Failure::Misuse(RETIRED_KIND_MESSAGE.into()));
-                }
-                filters.kind = Some(kind);
-            }
+            Long("kind") => filters.kind = Some(super::value(parser, "kind")?),
             // Repeatable: a turn carrying any of the named paths is a hit, and
             // it is one hit however many of them it carries.
             Long("path") => filters.paths.push(super::value(parser, "path")?),
-            // Validated here rather than only inside the query layer: a bad
-            // bound must be misuse whatever project the caller is standing in.
-            Long("since") => {
-                filters.since = Some(super::time_bound("since", &super::value(parser, "since")?)?)
-            }
-            Long("until") => {
-                filters.until = Some(super::time_bound("until", &super::value(parser, "until")?)?)
-            }
+            // Checked here as well as inside the query layer: a data directory
+            // with no store answers before the query layer is reached, and a
+            // bad bound is misuse there too.
+            Long("since") => filters.since = Some(super::date_value(parser, "since")?),
+            Long("until") => filters.until = Some(super::date_value(parser, "until")?),
             Long("limit") => {
                 let raw = super::value(parser, "limit")?;
                 limit = raw
@@ -267,7 +245,7 @@ pub fn parse(parser: &mut lexopt::Parser) -> Result<Args, Failure> {
             // Spelled out here rather than shared through `cmd::mod`: a
             // parser two commands reach through is how `verify --json` came
             // to look supported before it was, and this one belongs to
-            // exactly the commands that print a projection (D-07).
+            // exactly the commands that print a projection.
             Long("raw") => raw = true,
             // Every remaining word is part of the query, which is what lets
             // `terminus search cannot find module` work without quoting.
@@ -298,7 +276,7 @@ mod tests {
 
     /// A stored timestamp is any JSON string the transcript carried, so the
     /// day cut has to be total over arbitrary bytes rather than over the one
-    /// shape D-23 measured.
+    /// measured shape.
     #[test]
     fn the_day_cut_survives_a_timestamp_that_is_not_the_measured_shape() {
         // The shape 22,412 of 22,412 sampled turns actually carry.

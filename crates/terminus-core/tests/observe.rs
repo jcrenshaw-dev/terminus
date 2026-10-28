@@ -1,4 +1,4 @@
-//! OBS-01: the mechanical facts, computed off the parser and off nothing else.
+//! The mechanical facts, computed off the parser and off nothing else.
 //!
 //! Every test here runs against a real store with real fixtures ingested into
 //! it. Nothing is mocked and nothing is stubbed, because the claim under test
@@ -71,7 +71,8 @@ fn key_of(path: &Path) -> String {
     path.canonicalize().unwrap().to_string_lossy().into_owned()
 }
 
-/// AC1's fact set, over the two fixtures that carry an edit and a failure.
+/// Files, tools, commands, errors, branch and duration, over the two fixtures
+/// that carry an edit and a failure.
 #[test]
 fn one_session_reports_its_files_tools_commands_errors_branch_and_duration() {
     let bench = bench();
@@ -119,7 +120,7 @@ fn one_session_reports_its_files_tools_commands_errors_branch_and_duration() {
     assert_eq!(errors.branch.as_deref(), Some("phase-3"));
 }
 
-/// D-04's whole reason for reading a blob: `entities` holds the BASENAME of a
+/// The whole reason for reading a blob: `entities` holds the BASENAME of a
 /// command, so the arguments have to come from somewhere else.
 ///
 /// The contrast is asserted on the same session, so this cannot pass by the
@@ -364,7 +365,7 @@ impl PassBench {
 /// pass changes nothing.
 ///
 /// The insert-only rule is what the second half is about, and it is not
-/// tidiness: `terminus observations regenerate` is the only rebuild path (D-02)
+/// tidiness: `terminus observations regenerate` is the only rebuild path
 /// precisely so a pass cannot discard a row whose blob retention may since have
 /// emptied.
 #[test]
@@ -427,7 +428,7 @@ fn a_session_is_observed_on_the_pass_that_finalizes_it() {
 }
 
 /// An excluded project's sessions are never observed, including sessions
-/// archived before the exclusion was configured (ING-08): this step reads a
+/// archived before the exclusion was configured: this step reads a
 /// blob, and "excluded means never read" is the whole of the read half.
 #[test]
 fn an_excluded_project_gets_no_observation() {
@@ -450,4 +451,41 @@ fn an_excluded_project_gets_no_observation() {
     let observed = terminus_core::observe::observe_new(&bench.conn(), &excluded);
     assert_eq!(observed.written, 0, "{observed:?}");
     assert!(bench.rows().is_empty());
+}
+
+/// More newly finalized sessions than one pass may observe: the pass writes
+/// the bound's worth, and the line naming the rest goes under `notes` with
+/// `error` left null, because nothing failed (#96).
+#[test]
+fn a_pass_over_the_bound_notes_the_waiting_sessions_and_reports_no_error() {
+    let bench = pass_bench();
+    let at = ts("-10 hours");
+    for i in 0..=observe::MAX_PER_PASS {
+        let session = format!("{i:08x}-0000-4000-8000-{i:012x}");
+        bench.transcript(&session, &at, "cargo test");
+    }
+
+    let summary = bench.pass();
+    assert_eq!(
+        summary.observations.written,
+        observe::MAX_PER_PASS,
+        "{:?}",
+        summary.observations
+    );
+    assert_eq!(bench.rows().len(), observe::MAX_PER_PASS);
+
+    let (error, notes): (Option<String>, Option<String>) = bench
+        .conn()
+        .query_row(
+            "SELECT error, notes FROM runs ORDER BY id DESC LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(error, None, "the waiting line was written as an error");
+    let notes = notes.expect("the pass wrote no notes");
+    assert!(
+        notes.contains("1 more finalized session(s) are waiting to be observed"),
+        "{notes}"
+    );
 }

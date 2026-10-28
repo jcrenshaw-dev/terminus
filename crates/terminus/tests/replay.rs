@@ -1,10 +1,10 @@
-//! AC4 at the process boundary: `terminus replay` answers, and the store is
-//! byte for byte what it was (FEED-03).
+//! `terminus replay` at the process boundary: it answers, and the store is
+//! byte for byte what it was.
 //!
 //! Spawns rather than library calls. The byte-identity claim is about a
 //! command, not about a function: `terminus-core`'s `tests/feedback.rs` asserts
 //! what a replay COMPUTES, and what is here is that running it leaves nothing
-//! behind - which is a statement about how the binary opens the file (D-15) and
+//! behind - which is a statement about how the binary opens the file and
 //! is unfalsifiable inside a call that was handed an open store.
 
 use std::path::PathBuf;
@@ -15,8 +15,8 @@ use terminus_core::store::DB_FILE_NAME;
 use terminus_core::testkit;
 
 /// The fixture whose `Edit` stores an absolute path, and the session id its own
-/// records carry - a decision is joined to a session by `session_id` alone
-/// (D-04), so a logged decision has to name this one to be labelled at all.
+/// records carry - a decision is joined to a session by `session_id` alone,
+/// so a logged decision has to name this one to be labelled at all.
 const FIXTURE: &str = "session-edits.jsonl";
 const FIXTURE_SESSION: &str = "44444444-4444-4444-8444-444444444444";
 
@@ -162,7 +162,7 @@ fn document(output: &Output) -> serde_json::Value {
         .unwrap_or_else(|e| panic!("stdout is not one JSON document ({e}): {text:?}"))
 }
 
-/// AC4: an override flag, exit 0, a per-label diff, and a store nothing
+/// An override flag, exit 0, a per-label diff, and a store nothing
 /// touched.
 #[test]
 fn replay_reports_a_per_label_diff_and_leaves_the_store_alone() {
@@ -210,7 +210,7 @@ fn replay_reports_a_per_label_diff_and_leaves_the_store_alone() {
     assert_eq!(false_positive["old"], 1, "{value}");
     assert!(value["data"]["changed"].is_array(), "{value}");
 
-    // The claim AC4 is really about.
+    // The claim this file is really about.
     assert_eq!(bench.store_bytes(), before, "replay changed the store");
     let sidecars = bench.sidecars();
     assert_eq!(sidecars.0, 0, "replay left a frame in the WAL");
@@ -251,7 +251,7 @@ fn replay_without_json_prints_the_diff_and_writes_nothing() {
 }
 
 /// A machine that has never ingested: an empty answer with a reason and exit 0,
-/// and no store created by having been asked (RCL-06, D-10).
+/// and no store created by having been asked.
 #[test]
 fn replay_against_no_store_is_a_reason_and_creates_nothing() {
     let bench = bench();
@@ -298,24 +298,16 @@ fn a_malformed_threshold_is_misuse() {
     }
 }
 
-/// A store written before phase 6: both reads that live on the decision log
-/// answer, and neither leaks a sqlite line where an envelope was promised.
+/// A store missing the whole decision log is damaged, and both reads that live
+/// on the log say so: exit 1, and under `--json` a document with `ok: false`.
 ///
-/// The tables are dropped rather than a phase-5 binary being kept around,
-/// because the condition under test is exactly "these two tables are absent" -
-/// `decisions` and `labels` went into `schema::TABLES` with no `DERIVED_SCHEMA`
-/// bump (D-02), so an older store is a current store minus these two and
-/// nothing else. That is also why this could ever regress: `rebuild_required`
-/// is `None` and `missing_columns` is empty on such a store, so it reads as
-/// perfectly up to date right up until a query names a table that is not there.
-///
-/// The `--json` half is the half with teeth. The failure this replaces was an
-/// operational error raised from inside the query and printed by `main`, which
-/// never sees the flag - so `--json` exited 1 with an empty stdout and no
-/// document at all, and `docs/json-shapes.md` allows that only for a failure
-/// raised *before* the command reached its own answer.
+/// Every store this build can open was created with both tables, so neither
+/// being there is damage from outside and never an empty answer. The `--json`
+/// half is the half with teeth: left to the query, the failure would be a raw
+/// sqlite line, where `main` now writes the command's empty document with
+/// `ok: false` and the reason named here (#107).
 #[test]
-fn stats_and_replay_on_a_store_without_the_decision_log_still_answer() {
+fn stats_and_replay_call_a_store_missing_the_whole_decision_log_a_failure() {
     let bench = bench();
     bench.ingest_fixture();
 
@@ -328,47 +320,44 @@ fn stats_and_replay_on_a_store_without_the_decision_log_still_answer() {
         let out = bench.run(&[command, "--json"]);
         assert_eq!(
             out.status.code(),
-            Some(0),
-            "`{command} --json`: {}",
+            Some(1),
+            "`{command} --json` on a store missing both tables should fail: {}",
             stderr(&out)
         );
 
-        // One document, and the reason inside it rather than on stderr.
+        // One document, and the reason inside it naming both tables.
         let value = document(&out);
         assert_eq!(value["command"], command, "{value}");
-        assert_eq!(value["ok"], true, "{value}");
+        assert_eq!(value["ok"], false, "{value}");
+        let reason = value["reason"].as_str().unwrap_or_default();
         assert!(
-            value["reason"]
-                .as_str()
-                .is_some_and(|reason| reason.contains("predates the decision log")),
-            "`{command} --json` did not say why it was empty: {value}"
+            reason.contains("decisions") && reason.contains("labels"),
+            "`{command} --json` did not name both missing tables: {value}"
         );
         assert!(
             !stderr(&out).contains("no such table"),
             "`{command} --json` leaked the sqlite error: {}",
             stderr(&out)
         );
-        assert_eq!(value["data"]["decisions"], 0, "{value}");
 
-        // The human mode: the same reason, on stderr, and still exit 0.
+        // The human mode: exit 1, and no raw sqlite line.
         let out = bench.run(&[command]);
-        assert_eq!(out.status.code(), Some(0), "`{command}`: {}", stderr(&out));
+        assert_eq!(out.status.code(), Some(1), "`{command}`: {}", stderr(&out));
         assert!(
-            stderr(&out).contains("predates the decision log"),
-            "`{command}` did not say why: {}",
+            !stderr(&out).contains("no such table"),
+            "`{command}` leaked the sqlite error: {}",
             stderr(&out)
         );
     }
 }
 
-/// Half a decision log is damage, not age, and it is reported as such.
+/// Half a decision log is damage, and it is reported as such.
 ///
-/// The two tables arrived in one `CREATE_SQL` (D-02), so "missing both" is the
-/// only shape age can produce; a store missing exactly one was written by a
-/// build that had both. The failure this guards is the comfortable one: reading
-/// it as "nothing recorded yet" would answer `precision` and a per-label diff
-/// with zeroes and `ok:true`, and a caller cannot tell that from an archive
-/// where injection genuinely never fired.
+/// Every store this build can open was created with both tables, so a store
+/// missing one lost it from outside. The failure this guards is the
+/// comfortable one: reading it as "nothing recorded yet" would answer
+/// `precision` and a per-label diff with zeroes and `ok:true`, and a caller
+/// cannot tell that from an archive where injection genuinely never fired.
 #[test]
 fn stats_and_replay_call_half_a_decision_log_a_failure() {
     for dropped in ["labels", "decisions"] {
@@ -417,7 +406,55 @@ fn stats_and_replay_call_half_a_decision_log_a_failure() {
     }
 }
 
-/// #40, D-13: a labelled decision made under the compacted pool replays
+/// A damaged decision log answers `--json` with the command's empty document:
+/// every count at zero, the thresholds in force, `ok: false`, the reason, and
+/// nothing on stderr (#107). Human mode still names the table on stderr.
+#[test]
+fn a_damaged_decision_log_answers_with_the_empty_document() {
+    let healthy = bench();
+    healthy.ingest_fixture();
+    let shipped = document(&healthy.run(&["replay", "--json"]))["data"]["thresholds"].clone();
+    assert!(shipped.is_object(), "{shipped}");
+
+    let bench = bench();
+    bench.ingest_fixture();
+    let conn = bench.conn();
+    conn.execute_batch("DROP TABLE labels;").unwrap();
+    drop(conn);
+
+    let out = bench.run(&["replay", "--json"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(stderr(&out), "");
+    let value = document(&out);
+    assert_eq!(value["ok"], false, "{value}");
+    assert_eq!(value["data"]["thresholds"], shipped, "{value}");
+    assert_eq!(value["data"]["decisions"], 0, "{value}");
+    assert_eq!(value["data"]["labels"], serde_json::json!([]), "{value}");
+    assert_eq!(value["data"]["changed"], serde_json::json!([]), "{value}");
+
+    let out = bench.run(&["stats", "--json"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(stderr(&out), "");
+    let value = document(&out);
+    assert_eq!(value["ok"], false, "{value}");
+    let data = value["data"].as_object().expect("data is an object");
+    for (key, count) in data {
+        match key.as_str() {
+            "precision" => assert!(count.is_null(), "{value}"),
+            _ => assert_eq!(*count, 0, "`{key}` in {value}"),
+        }
+    }
+    assert!(data.contains_key("precision"), "{value}");
+
+    for command in ["replay", "stats"] {
+        let out = bench.run(&[command]);
+        assert_eq!(out.status.code(), Some(1), "`{command}`: {}", stderr(&out));
+        assert_eq!(stdout(&out), "", "`{command}`");
+        assert!(stderr(&out).contains("labels"), "{}", stderr(&out));
+    }
+}
+
+/// #40: a labelled decision made under the compacted pool replays
 /// through the compacted window, so `--compacted-ranked` moves it.
 ///
 /// The decision's dropped set is the one turn it was given, which is what the
@@ -460,77 +497,5 @@ fn compacted_ranked_moves_a_compacted_decision() {
         closed["data"]["labels"] != shipped["data"]["labels"]
             || closed["data"]["changed"] != shipped["data"]["changed"],
         "--compacted-ranked did not move a compacted decision: {closed}"
-    );
-}
-
-/// D-15: replay still answers on a store whose `decisions` table predates the
-/// `compacted` and `dropped` columns. It opens read-only and cannot add them,
-/// so its query must not name them.
-#[test]
-fn replay_on_a_store_without_the_compaction_columns_still_answers() {
-    let bench = bench();
-    let cwd = bench.ingest_fixture();
-    let turn = bench.stored_turn();
-    bench.decide(&cwd, "what changed in crates/gizmo/lantern.rs", turn);
-    let out = bench.run(&["ingest"]);
-    assert!(out.status.success(), "{}", stderr(&out));
-
-    // After the ingest, which would have added them back.
-    bench
-        .conn()
-        .execute_batch(
-            "ALTER TABLE decisions DROP COLUMN dropped;
-             ALTER TABLE decisions DROP COLUMN compacted;",
-        )
-        .unwrap();
-
-    let out = bench.run(&["replay", "--json"]);
-    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-    let value = document(&out);
-    assert_eq!(value["ok"], true, "{value}");
-    assert_eq!(value["data"]["decisions"], 1, "{value}");
-    assert!(
-        !stderr(&out).contains("no such column"),
-        "replay named a column the store does not have: {}",
-        stderr(&out)
-    );
-}
-
-/// D-15: stats still answers on a store whose `decisions` table predates the
-/// `compacted` and `dropped` columns. Every row is of unknown kind, so both
-/// split counts are 0 while `decisions` still counts every row.
-#[test]
-fn stats_on_a_store_without_the_compaction_columns_still_answers() {
-    let bench = bench();
-    let cwd = bench.ingest_fixture();
-    let turn = bench.stored_turn();
-    bench.decide(&cwd, "what changed in crates/gizmo/lantern.rs", turn);
-    bench.decide(&cwd, "and in the other file", turn);
-    let out = bench.run(&["ingest"]);
-    assert!(out.status.success(), "{}", stderr(&out));
-
-    // After the ingest, which would have added them back.
-    let conn = bench.conn();
-    conn.execute_batch(
-        "ALTER TABLE decisions DROP COLUMN dropped;
-         ALTER TABLE decisions DROP COLUMN compacted;",
-    )
-    .unwrap();
-    let rows: i64 = conn
-        .query_row("SELECT count(*) FROM decisions", [], |r| r.get(0))
-        .unwrap();
-    drop(conn);
-
-    let out = bench.run(&["stats", "--json"]);
-    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-    let value = document(&out);
-    assert_eq!(value["ok"], true, "{value}");
-    assert_eq!(value["data"]["decisions"], rows, "{value}");
-    assert_eq!(value["data"]["compacted_decisions"], 0, "{value}");
-    assert_eq!(value["data"]["ordinary_decisions"], 0, "{value}");
-    assert!(
-        !stderr(&out).contains("no such column"),
-        "stats named a column the store does not have: {}",
-        stderr(&out)
     );
 }

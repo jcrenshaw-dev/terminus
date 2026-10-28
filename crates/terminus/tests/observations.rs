@@ -1,5 +1,5 @@
-//! AC1 at the process boundary: `terminus observations` lists what a finalized
-//! session did, with no model and no network on any path (OBS-01).
+//! `terminus observations` at the process boundary: it lists what a finalized
+//! session did, with no model and no network on any path.
 //!
 //! Spawns rather than library calls. `terminus-core`'s `tests/observe.rs`
 //! asserts what the facts ARE; what is asserted here is that a real binary,
@@ -23,8 +23,8 @@ use terminus_core::store::DB_FILE_NAME;
 const SESSION: &str = "11111111-1111-4111-8111-111111111111";
 const BRANCH: &str = "phase-7";
 
-/// The command whose arguments are the whole of D-04: `entities` holds `cargo`,
-/// so a listing carrying this string can only have come off the blob.
+/// A command with its arguments: `entities` holds `cargo`, so a listing
+/// carrying this whole string can only have come off the blob.
 const COMMAND: &str = "cargo test -p terminus-core --features testkit";
 
 /// The commit subject, which `parse::Record` has no field for at all.
@@ -198,8 +198,9 @@ impl Bench {
             .into_owned()
     }
 
-    /// One session carrying every OBS-01 fact: an edit, two tools, a command
-    /// with arguments, a failure, a branch, a commit, six turns and a duration.
+    /// One session carrying every fact an observation records: an edit, two
+    /// tools, a command with arguments, a failure, a branch, a commit, six
+    /// turns and a duration.
     fn transcript(&self, session: &str, first_seconds_ago: i64, words: &Words) -> String {
         let cwd = self
             .root
@@ -337,7 +338,7 @@ fn strings(value: &Value) -> Vec<String> {
         .collect()
 }
 
-/// AC1: every fact the requirement names, through the envelope, exit 0.
+/// Every fact an observation records, through the envelope, exit 0.
 #[test]
 fn a_finalized_session_is_listed_with_every_obs_01_fact() {
     let bench = bench();
@@ -449,42 +450,7 @@ fn an_empty_data_directory_is_a_reason_and_creates_nothing() {
     );
 }
 
-/// A store written before this build carries no `observations` table. That is a
-/// reason naming the table and exit 0 - never `no such table: observations`
-/// escaping the envelope inside an operational failure that never learned
-/// `--json` was asked for.
-#[test]
-fn a_store_older_than_the_table_names_it_rather_than_naming_sqlite() {
-    let bench = bench();
-    bench.ingest_the_finalized_session();
-    bench
-        .conn()
-        .execute("DROP TABLE observations", [])
-        .expect("the premise: the table was there to drop");
-
-    let out = bench.run(&["observations", "--project", "*", "--json"]);
-    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-
-    let value = document(&out);
-    assert_eq!(value["ok"], true, "{value}");
-    let reason = value["reason"].as_str().unwrap_or_default();
-    assert!(
-        reason.contains("observations"),
-        "the reason does not name the table: {value}"
-    );
-    assert_eq!(
-        value["data"]["observations"],
-        serde_json::json!([]),
-        "{value}"
-    );
-    assert!(
-        !stdout(&out).contains("no such table"),
-        "a SQLite message reached stdout: {}",
-        stdout(&out)
-    );
-}
-
-/// AC7: `--since` rebuilds the rows after the bound and leaves every earlier
+/// `--since` rebuilds the rows after the bound and leaves every earlier
 /// row byte for byte what it was.
 ///
 /// Both rows are spoiled first, so "the earlier row still holds the hand-edited
@@ -526,8 +492,8 @@ fn regenerate_rebuilds_the_selected_rows_and_leaves_the_rest_untouched() {
     );
 }
 
-/// D-18's misuse arm: an unknown flag and an unknown second word both exit 2
-/// with nothing on stdout.
+/// The two-word command's misuse arm: an unknown flag and an unknown second
+/// word both exit 2 with nothing on stdout.
 ///
 /// The second word matters more than the flag. `dispatch` matches single-word
 /// names, so a `observations` that did not consume its own second word would
@@ -572,13 +538,37 @@ fn a_malformed_since_is_misuse_and_rebuilds_nothing() {
     bench.ingest_the_finalized_session();
     bench.spoil(SESSION);
 
-    let out = bench.run(&["observations", "regenerate", "--since", "last tuesday"]);
+    // The second is well shaped and no day anyone lived through (#24).
+    for since in ["last tuesday", "2026-02-30"] {
+        let out = bench.run(&["observations", "regenerate", "--since", since]);
+        assert_eq!(out.status.code(), Some(2), "{since}: {}", stderr(&out));
+        assert_eq!(stdout(&out), "", "{since}");
+        assert!(
+            stderr(&out).contains("--since"),
+            "{since}: {}",
+            stderr(&out)
+        );
+        assert_eq!(
+            bench.stored(SESSION),
+            SPOILED,
+            "a refused bound {since:?} still wrote"
+        );
+    }
+}
+
+/// #24: an impossible `--since` is misuse with no store as well, because the
+/// bound is checked while the arguments are read.
+#[test]
+fn an_impossible_since_is_misuse_with_no_store() {
+    let bench = bench();
+
+    let out = bench.run(&["observations", "regenerate", "--since", "2026-02-30"]);
     assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
     assert_eq!(stdout(&out), "");
-    assert_eq!(
-        bench.stored(SESSION),
-        SPOILED,
-        "a refused bound still wrote"
+    assert!(stderr(&out).contains("--since"), "{}", stderr(&out));
+    assert!(
+        !bench.data_dir.exists(),
+        "a refused command created the data directory"
     );
 }
 
@@ -607,7 +597,7 @@ fn archived_control_characters_print_escaped_in_the_listing() {
     );
     bench.ingest();
 
-    // `--json` still carries the raw characters (D-06).
+    // `--json` still carries the raw characters.
     let value = document(&bench.run(&["observations", "--project", "*", "--json"]));
     let facts = &value["data"]["observations"][0]["mechanical"];
     assert!(

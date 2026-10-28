@@ -1,4 +1,4 @@
-//! `terminus status` at the process boundary (ING-09).
+//! `terminus status` at the process boundary.
 //!
 //! Everything asserted here has to come out of the store: there is no log file
 //! by design, so a pass's failures are only ever visible because `runs` kept
@@ -218,7 +218,81 @@ fn status_counts_the_file_a_single_file_ingest_committed() {
     );
 }
 
-/// AC7's reporting half. A tree with one damaged transcript: the pass still
+/// `terminus ingest <path>` leaves one `runs` row on every run that holds the
+/// lock, not only on one that committed (#31): a file archived, the same file
+/// already up to date, and the same file cut short under its archive. The
+/// failed run exits non-zero, its row names the file under `error`, and
+/// `status` prints it there.
+#[test]
+fn a_single_file_ingest_writes_one_row_whether_it_commits_is_up_to_date_or_fails() {
+    let bench = bench();
+    let path = bench.place(&format!("{}.jsonl", uuid(1)), "session-basic.jsonl");
+    let arg = path.to_str().unwrap();
+    let rows = || -> i64 {
+        bench
+            .conn()
+            .query_row("SELECT count(*) FROM runs", [], |r| r.get(0))
+            .unwrap()
+    };
+    let newest = || -> (i64, i64, i64, Option<String>) {
+        bench
+            .conn()
+            .query_row(
+                "SELECT files_seen, files_committed, files_failed, error
+                 FROM runs ORDER BY id DESC LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap()
+    };
+
+    // Committed. There is no store before this run, so its row is the first.
+    assert!(!bench.data_dir.exists());
+    let out = bench.run(&["ingest", arg]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(rows(), 1, "a committed named file wrote no row");
+    let (seen, committed, failed, _) = newest();
+    assert_eq!((seen, committed, failed), (1, 1, 0));
+
+    // Up to date: nothing new to read, and still a row.
+    let out = bench.run(&["ingest", arg]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(rows(), 2, "an up-to-date named file wrote no row");
+    let (seen, committed, failed, error) = newest();
+    assert_eq!((seen, committed, failed), (1, 0, 0));
+    assert_eq!(error, None);
+
+    // Failed: the file is now shorter than what the archive already holds.
+    std::fs::write(&path, b"{}\n").unwrap();
+    let out = bench.run(&["ingest", arg]);
+    assert_ne!(
+        out.status.code(),
+        Some(0),
+        "a damaged named file exited 0: {}",
+        stderr(&out)
+    );
+    assert_eq!(rows(), 3, "a failed named file wrote no row");
+    let (seen, committed, failed, error) = newest();
+    assert_eq!((seen, committed, failed), (1, 0, 1));
+    let error = error.expect("the failed run's row has no error");
+    assert!(
+        error.contains(arg),
+        "the row does not name the file: {error}"
+    );
+
+    let out = bench.run(&["status"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let text = stdout(&out);
+    let (_, under_error) = text
+        .split_once("  error\n")
+        .unwrap_or_else(|| panic!("status printed no error block: {text}"));
+    assert!(
+        under_error.contains(arg),
+        "status does not name the file under error: {text}"
+    );
+}
+
+/// Reporting a failed file. A tree with one damaged transcript: the pass still
 /// ingests the rest, and `status` names that file and its error.
 #[test]
 fn status_prints_the_damaged_files_path_and_error_from_the_last_run() {
@@ -313,13 +387,12 @@ fn status_prints_a_passs_routine_notes_apart_from_its_errors() {
     assert_eq!(run["error"], serde_json::Value::Null, "{document}");
 }
 
-/// D-24: `status --json` emits the same numbers the human output prints, as one
+/// `status --json` emits the same numbers the human output prints, as one
 /// document, and any OTHER argument is still misuse.
 ///
 /// The numbers are read out of the store independently and compared against the
 /// document rather than against the prose, because two accounts of one store
-/// that can disagree is the whole reason the retrofit landed in the phase that
-/// owns the contract rather than beside install in phase 4.
+/// that can disagree are the failure this test exists to catch.
 #[test]
 fn status_json_carries_the_same_numbers_as_the_human_output() {
     let bench = bench();
@@ -513,7 +586,7 @@ fn status_reads_while_the_ingest_lock_is_held() {
     );
 }
 
-/// ING-08's read half at the process boundary. Two projects are archived with
+/// Exclusion on read, at the process boundary. Two projects are archived with
 /// no exclusions configured; one is excluded afterwards and `status` stops
 /// counting it, without a re-ingest and without the rows leaving the store.
 ///

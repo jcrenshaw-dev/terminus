@@ -1,5 +1,5 @@
 //! `terminus uninstall`: what it takes back out, what it puts back, and what it
-//! refuses to touch (INST-07, AC7).
+//! refuses to touch.
 //!
 //! Every spawn here points `TERMINUS_BIN_DIR`, `CLAUDE_CONFIG_DIR`,
 //! `TERMINUS_DATA_DIR`, `TERMINUS_CONFIG_DIR` and `HOME` at temporary
@@ -8,7 +8,7 @@
 //! machine is actually running on. `PATH` is a fixture directory holding a
 //! fake `claude` and nothing else, so no test can start the real one.
 //!
-//! AC7's "restores it to its pre-install bytes" is asserted as a byte
+//! Restoring a file to its pre-install bytes is asserted as a byte
 //! comparison against the seed and never as a `jq` or `serde_json` comparison.
 //! Those would pass on a file whose keys had been reordered and whose
 //! indentation had changed, which is exactly the failure the whole `json_file`
@@ -190,17 +190,31 @@ impl Fixture {
         child.wait_with_output().unwrap()
     }
 
-    /// `terminus status`'s `size_bytes` for this fixture's store.
-    fn status_size(&self) -> u64 {
-        let output = self.run(&["status", "--json"]);
-        assert!(output.status.success(), "status failed: {}", text(&output));
-        let document: serde_json::Value =
-            serde_json::from_slice(&output.stdout).expect("status emits one JSON document");
-        document["data"]["size_bytes"].as_u64().unwrap()
+    /// Every file under the data directory, which is what `--purge` counts,
+    /// measured with no connection open (#95).
+    fn footprint(&self) -> u64 {
+        fn walk(dir: &Path) -> u64 {
+            std::fs::read_dir(dir)
+                .map(|entries| {
+                    entries
+                        .map(|entry| entry.unwrap())
+                        .map(|entry| {
+                            let path = entry.path();
+                            if path.is_dir() {
+                                walk(&path)
+                            } else {
+                                std::fs::metadata(&path).unwrap().len()
+                            }
+                        })
+                        .sum()
+                })
+                .unwrap_or(0)
+        }
+        walk(&self.data_dir())
     }
 
-    /// The three files `--purge` counts, measured with no connection open.
-    fn footprint(&self) -> u64 {
+    /// The three store files alone, the rule `terminus status` sums.
+    fn store_files(&self) -> u64 {
         ["terminus.db", "terminus.db-wal", "terminus.db-shm"]
             .iter()
             .filter_map(|name| std::fs::metadata(self.data_dir().join(name)).ok())
@@ -288,10 +302,10 @@ fn our_entries(settings: &serde_json::Value, stable: &Path) -> Vec<serde_json::V
         .collect()
 }
 
-/// AC7's first half: a settings file untouched since install comes back byte
+/// A settings file untouched since install comes back byte
 /// for byte. `.claude.json` is never written by terminus, so with a `claude`
 /// that writes nothing it is byte-identical after install, a rerun and
-/// uninstall (AC2).
+/// uninstall.
 ///
 /// Byte for byte is the assertion because it is the only one that can fail for
 /// the right reason. The settings file went through terminus's renderer on the
@@ -351,7 +365,7 @@ fn install_then_uninstall_leaves_both_files_exactly_as_they_were() {
     );
 }
 
-/// D-13: with a user-level entry there, uninstall asks `claude` to remove it,
+/// With a user-level entry there, uninstall asks `claude` to remove it,
 /// with `--scope user` and the traffic variable, and writes nothing itself.
 ///
 /// The fake writes nothing, so `.claude.json` keeps the entry. That is the
@@ -387,7 +401,7 @@ fn only_the_terminus_key_leaves_mcp_servers() {
     assert_eq!(bytes(&fixture.claude_json()), seeded);
 }
 
-/// D-13: when `claude` is not on `PATH`, or fails, the registration stays and
+/// When `claude` is not on `PATH`, or fails, the registration stays and
 /// uninstall prints the command that removes it. The hook entries and the
 /// binary still go, and the exit status says it is not done.
 #[test]
@@ -418,7 +432,7 @@ fn a_registration_claude_cannot_remove_prints_the_command_and_the_rest_still_goe
     }
 }
 
-/// D-15: a `.claude.json.terminus-backup` an older install left is reported
+/// A `.claude.json.terminus-backup` an older install left is reported
 /// and left alone. Putting it back would roll back Claude Code's own state.
 #[test]
 fn an_old_claude_json_backup_is_reported_and_left_alone() {
@@ -439,7 +453,7 @@ fn an_old_claude_json_backup_is_reported_and_left_alone() {
     assert_eq!(bytes(&fixture.claude_json()), CLAUDE_JSON);
 }
 
-/// D-15 when `~/.claude.json` does not parse: the old backup is still
+/// When `~/.claude.json` does not parse, the old backup is still
 /// reported, since a broken live file is when the user most needs to know the
 /// old copy is there, and neither file is touched.
 #[test]
@@ -461,8 +475,8 @@ fn an_old_claude_json_backup_is_reported_when_claude_json_does_not_parse() {
     assert_eq!(bytes(&fixture.claude_json()), "{");
 }
 
-/// D-13's whole point: a `/config` change made after install survives
-/// uninstall, and the entries still go.
+/// The comparison's whole point: a `/config` change made after install
+/// survives uninstall, and the entries still go.
 ///
 /// `theme` is the realistic one - `settings.json` carries 29 keys and Claude
 /// Code's own UI writes most of them between an install and an uninstall - and
@@ -514,7 +528,7 @@ fn an_edit_made_after_install_survives_and_the_entries_still_go() {
     );
 }
 
-/// INST-07: the archive is not collateral, and its path is on the screen.
+/// The archive is not collateral, and its path is on the screen.
 #[test]
 fn the_data_directory_is_left_alone_and_its_path_printed() {
     let fixture = fixture();
@@ -602,8 +616,9 @@ fn uninstall_on_a_machine_that_was_never_installed_changes_nothing() {
     assert_eq!(bytes(&fixture.claude_json()), CLAUDE_JSON);
 }
 
-/// D-07 read backwards: a file at the stable path that is not a terminus build
-/// is somebody else's, and uninstall reports it rather than deleting it.
+/// The marker check read backwards: a file at the stable path that is not a
+/// terminus build is somebody else's, and uninstall reports it rather than
+/// deleting it.
 ///
 /// Not hypothetical - as of 2026-08-13 `~/.local/bin/verbatim`, the stable path
 /// before the rename, was a different 12 MB program on this machine whose
@@ -698,7 +713,7 @@ fn a_dangling_link_outside_the_versions_folder_is_reported_and_kept() {
     );
 }
 
-/// Uninstall is human-only: `--json` is an argument it does not have (D-24).
+/// Uninstall is human-only: `--json` is an argument it does not have.
 #[test]
 fn uninstall_rejects_json() {
     let fixture = fixture();
@@ -720,7 +735,7 @@ fn deleted_bytes(output: &Output) -> u64 {
 }
 
 /// The archive is the product, so the question is asked and an unanswerable
-/// prompt is a refusal rather than an assumed yes (INST-08, D-20).
+/// prompt is a refusal rather than an assumed yes.
 ///
 /// This is the shape a script gets: `--purge` with stdin closed and no `--yes`.
 /// Exit non-zero, and every byte still there.
@@ -743,7 +758,8 @@ fn purge_with_nothing_to_read_refuses_and_keeps_the_archive() {
         "the archive was deleted without an answer"
     );
     assert_eq!(fixture.footprint(), before, "the store was written to");
-    // Task 5's work still ran: the purge refusal is about the archive alone.
+    // Removing the binary still ran: the purge refusal is about the archive
+    // alone.
     assert!(!fixture.stable().exists());
 }
 
@@ -774,23 +790,24 @@ fn answering_no_keeps_the_archive_and_exits_zero() {
 
 /// The size and the path are shown before the question, and `--yes` deletes.
 ///
-/// The byte count is the footprint on disk - the same three files
-/// `terminus status` reports and the same rule - and it is asserted against a
-/// measurement this test takes for itself. `status`'s own number is checked as
-/// an upper bound instead, because it measures while its connection is open.
-/// Its read-only open leaves the `-shm` and an empty `-wal` on disk when it
-/// exits, so the footprint is taken after it, as `--purge` will find the files.
+/// The byte count is every file under the data directory, the snapshots and
+/// the injection state included, and it is asserted against a sum this test
+/// takes for itself after planting a file in `snapshots/` and one in
+/// `decisions/`, so the test does not depend on whether a snapshot was due
+/// (#95). The deleted line prints the same number.
 #[test]
 fn purge_with_yes_prints_the_size_and_the_path_then_deletes() {
     let fixture = fixture();
     fixture.install().ingest();
-    let reported = fixture.status_size();
+    for (dir, name) in [("snapshots", "old.db"), ("decisions", "turn.json")] {
+        let dir = fixture.data_dir().join(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(name), vec![b'x'; 4096]).unwrap();
+    }
     let footprint = fixture.footprint();
-    assert!(footprint > 0);
     assert!(
-        footprint <= reported,
-        "status counts the same files plus the sidecars its own connection makes: \
-         {footprint} > {reported}"
+        footprint > fixture.store_files(),
+        "the purge counts more than the three store files: {footprint}"
     );
 
     let output = fixture.run(&["uninstall", "--purge", "--yes"]);
@@ -872,6 +889,40 @@ fn purge_refuses_while_an_ingest_holds_the_lock() {
     let output = fixture.run(&["uninstall", "--purge", "--yes"]);
     assert!(output.status.success(), "purge failed:\n{}", text(&output));
     assert!(!fixture.data_dir().exists());
+}
+
+/// A data directory this process cannot read is not a missing store: `--purge`
+/// fails, says it cannot read the store, and leaves the archive where it is.
+#[test]
+fn purge_on_an_unreadable_data_directory_fails_and_keeps_the_archive() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = fixture();
+    fixture.install().ingest();
+    let data_dir = fixture.data_dir();
+    let mode =
+        |bits| std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(bits)).unwrap();
+    mode(0o000);
+    // Root reads through the mode bits, which leaves nothing to test.
+    if std::fs::read_dir(&data_dir).is_ok() {
+        mode(0o700);
+        return;
+    }
+    let output = fixture.run(&["uninstall", "--purge", "--yes"]);
+    mode(0o700);
+
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(
+        text(&output).contains("cannot read the terminus store"),
+        "{}",
+        text(&output)
+    );
+    assert!(
+        !out(&output).contains("nothing to purge"),
+        "{}",
+        text(&output)
+    );
+    assert!(data_dir.join("terminus.db").is_file(), "the archive went");
 }
 
 /// `--purge` with no store is a state, not a failure, and deletes nothing.

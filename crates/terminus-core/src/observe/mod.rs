@@ -1,15 +1,14 @@
-//! Observations: an auditable account of what happened in a finalized session
-//! (OBS-01..OBS-04).
+//! Observations: an auditable account of what happened in a finalized session.
 //!
 //! **Mechanical facts, one row per session.** [`mechanical`] derives them from
 //! the parsed transcript. No model is involved and no network connection is
 //! opened.
 //!
-//! **Archival, never derived (D-02).** `observations` is deliberately absent
+//! **Archival, never derived.** `observations` is deliberately absent
 //! from [`crate::store::schema::DERIVED_TABLES`]: the facts come off the
 //! session's block rows, and retention eviction deletes those rows, so a
 //! `reindex` that dropped the table could not recompute an evicted session's
-//! row. `terminus observations regenerate` (OBS-07) is the only rebuild path.
+//! row. `terminus observations regenerate` is the only rebuild path.
 //!
 //! **Written by the pass, at the far end of it.** [`observe_new`] runs after
 //! `feedback::outcomes` - which is what sets `session_meta.is_final` - and
@@ -17,8 +16,11 @@
 //! on the same pass. It inserts and never overwrites.
 //!
 //! **Nothing here fails a pass.** The archive is the work. An observation that
-//! could not be computed is a note folded into `runs.error` - there is no log
-//! file, by design - exactly as the drain's and the labeller's failures are.
+//! could not be computed is said under `runs.error` - there is no log file, by
+//! design - exactly as the drain's and the labeller's failures are. The line
+//! naming sessions the per-pass bound left for the next pass goes under
+//! `runs.notes` instead: nothing failed, and a pass that failed nothing shows
+//! no error (#96).
 //!
 //! **Redaction is for recall, never for ingest.** [`egress`] holds the shape
 //! rules recall applies to a projection on its way into the model's context
@@ -47,28 +49,50 @@ pub use mechanical::{observe, Mechanical};
 /// first pass over a whole backfilled history is the case this exists for.
 pub const MAX_PER_PASS: usize = 100;
 
-/// What one pass's observation step did (OBS-01).
+/// What one pass's observation step did.
+///
+/// Its failures and its overflow are reported apart, the way
+/// `retention::Applied` reports them: [`Observed::errors`] for `runs.error`,
+/// [`Observed::notes`] for `runs.notes`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Observed {
     /// Rows written on this pass, never the number that exist: a session that
     /// already had an observation is not touched again.
     pub written: usize,
+    /// Finalized sessions the per-pass bound left for the next pass.
+    pub over: usize,
     /// Whatever could not be done, said rather than raised. There is no log
-    /// file, so these travel into `runs.error` with the pass's other notes.
+    /// file, so these travel into `runs.error` with the pass's other failures.
     pub notes: Vec<String>,
 }
 
 impl Observed {
-    /// The reported lines, in the shape `record_pass` writes.
-    pub fn lines(&self) -> Vec<String> {
+    /// What went wrong, for `runs.error`: the sessions could not be listed,
+    /// the finalized sessions could not be read, or one session's observation
+    /// could not be written.
+    pub fn errors(&self) -> Vec<String> {
         self.notes.clone()
+    }
+
+    /// What this step left for the next pass, for `runs.notes`. None of it is
+    /// a failure.
+    pub fn notes(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if self.over > 0 {
+            out.push(format!(
+                "{} more finalized session(s) are waiting to be observed; the next ingest \
+                 takes the next {MAX_PER_PASS}",
+                self.over
+            ));
+        }
+        out
     }
 }
 
 /// Write one observation for every visible session that is final and has none.
 ///
 /// **Through `config::visible::sessions`, not straight off `session_meta`.**
-/// Exclusion is retroactive by design (ING-08): a project excluded after its
+/// Exclusion is retroactive by design: a project excluded after its
 /// sessions were archived must stop being read, and this step reads a blob. The
 /// listing costs a few milliseconds on a real store, which is a price a
 /// background pass can pay and a prompt cannot.
@@ -105,7 +129,7 @@ pub fn observe_new(conn: &Connection, config: &Config) -> Observed {
         }
     }
 
-    let over = candidates.len().saturating_sub(MAX_PER_PASS);
+    out.over = candidates.len().saturating_sub(MAX_PER_PASS);
     for (session_key, session_id) in candidates.into_iter().take(MAX_PER_PASS) {
         match write_one(conn, &session_key, session_id.as_deref()) {
             Ok(()) => out.written += 1,
@@ -117,12 +141,6 @@ pub fn observe_new(conn: &Connection, config: &Config) -> Observed {
                 .notes
                 .push(format!("{session_key}: no observation was written: {e}")),
         }
-    }
-    if over > 0 {
-        out.notes.push(format!(
-            "{over} more finalized session(s) are waiting to be observed; the next ingest \
-             takes the next {MAX_PER_PASS}"
-        ));
     }
     out
 }
@@ -144,7 +162,7 @@ fn pending(conn: &Connection) -> Result<BTreeMap<String, Option<String>>> {
     Ok(out)
 }
 
-/// One row, inserted and never overwritten (D-02).
+/// One row, inserted and never overwritten.
 ///
 /// `DO NOTHING` rather than an upsert, and that is the whole of why this step
 /// is safe to run on every pass: `terminus observations regenerate` is the only
@@ -162,7 +180,7 @@ fn write_one(conn: &Connection, session_key: &str, session_id: Option<&str>) -> 
     Ok(())
 }
 
-/// Which rows a regenerate acts on (OBS-07).
+/// Which rows a regenerate acts on.
 ///
 /// Without a bound it selects every visible session, which is what makes a bare
 /// `terminus observations regenerate` mean "all of them" rather than "none of
@@ -177,7 +195,7 @@ pub struct Selector<'a> {
     pub since: Option<&'a str>,
 }
 
-/// What one regenerate did (OBS-07).
+/// What one regenerate did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Regenerated {
     /// Rows the selector named AND the exclusion gate allows.
@@ -188,9 +206,9 @@ pub struct Regenerated {
     pub notes: Vec<String>,
 }
 
-/// Recompute the mechanical half of the selected rows, in place (OBS-07).
+/// Recompute the mechanical half of the selected rows, in place.
 ///
-/// **The only rebuild path for this table (D-02).** `observations` is out of
+/// **The only rebuild path for this table.** `observations` is out of
 /// `DERIVED_TABLES`, so `reindex` never touches it and the ingest pass inserts
 /// and never overwrites; this is the one place a stored fact set is replaced.
 ///
@@ -201,7 +219,7 @@ pub struct Regenerated {
 /// makes a run under a narrowed selector provably scoped.
 ///
 /// **Through `config::visible::sessions`.** This reads one blob per selected
-/// session, and exclusion is retroactive (ING-08): a project excluded after its
+/// session, and exclusion is retroactive: a project excluded after its
 /// sessions were archived must stop being read, by a rebuild as much as by a
 /// query.
 ///
@@ -265,4 +283,32 @@ fn rewrite_one(conn: &Connection, session_key: &str) -> Result<()> {
         rusqlite::params![session_key, facts.to_json().to_string()],
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A failure is an error and the overflow is a note, and neither list
+    /// carries the other's line (#96).
+    #[test]
+    fn a_failure_is_an_error_and_the_overflow_is_a_note() {
+        let observed = Observed {
+            written: MAX_PER_PASS - 1,
+            over: 3,
+            notes: vec!["a.jsonl: no observation was written: boom".to_owned()],
+        };
+        assert_eq!(
+            observed.errors(),
+            vec!["a.jsonl: no observation was written: boom".to_owned()]
+        );
+        assert_eq!(
+            observed.notes(),
+            vec![format!(
+                "3 more finalized session(s) are waiting to be observed; the next ingest \
+                 takes the next {MAX_PER_PASS}"
+            )]
+        );
+        assert!(Observed::default().notes().is_empty());
+    }
 }
